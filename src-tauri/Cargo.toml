@@ -1,0 +1,39 @@
+[package]
+name = "term-tauri"
+version = "0.1.0"
+description = "TermiNAL (Tauri edition)"
+authors = ["HaDe"]
+edition = "2021"
+
+[lib]
+name = "term_tauri_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+russh = "0.45"
+russh-keys = "0.45"
+russh-sftp = "2"
+portable-pty = "0.8"
+uuid = { version = "1", features = ["v4"] }
+dirs = "5"
+async-trait = "0.1"
+futures = "0.3"
+base64 = "0.22"
+aes-gcm = "0.10"
+scrypt = { version = "0.11", default-features = false }
+sha2 = "0.10"
+rand = "0.8"
+ssh-key = { version = "0.6", features = ["ed25519", "rsa", "encryption", "std", "getrandom"] }
+open = "5"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
+winreg = "0.52"
