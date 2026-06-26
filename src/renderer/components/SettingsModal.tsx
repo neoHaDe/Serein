@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { useSettings } from '../SettingsContext'
 import { THEME_NAMES } from '../themes'
 import { ACTIONS, resolveBindings, comboFromEvent, formatCombo, type ActionId } from '../keybindings'
+import { checkForUpdates } from '../updater'
+import { getVersion } from '@tauri-apps/api/app'
 
 const FONTS = [
   'Cascadia Code, Consolas, "Courier New", monospace',
@@ -21,10 +23,22 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
   const [password, setPassword] = useState('')
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [appVersion, setAppVersion] = useState('')
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
 
   useEffect(() => {
     window.api.vault.status().then((s) => setMasterEnabled(s.enabled))
+    getVersion().then(setAppVersion).catch(() => {})
   }, [])
+
+  const onCheckUpdate = async (): Promise<void> => {
+    setCheckingUpdate(true)
+    try {
+      await checkForUpdates(false)
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }
 
   const startAction = (a: Action): void => {
     setAction(a)
@@ -279,6 +293,20 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           )}
 
           {msg && <div className={'settings-msg' + (msg.ok ? ' ok' : ' err')}>{msg.text}</div>}
+        </div>
+
+        {/* ---- Обновления ---- */}
+        <div className="settings-section">
+          <div className="settings-section-title">Обновления</div>
+          <div className="settings-row">
+            <div>
+              <div className="settings-row-name">TermiNAL{appVersion ? ' ' + appVersion : ''}</div>
+              <div className="settings-row-desc">Проверить наличие новой версии и обновиться</div>
+            </div>
+            <button className="secondary" disabled={checkingUpdate} onClick={() => void onCheckUpdate()}>
+              {checkingUpdate ? '…' : 'Проверить обновления'}
+            </button>
+          </div>
         </div>
 
         <div className="modal-actions">

@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client'
 import { Gate } from './Gate'
 import { SettingsProvider } from './SettingsContext'
 import { api } from '../api'
+import { checkForUpdates } from './updater'
 import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
@@ -15,3 +16,9 @@ createRoot(document.getElementById('root')!).render(
     <Gate />
   </SettingsProvider>
 )
+
+// Тихая авто-проверка обновлений через несколько секунд после старта
+// (не блокирует запуск; молча выходит, если обновлений нет или сети нет).
+setTimeout(() => {
+  void checkForUpdates(true)
+}, 3000)
