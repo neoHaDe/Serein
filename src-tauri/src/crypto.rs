@@ -91,3 +91,79 @@ pub fn decrypt_with_password(packed: &str, password: &str) -> Result<String, Str
         .map_err(|_| "Неверный пароль или повреждённый файл".to_string())?;
     String::from_utf8(pt).map_err(|e| e.to_string())
 }
+
+// ── Тесты (QA-02, 2026-08-04) ───────────────────────────────────────────────
+// Перенесены из TermiNAL/tests/crypto.test.ts: Tauri-порт переписал эту логику
+// с TypeScript на Rust и остался без покрытия — то есть именно там, где
+// вероятность ошибки максимальна, проверок не было. Ошибка здесь тихо
+// компрометирует все сохранённые SSH-пароли и ключи.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encrypt_with_password_round_trip() {
+        let secret = "пароль-сервера-42 🔐";
+        let packed = encrypt_with_password(secret, "master-pass").expect("шифрование");
+        let back = decrypt_with_password(&packed, "master-pass").expect("расшифровка");
+        assert_eq!(back, secret);
+    }
+
+    #[test]
+    fn decrypt_with_wrong_password_fails() {
+        let packed = encrypt_with_password("data", "right").expect("шифрование");
+        assert!(
+            decrypt_with_password(&packed, "wrong").is_err(),
+            "неверный пароль обязан давать ошибку, а не мусор"
+        );
+    }
+
+    #[test]
+    fn each_encryption_is_unique() {
+        // Случайные соль и IV: одинаковый вход не должен давать одинаковый пакет,
+        // иначе по совпадению шифртекстов видно, что пароли совпадают.
+        let a = encrypt_with_password("x", "p").expect("шифрование");
+        let b = encrypt_with_password("x", "p").expect("шифрование");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn aes_round_trip_with_explicit_key() {
+        let key = derive_key("pw", &[7u8; 16]);
+        let packed = aes_encrypt("hello", &key).expect("шифрование");
+        assert_eq!(aes_decrypt(&packed, &key).expect("расшифровка"), "hello");
+    }
+
+    #[test]
+    fn aes_decrypt_with_other_key_fails() {
+        let k1 = derive_key("pw", &[1u8; 16]);
+        let k2 = derive_key("pw", &[2u8; 16]);
+        let packed = aes_encrypt("hello", &k1).expect("шифрование");
+        assert!(aes_decrypt(&packed, &k2).is_err());
+    }
+
+    #[test]
+    fn derive_key_is_deterministic_and_salt_sensitive() {
+        // Та же пара (пароль, соль) — тот же ключ, иначе хранилище не откроется
+        // после перезапуска. Разная соль — разный ключ, иначе соль бесполезна.
+        assert_eq!(derive_key("pw", &[9u8; 16]), derive_key("pw", &[9u8; 16]));
+        assert_ne!(derive_key("pw", &[9u8; 16]), derive_key("pw", &[8u8; 16]));
+        assert_ne!(derive_key("pw1", &[9u8; 16]), derive_key("pw2", &[9u8; 16]));
+    }
+
+    #[test]
+    fn corrupted_package_fails_gracefully() {
+        // Битый файл хранилища должен давать Err, а не панику: паника в Tauri
+        // роняет команду целиком и пользователь видит пустое окно без объяснения.
+        let key = derive_key("pw", &[3u8; 16]);
+        for bad in ["", "не-base64!!", "AAAA", "***"] {
+            assert!(aes_decrypt(bad, &key).is_err(), "должно быть Err на {:?}", bad);
+        }
+    }
+
+    #[test]
+    fn empty_plaintext_survives_round_trip() {
+        let packed = encrypt_with_password("", "master").expect("шифрование");
+        assert_eq!(decrypt_with_password(&packed, "master").expect("расшифровка"), "");
+    }
+}
