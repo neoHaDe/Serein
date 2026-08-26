@@ -1,12 +1,12 @@
 [package]
-name = "term-tauri"
+name = "serein"
 version = "0.1.0"
-description = "TermiNAL (Tauri edition)"
+description = "Serein — desktop SSH/SFTP workstation"
 authors = ["HaDe"]
 edition = "2021"
 
 [lib]
-name = "term_tauri_lib"
+name = "serein_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

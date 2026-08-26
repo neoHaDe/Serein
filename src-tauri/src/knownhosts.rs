@@ -8,10 +8,7 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 fn path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("term-tauri")
-        .join("known_hosts.json")
+    crate::store::config_dir().join("known_hosts.json")
 }
 
 fn read() -> Value {

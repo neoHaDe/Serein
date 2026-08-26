@@ -1,9 +1,9 @@
 {
-  "name": "term-tauri",
+  "name": "serein",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "TermiNAL (Tauri edition) — десктоп SSH/SFTP-клиент на Tauri + React",
+  "description": "Serein — десктоп SSH/SFTP workstation на Tauri + React",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

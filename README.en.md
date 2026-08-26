@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="src-tauri/icons/128x128.png" width="96" alt="TermiNAL icon" />
+<img src="src-tauri/icons/128x128.png" width="96" alt="Serein icon" />
 
-# TermiNAL
+# Serein
 
 **Desktop SSH / SFTP client — everything in one window.**
 
@@ -23,19 +23,19 @@ Windows · no bundled Chromium (system WebView2) ·
 
 ### → [Download the latest release](../../releases/latest)
 
-<img src="docs/screenshot.png" width="820" alt="TermiNAL screenshot" />
+<img src="docs/screenshot.png" width="820" alt="Serein screenshot" />
 
 </div>
 
 ---
 
-## Why TermiNAL
+## Why Serein
 
 The UI runs in the system WebView. SSH, SFTP, crypto, and the PTY live in one Rust binary.
 No Chromium tax. We are not racing Tabby on feature count. The point is a **server workspace**
 (terminal, files, Docker, logs, resources, tunnels), not “yet another SSH client”.
 
-| | **TermiNAL (Tauri)** | Typical Electron client |
+| | **Serein (Tauri)** | Typical Electron client |
 | --- | :---: | :---: |
 | Installer size | **≈ 3 MB** | ≈ 85 MB |
 | Idle RAM | **≈ 33 MB** | 150–250 MB |
@@ -84,7 +84,7 @@ A weak laptop will not magically match 33 MB.
 
 ## Quick start
 
-1. Install `TermiNAL_0.1.0_x64-setup.exe` from [Releases](../../releases/latest).
+1. Install `Serein_0.1.0_x64-setup.exe` from [Releases](../../releases/latest).
 2. Import `~/.ssh/config` or add a host by hand.
 3. Connect. The local terminal works with no SSH at all.
 
@@ -105,7 +105,7 @@ Target: install → first session in under two minutes.
 
 ## Install
 
-Download **`TermiNAL_0.1.0_x64-setup.exe`** from
+Download **`Serein_0.1.0_x64-setup.exe`** from
 [Releases](../../releases/latest) and run it.
 
 The build is **unsigned**. SmartScreen will complain. *More info → Run anyway*.
@@ -145,7 +145,7 @@ while the installer is unsigned.
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-- React talks to Rust through a thin `window.api` bridge (same names as the Electron tree).
+- React talks to Rust through a thin `window.api` bridge (`invoke` / `listen`).
 - One SSH connection multiplexes **shell + SFTP + exec + tunnels**. The handle is locked
   only briefly, so opening channels does not stall the others.
 - Secrets decrypt **only in Rust**, at connect time. Outside Windows there is no DPAPI:
@@ -178,7 +178,7 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ## Data and diagnostics
 
-Profiles, secrets, known_hosts, vault live in `%APPDATA%\term-tauri\`
+Profiles, secrets, known_hosts, vault live in `%APPDATA%\serein\`
 (`servers.json`, `secrets.json`, `vault.json`, `known_hosts.json`, …).
 
 Secrets never go to the UI. There is no dedicated log file yet: use the app window

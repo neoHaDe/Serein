@@ -1,6 +1,6 @@
 //! Опциональный мастер-пароль (порт vault.ts): scrypt-ключ доп. слоем поверх DPAPI.
 
-use crate::{crypto, store, vaultkey};
+use crate::{crypto, vaultkey};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -8,10 +8,7 @@ use std::path::PathBuf;
 const VERIFY_TOKEN: &str = "TERMINAL_VAULT_OK";
 
 fn vault_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("term-tauri")
-        .join("vault.json")
+    crate::store::config_dir().join("vault.json")
 }
 
 fn read_config() -> Option<Value> {

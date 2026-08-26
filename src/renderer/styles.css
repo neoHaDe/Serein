@@ -1,5 +1,5 @@
 /* ============================================================
-   TermiNAL — tactical terminal cockpit UI
+   Serein — tactical terminal cockpit UI
    Все цвета берутся из CSS-переменных, которые выводятся из
    активной цветовой схемы терминала (themes.ts → applyUiTheme).
    Не хардкодить hex — иначе сломается переключение тем.

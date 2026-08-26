@@ -21,7 +21,7 @@ export function UnlockScreen({ onUnlocked }: { onUnlocked: () => void }): JSX.El
   return (
     <div className="unlock-screen">
       <div className="unlock-box">
-        <div className="unlock-logo">⌁ TermiNAL</div>
+        <div className="unlock-logo">⌁ Serein</div>
         <p>Введите мастер-пароль для разблокировки</p>
         <input
           type="password"

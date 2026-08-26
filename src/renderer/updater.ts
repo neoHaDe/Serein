@@ -21,7 +21,7 @@ export async function checkForUpdates(silent: boolean): Promise<void> {
 
   if (!update) {
     if (!silent) {
-      await message('У вас последняя версия TermiNAL.', { title: 'Обновление' })
+      await message('У вас последняя версия Serein.', { title: 'Обновление' })
     }
     return
   }

@@ -1,4 +1,4 @@
-//! TermiNAL (Tauri edition) — backend. Полный порт IPC Electron-версии.
+//! Serein — backend. Команды Tauri и менеджер сессий.
 
 mod backup;
 mod crypto;

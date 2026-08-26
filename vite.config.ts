@@ -7,7 +7,7 @@ const host = process.env.TAURI_DEV_HOST
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react()],
-  // Точка входа — renderer/index.html (сохранена раскладка исходного TermiNAL).
+  // Точка входа — renderer/index.html.
   root: '.',
   clearScreen: false,
   server: {

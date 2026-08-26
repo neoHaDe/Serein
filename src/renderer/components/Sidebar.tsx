@@ -50,7 +50,7 @@ export function Sidebar({ servers, onConnect, onOpenLocal, onNew, onEdit, onDele
     <aside className="sidebar" style={{ width }}>
       <div className="sidebar-header">
         <span className="logo">
-          <Icon name="logo" size={16} /> TermiNAL
+          <Icon name="logo" size={16} /> Serein
         </span>
         <div className="sidebar-header-actions">
           <div className="import-control">

@@ -551,7 +551,7 @@ export default function App(): JSX.Element {
         <div className="terminals">
           {tabs.length === 0 && (
             <div className="empty-state">
-              <h1>TermiNAL</h1>
+              <h1>Serein</h1>
               <p>Выберите сервер слева для подключения по SSH<br />или откройте локальный терминал.</p>
               <button onClick={openLocalTab}>Открыть локальный терминал</button>
             </div>

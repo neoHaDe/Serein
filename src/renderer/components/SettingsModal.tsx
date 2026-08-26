@@ -300,7 +300,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           <div className="settings-section-title">Обновления</div>
           <div className="settings-row">
             <div>
-              <div className="settings-row-name">TermiNAL{appVersion ? ' ' + appVersion : ''}</div>
+              <div className="settings-row-name">Serein{appVersion ? ' ' + appVersion : ''}</div>
               <div className="settings-row-desc">Проверить наличие новой версии и обновиться</div>
             </div>
             <button className="secondary" disabled={checkingUpdate} onClick={() => void onCheckUpdate()}>

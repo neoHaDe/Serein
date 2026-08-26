@@ -1,8 +1,6 @@
 /**
- * Мост renderer ↔ Rust-бэкенд для Tauri-сборки TermiNAL.
- * Воспроизводит ровно тот же интерфейс, что Electron-preload (`window.api`),
- * поэтому весь renderer переносится без правок. Реальные команды идут через
- * Tauri `invoke`/`listen`; неперенесённые модули пока возвращают заглушки.
+ * Мост renderer ↔ Rust: `window.api` через Tauri `invoke` / `listen`.
+ * Неперенесённые модули пока возвращают заглушки.
  */
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -166,13 +164,13 @@ export const api = {
       const path = await saveDialog({
         title: 'Сохранить бэкап',
         defaultPath: `terminal-backup-${new Date().toISOString().slice(0, 10)}.tbk`,
-        filters: [{ name: 'TermiNAL backup', extensions: ['tbk'] }]
+        filters: [{ name: 'Serein backup', extensions: ['tbk'] }]
       })
       if (!path) return { saved: false }
       return invoke('backup_export', { password, path })
     },
     import: async (password: string): Promise<{ imported: boolean; servers?: number; snippets?: number }> => {
-      const sel = await openDialog({ title: 'Файл бэкапа', filters: [{ name: 'TermiNAL backup', extensions: ['tbk'] }] })
+      const sel = await openDialog({ title: 'Файл бэкапа', filters: [{ name: 'Serein backup', extensions: ['tbk'] }] })
       if (typeof sel !== 'string') return { imported: false }
       return invoke('backup_import', { password, path: sel })
     }

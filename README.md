@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="src-tauri/icons/128x128.png" width="96" alt="Иконка TermiNAL" />
+<img src="src-tauri/icons/128x128.png" width="96" alt="Иконка Serein" />
 
-# TermiNAL
+# Serein
 
 **Десктоп-клиент SSH / SFTP «всё в одном окне».**
 
@@ -23,19 +23,19 @@ Windows · без своего Chromium (системный WebView2) ·
 
 ### → [Скачать последний выпуск](../../releases/latest)
 
-<img src="docs/screenshot.png" width="820" alt="Скриншот TermiNAL" />
+<img src="docs/screenshot.png" width="820" alt="Скриншот Serein" />
 
 </div>
 
 ---
 
-## ✨ Почему TermiNAL
+## ✨ Почему Serein
 
 Интерфейс в системном WebView, SSH / SFTP / шифрование / PTY — в одном Rust-бинарнике.
 Не тащим Chromium. Не пытаемся обогнать Tabby списком галочек: цель — **рабочее место
 по серверу** (терминал, файлы, Docker, логи, ресурсы, туннели), а не «ещё один SSH-клиент».
 
-| | **TermiNAL (Tauri)** | Типичный Electron-клиент |
+| | **Serein (Tauri)** | Типичный Electron-клиент |
 | --- | :---: | :---: |
 | Размер установщика | **≈ 3 МБ** | ≈ 85 МБ |
 | Память в простое | **≈ 33 МБ** | 150–250 МБ |
@@ -83,7 +83,7 @@ Windows · без своего Chromium (системный WebView2) ·
 
 ## Быстрый старт
 
-1. Поставь `TermiNAL_0.1.0_x64-setup.exe` из [Releases](../../releases/latest).
+1. Поставь `Serein_0.1.0_x64-setup.exe` из [Releases](../../releases/latest).
 2. Импортируй `~/.ssh/config` или добавь сервер вручную.
 3. Подключись. Локальный терминал работает и без SSH.
 
@@ -104,7 +104,7 @@ Windows · без своего Chromium (системный WebView2) ·
 
 ## 📦 Установка
 
-Скачай **`TermiNAL_0.1.0_x64-setup.exe`** со страницы
+Скачай **`Serein_0.1.0_x64-setup.exe`** со страницы
 [Releases](../../releases/latest) и запусти.
 
 Сборка **не подписана** — SmartScreen ругнётся. *Подробнее → Выполнить в любом случае*.
@@ -144,7 +144,7 @@ Windows · без своего Chromium (системный WebView2) ·
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-- React говорит с Rust через тонкий мост `window.api` (те же имена, что у Electron-ветки).
+- React говорит с Rust через тонкий мост `window.api` (invoke / listen).
 - Одно SSH-соединение мультиплексирует **shell + SFTP + exec + туннели**; handle берётся
   коротким async-локом, каналы не ждут друг друга.
 - Секреты расшифровываются **только в Rust**, в момент подключения. Вне Windows DPAPI нет:
@@ -176,7 +176,7 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ## Данные и диагностика
 
-Профили, секреты, known_hosts, vault — в `%APPDATA%\term-tauri\`
+Профили, секреты, known_hosts, vault — в `%APPDATA%\serein\`
 (`servers.json`, `secrets.json`, `vault.json`, `known_hosts.json`, …).
 
 Секреты в UI-слой не едут. Логи отдельным файлом пока не пишем: смотри окно приложения

@@ -8,11 +8,20 @@ use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-fn dir() -> PathBuf {
+/// Каталог данных приложения. Старый `term-tauri` один раз переименовывается в `serein`.
+pub fn config_dir() -> PathBuf {
     let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    let d = base.join("term-tauri");
+    let d = base.join("serein");
+    let legacy = base.join("term-tauri");
+    if !d.exists() && legacy.exists() {
+        let _ = fs::rename(&legacy, &d);
+    }
     let _ = fs::create_dir_all(&d);
     d
+}
+
+fn dir() -> PathBuf {
+    config_dir()
 }
 
 fn read_value(name: &str) -> Option<Value> {
