@@ -169,9 +169,11 @@ export function TerminalView({ paneId, instanceKey, kind, serverId, active, focu
         setTimeout(() => {
           const cur = registry.get(instanceKey)
           if (cur && cur.detached && !cur.host.isConnected) {
+            const sid = cur.sessionId
             cur.offData()
             cur.term.dispose()
             registry.delete(instanceKey)
+            if (sid) void window.api.session.close(sid)
           }
         }, 120)
       }

@@ -10,15 +10,30 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 
 /// Маршрутизация remote-форвардов (-R): remote_port → local_port на этом соединении.
 pub type RemoteForwards = Arc<Mutex<HashMap<u32, u16>>>;
 
 /// Мост keyboard-interactive: sessionId → канал доставки ответов из renderer.
 pub type KiBridge = Arc<Mutex<HashMap<String, oneshot::Sender<Vec<String>>>>>;
+
+/// true = сессию гасим: туннельные copy и SFTP выходят из select/цикла.
+pub type CancelRx = watch::Receiver<bool>;
+
+pub async fn wait_cancel(mut rx: CancelRx) {
+    loop {
+        if *rx.borrow() {
+            return;
+        }
+        if rx.changed().await.is_err() {
+            return;
+        }
+    }
+}
 
 pub enum SshCmd {
     Write(Vec<u8>),
@@ -36,15 +51,46 @@ pub struct SshSession {
     pub server_id: String,
     pub remote_forwards: RemoteForwards,
     /// Промежуточные клиенты цепочки jump-хостов — держим живыми до закрытия сессии.
-    #[allow(dead_code)]
     pub jump_handles: Vec<Arc<client::Handle<ClientHandler>>>,
     /// true, если фронт сам вызвал session_close — не считать обрывом.
     pub user_closed: Arc<AtomicBool>,
+    /// false после shutdown — SFTP/exec не крутятся до таймаута.
+    pub alive: Arc<AtomicBool>,
+    pub cancel: watch::Sender<bool>,
+}
+
+impl SshSession {
+    /// Пометить мёртвой, остановить туннели/SFTP, разорвать russh. Идемпотентно по смыслу флагов.
+    pub fn shutdown(&self, user: bool) {
+        if user {
+            self.user_closed.store(true, Ordering::Relaxed);
+        }
+        self.alive.store(false, Ordering::Relaxed);
+        let _ = self.cancel.send(true);
+        self.remote_forwards.lock().unwrap().clear();
+        let _ = self.tx.send(SshCmd::Close);
+        let handle = self.handle.clone();
+        let jumps = self.jump_handles.clone();
+        tauri::async_runtime::spawn(async move {
+            {
+                let h = handle.lock().await;
+                let _ = h
+                    .disconnect(russh::Disconnect::ByApplication, "session close", "")
+                    .await;
+            }
+            for j in jumps {
+                let _ = j
+                    .disconnect(russh::Disconnect::ByApplication, "session close", "")
+                    .await;
+            }
+        });
+    }
 }
 
 pub struct ClientHandler {
     host_id: String,
     remote_forwards: RemoteForwards,
+    cancel: CancelRx,
 }
 
 #[async_trait::async_trait]
@@ -77,10 +123,14 @@ impl Handler for ClientHandler {
             .get(&connected_port)
             .copied();
         if let Some(lp) = local_port {
+            let cancel = self.cancel.clone();
             tokio::spawn(async move {
                 if let Ok(mut tcp) = tokio::net::TcpStream::connect(("127.0.0.1", lp)).await {
                     let mut stream = channel.into_stream();
-                    let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
+                    tokio::select! {
+                        _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream) => {}
+                        _ = wait_cancel(cancel) => {}
+                    }
                 }
             });
         }
@@ -179,11 +229,16 @@ async fn authenticate(
     }
 }
 
-async fn connect_one(server: &Value, rf: RemoteForwards) -> Result<client::Handle<ClientHandler>, String> {
+async fn connect_one(
+    server: &Value,
+    rf: RemoteForwards,
+    cancel: CancelRx,
+) -> Result<client::Handle<ClientHandler>, String> {
     let host = field(server, "host").ok_or("Не задан host")?;
     let handler = ClientHandler {
         host_id: knownhosts::host_id(host, port_of(server)),
         remote_forwards: rf,
+        cancel,
     };
     let config = ssh_client_config();
     // Таймаут подключения: к офлайн/firewall-хосту (DROP без TCP-reset) connect иначе
@@ -216,10 +271,12 @@ pub async fn connect_chain(
     let target = chain[0].clone();
     let mut jump_handles: Vec<Arc<client::Handle<ClientHandler>>> = Vec::new();
     let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let alive = Arc::new(AtomicBool::new(true));
 
     // Самый дальний хоп (конец цепочки) — прямое подключение.
     let far = chain.last().unwrap();
-    let mut handle = connect_one(far, remote_forwards.clone()).await?;
+    let mut handle = connect_one(far, remote_forwards.clone(), cancel_rx.clone()).await?;
     let far_is_target = chain.len() == 1;
     if !authenticate(
         &mut handle,
@@ -247,6 +304,7 @@ pub async fn connect_chain(
         let handler = ClientHandler {
             host_id: knownhosts::host_id(nhost, port_of(next)),
             remote_forwards: remote_forwards.clone(),
+            cancel: cancel_rx.clone(),
         };
         let mut nh = client::connect_stream(config, channel.into_stream(), handler)
             .await
@@ -309,6 +367,7 @@ pub async fn connect_chain(
                 }
             }
         }
+        let _ = channel.close().await;
         let is_drop = !user_closed2.load(Ordering::Relaxed);
         let _ = app2.emit(
             "session-exit",
@@ -320,6 +379,9 @@ pub async fn connect_chain(
                 "error": is_drop.then_some("Соединение разорвано"),
             }),
         );
+        if let Some(st) = app2.try_state::<crate::AppState>() {
+            st.teardown(&app2, &id2, !is_drop);
+        }
     });
 
     Ok(SshSession {
@@ -329,6 +391,8 @@ pub async fn connect_chain(
         remote_forwards,
         jump_handles,
         user_closed,
+        alive,
+        cancel: cancel_tx,
     })
 }
 
@@ -339,8 +403,9 @@ pub async fn connect_client(chain: Vec<Value>) -> Result<SharedHandle, String> {
     }
     let dummy_ki: KiBridge = Arc::new(Mutex::new(HashMap::new()));
     let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
     let far = chain.last().unwrap();
-    let mut handle = connect_one(far, remote_forwards.clone()).await?;
+    let mut handle = connect_one(far, remote_forwards.clone(), cancel_rx.clone()).await?;
     if !authenticate(&mut handle, far, None, &dummy_ki, None).await? {
         return Err("Аутентификация отклонена сервером".into());
     }
@@ -356,6 +421,7 @@ pub async fn connect_client(chain: Vec<Value>) -> Result<SharedHandle, String> {
         let handler = ClientHandler {
             host_id: knownhosts::host_id(nhost, port_of(next)),
             remote_forwards: remote_forwards.clone(),
+            cancel: cancel_rx.clone(),
         };
         let mut nh = client::connect_stream(config, channel.into_stream(), handler)
             .await

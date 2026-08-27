@@ -7,31 +7,43 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 
 pub struct LocalSession {
-    writer: Mutex<Box<dyn Write + Send>>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
-    child: Mutex<Box<dyn Child + Send + Sync>>,
+    writer: Mutex<Option<Box<dyn Write + Send>>>,
+    master: Mutex<Option<Box<dyn MasterPty + Send>>>,
+    child: Mutex<Option<Box<dyn Child + Send + Sync>>>,
 }
 
 impl LocalSession {
     pub fn write(&self, data: &str) {
         if let Ok(mut w) = self.writer.lock() {
-            let _ = w.write_all(data.as_bytes());
-            let _ = w.flush();
+            if let Some(w) = w.as_mut() {
+                let _ = w.write_all(data.as_bytes());
+                let _ = w.flush();
+            }
         }
     }
     pub fn resize(&self, cols: u16, rows: u16) {
         if let Ok(m) = self.master.lock() {
-            let _ = m.resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            });
+            if let Some(m) = m.as_ref() {
+                let _ = m.resize(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                });
+            }
         }
     }
     pub fn close(&self) {
         if let Ok(mut c) = self.child.lock() {
-            let _ = c.kill();
+            if let Some(mut child) = c.take() {
+                let _ = child.kill();
+            }
+        }
+        if let Ok(mut w) = self.writer.lock() {
+            w.take();
+        }
+        if let Ok(mut m) = self.master.lock() {
+            m.take();
         }
     }
 }
@@ -88,9 +100,9 @@ pub fn open_local(
     });
 
     Ok(LocalSession {
-        writer: Mutex::new(writer),
-        master: Mutex::new(pair.master),
-        child: Mutex::new(child),
+        writer: Mutex::new(Some(writer)),
+        master: Mutex::new(Some(pair.master)),
+        child: Mutex::new(Some(child)),
     })
 }
 

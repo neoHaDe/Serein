@@ -1,7 +1,7 @@
 //! Туннели: local (-L), dynamic SOCKS5 (-D) и remote (-R) поверх russh.
 //! -L/-D — direct-tcpip; -R — tcpip_forward + маршрутизация forwarded-каналов через ClientHandler.
 
-use crate::ssh::{ClientHandler, RemoteForwards};
+use crate::ssh::{ClientHandler, RemoteForwards, wait_cancel, CancelRx};
 use russh::client;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -56,12 +56,13 @@ impl TunnelManager {
         emit(app, session_id, tunnel_id, false, None);
     }
 
-    pub fn close_session(&self, session_id: &str) {
+    pub fn close_session(&self, session_id: &str, app: &AppHandle) {
         if let Some(mut map) = self.active.lock().unwrap().remove(session_id) {
-            for (_, mut t) in map.drain() {
+            for (tid, mut t) in map.drain() {
                 if let Some(stop) = t.stop.take() {
                     let _ = stop.send(());
                 }
+                emit(app, session_id, &tid, false, None);
             }
         }
     }
@@ -74,6 +75,7 @@ impl TunnelManager {
         session_id: String,
         cfg: Value,
         remote_forwards: RemoteForwards,
+        cancel: CancelRx,
     ) -> Result<(), String> {
         let tunnel_id = cfg.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let ttype = cfg.get("type").and_then(|v| v.as_str()).unwrap_or("local").to_string();
@@ -132,17 +134,20 @@ impl TunnelManager {
         let remote_host = cfg.get("remoteHost").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let remote_port = cfg.get("remotePort").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         let is_dynamic = ttype == "dynamic";
+        let cancel_loop = cancel.clone();
 
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     _ = &mut stop_rx => break,
+                    _ = wait_cancel(cancel_loop.clone()) => break,
                     accepted = listener.accept() => {
                         let (sock, _) = match accepted { Ok(v) => v, Err(_) => break };
                         let h = handle.clone();
                         let rh = remote_host.clone();
+                        let c = cancel.clone();
                         if is_dynamic {
-                            tokio::spawn(async move { let _ = handle_socks5(sock, h).await; });
+                            tokio::spawn(async move { let _ = handle_socks5(sock, h, c).await; });
                         } else {
                             tokio::spawn(async move {
                                 let ch = {
@@ -152,7 +157,10 @@ impl TunnelManager {
                                 if let Ok(ch) = ch {
                                     let mut stream = ch.into_stream();
                                     let mut sock = sock;
-                                    let _ = tokio::io::copy_bidirectional(&mut sock, &mut stream).await;
+                                    tokio::select! {
+                                        _ = tokio::io::copy_bidirectional(&mut sock, &mut stream) => {}
+                                        _ = wait_cancel(c) => {}
+                                    }
                                 }
                             });
                         }
@@ -171,7 +179,11 @@ impl TunnelManager {
 }
 
 /// Минимальный SOCKS5: greeting → request (CONNECT) → direct-tcpip → bidi-pipe.
-async fn handle_socks5(mut sock: tokio::net::TcpStream, handle: Arc<tokio::sync::Mutex<client::Handle<ClientHandler>>>) -> Result<(), String> {
+async fn handle_socks5(
+    mut sock: tokio::net::TcpStream,
+    handle: Arc<tokio::sync::Mutex<client::Handle<ClientHandler>>>,
+    cancel: CancelRx,
+) -> Result<(), String> {
     let mut head = [0u8; 2];
     sock.read_exact(&mut head).await.map_err(|e| e.to_string())?;
     if head[0] != 0x05 {
@@ -221,7 +233,10 @@ async fn handle_socks5(mut sock: tokio::net::TcpStream, handle: Arc<tokio::sync:
         Ok(ch) => {
             sock.write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await.ok();
             let mut stream = ch.into_stream();
-            let _ = tokio::io::copy_bidirectional(&mut sock, &mut stream).await;
+            tokio::select! {
+                _ = tokio::io::copy_bidirectional(&mut sock, &mut stream) => {}
+                _ = wait_cancel(cancel) => {}
+            }
             Ok(())
         }
         Err(_) => {

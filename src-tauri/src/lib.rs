@@ -23,12 +23,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-enum Session {
+pub(crate) enum Session {
     Local(pty::LocalSession),
     Ssh(Arc<ssh::SshSession>),
 }
 
-struct AppState {
+pub(crate) struct AppState {
     sessions: Mutex<HashMap<String, Session>>,
     ki: ssh::KiBridge,
     tunnels: tunnels::TunnelManager,
@@ -50,12 +50,27 @@ impl AppState {
             _ => None,
         }
     }
+
+    /// Идемпотентно: туннели, edit-watchers, KI, russh disconnect. Можно звать с фронта и из shell-таска.
+    pub(crate) fn teardown(&self, app: &AppHandle, id: &str, user: bool) {
+        self.tunnels.close_session(id, app);
+        self.edit.stop_session(id);
+        if let Some(tx) = self.ki.lock().unwrap().remove(id) {
+            drop(tx);
+        }
+        if let Some(s) = self.sessions.lock().unwrap().remove(id) {
+            match s {
+                Session::Local(l) => l.close(),
+                Session::Ssh(s) => s.shutdown(user),
+            }
+        }
+    }
 }
 
 fn emit_connected(app: &AppHandle, id: String) {
     let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(160));
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(160)).await;
         let _ = app.emit("session-status", json!({ "id": id, "status": "connected" }));
     });
 }
@@ -173,7 +188,7 @@ async fn session_open_ssh(app: AppHandle, state: State<'_, AppState>, p: Value) 
             for t in tunnels {
                 let _ = state
                     .tunnels
-                    .open(app.clone(), sess.handle.clone(), id.clone(), t.clone(), sess.remote_forwards.clone())
+                    .open(app.clone(), sess.handle.clone(), id.clone(), t.clone(), sess.remote_forwards.clone(), sess.cancel.subscribe())
                     .await;
             }
         }
@@ -215,18 +230,7 @@ fn session_resize(state: State<'_, AppState>, p: Value) {
 
 #[tauri::command]
 fn session_close(app: AppHandle, state: State<'_, AppState>, id: String) {
-    state.tunnels.close_session(&id);
-    state.edit.stop_session(&id);
-    if let Some(s) = state.sessions.lock().unwrap().remove(&id) {
-        match s {
-            Session::Local(l) => l.close(),
-            Session::Ssh(s) => {
-                s.user_closed.store(true, std::sync::atomic::Ordering::Relaxed);
-                let _ = s.tx.send(ssh::SshCmd::Close);
-            }
-        }
-    }
-    let _ = app;
+    state.teardown(&app, &id, true);
 }
 
 #[tauri::command]
@@ -313,14 +317,14 @@ async fn sftp_upload_paths(app: AppHandle, state: State<'_, AppState>, session_i
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let n = paths.len();
     for p in paths {
-        let _ = sftp::upload_path(app.clone(), &s.handle, &session_id, &p, &remote_dir).await;
+        let _ = sftp::upload_path(app.clone(), &s.handle, &session_id, &p, &remote_dir, Some(&s.alive)).await;
     }
     Ok(json!({ "uploaded": n }))
 }
 #[tauri::command]
 async fn sftp_download_to(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_path: String, local_dir: String) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    sftp::download_path(app, &s.handle, &session_id, &remote_path, &local_dir).await
+    sftp::download_path(app, &s.handle, &session_id, &remote_path, &local_dir, Some(&s.alive)).await
 }
 #[tauri::command]
 async fn sftp_edit(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_path: String) -> Result<(), String> {
@@ -348,7 +352,7 @@ async fn tunnel_open(app: AppHandle, state: State<'_, AppState>, session_id: Str
         .and_then(|arr| arr.iter().find(|t| t.get("id").and_then(|v| v.as_str()) == Some(tunnel_id.as_str())))
         .cloned()
         .ok_or("Конфиг туннеля не найден")?;
-    state.tunnels.open(app, s.handle.clone(), session_id, cfg, s.remote_forwards.clone()).await
+    state.tunnels.open(app, s.handle.clone(), session_id, cfg, s.remote_forwards.clone(), s.cancel.subscribe()).await
 }
 #[tauri::command]
 fn tunnel_close(app: AppHandle, state: State<'_, AppState>, session_id: String, tunnel_id: String) {
