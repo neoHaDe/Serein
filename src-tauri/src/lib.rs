@@ -11,9 +11,9 @@ mod localfs;
 mod monitor;
 mod pty;
 mod remoteedit;
-mod sftp;
-mod ssh;
-mod store;
+pub mod sftp;
+pub mod ssh;
+pub mod store;
 mod tunnels;
 mod vault;
 mod vaultkey;
@@ -221,6 +221,7 @@ fn session_close(app: AppHandle, state: State<'_, AppState>, id: String) {
         match s {
             Session::Local(l) => l.close(),
             Session::Ssh(s) => {
+                s.user_closed.store(true, std::sync::atomic::Ordering::Relaxed);
                 let _ = s.tx.send(ssh::SshCmd::Close);
             }
         }

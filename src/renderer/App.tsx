@@ -51,6 +51,8 @@ function uid(): string {
   return crypto.randomUUID()
 }
 
+const RECONNECT_MAX = 5
+
 export default function App(): JSX.Element {
   const [servers, setServers] = useState<ServerConfig[]>([])
   const [tabs, setTabs] = useState<Tab[]>([])
@@ -74,6 +76,16 @@ export default function App(): JSX.Element {
   settingsRef.current = settings
   const broadcastRef = useRef(broadcast)
   broadcastRef.current = broadcast
+  const reconnectAttempts = useRef(new Map<string, number>())
+  const reconnectTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+
+  useEffect(() => {
+    const timers = reconnectTimers.current
+    return () => {
+      for (const t of timers.values()) clearTimeout(t)
+      timers.clear()
+    }
+  }, [])
 
   // Подтягиваем сохранённые ширины панелей.
   useEffect(() => {
@@ -100,6 +112,15 @@ export default function App(): JSX.Element {
   }, [reloadServers])
 
   // Обновление статуса/завершения сессий — патчим соответствующий лист по sessionId.
+  const clearReconnect = useCallback((paneId: string) => {
+    const timer = reconnectTimers.current.get(paneId)
+    if (timer) {
+      clearTimeout(timer)
+      reconnectTimers.current.delete(paneId)
+    }
+    reconnectAttempts.current.delete(paneId)
+  }, [])
+
   const reconnectPane = useCallback((tabKey: string, paneId: string) => {
     setTabs((prev) =>
       prev.map((t) =>
@@ -118,6 +139,111 @@ export default function App(): JSX.Element {
     )
   }, [])
 
+  const scheduleReconnect = useCallback(
+    (tabKey: string, paneId: string) => {
+      const prevTimer = reconnectTimers.current.get(paneId)
+      if (prevTimer) {
+        clearTimeout(prevTimer)
+        reconnectTimers.current.delete(paneId)
+      }
+      const n = (reconnectAttempts.current.get(paneId) ?? 0) + 1
+      if (n > RECONNECT_MAX) {
+        reconnectAttempts.current.delete(paneId)
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.key === tabKey
+              ? {
+                  ...t,
+                  root: updateLeaf(t.root, paneId, {
+                    status: 'error',
+                    statusMsg: `Не удалось переподключить после ${RECONNECT_MAX} попыток`,
+                    sessionId: undefined
+                  })
+                }
+              : t
+          )
+        )
+        return
+      }
+      reconnectAttempts.current.set(paneId, n)
+      const delay = Math.min(15_000, 1000 * 2 ** (n - 1))
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.key === tabKey
+            ? {
+                ...t,
+                root: updateLeaf(t.root, paneId, {
+                  status: 'reconnecting',
+                  statusMsg: `Переподключение… попытка ${n}/${RECONNECT_MAX}`,
+                  sessionId: undefined
+                })
+              }
+            : t
+        )
+      )
+      const timer = setTimeout(() => {
+        reconnectTimers.current.delete(paneId)
+        reconnectPane(tabKey, paneId)
+      }, delay)
+      reconnectTimers.current.set(paneId, timer)
+    },
+    [reconnectPane]
+  )
+
+  const reconnectPaneManual = useCallback(
+    (tabKey: string, paneId: string) => {
+      const timer = reconnectTimers.current.get(paneId)
+      if (timer) {
+        clearTimeout(timer)
+        reconnectTimers.current.delete(paneId)
+      }
+      reconnectAttempts.current.delete(paneId)
+      reconnectPane(tabKey, paneId)
+    },
+    [reconnectPane]
+  )
+
+  const cancelReconnect = useCallback(
+    (tabKey: string, paneId: string) => {
+      clearReconnect(paneId)
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.key === tabKey
+            ? {
+                ...t,
+                root: updateLeaf(t.root, paneId, {
+                  status: 'closed',
+                  statusMsg: 'Переподключение отменено',
+                  sessionId: undefined
+                })
+              }
+            : t
+        )
+      )
+    },
+    [clearReconnect]
+  )
+
+  const handleFail = useCallback(
+    (paneId: string, message: string) => {
+      const tab = tabsRef.current.find((t) => allLeaves(t.root).some((l) => l.id === paneId))
+      if (!tab) return
+      const attempts = reconnectAttempts.current.get(paneId) ?? 0
+      if (settingsRef.current.autoReconnect && attempts > 0) {
+        scheduleReconnect(tab.key, paneId)
+        return
+      }
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.key === tab.key
+            ? { ...t, root: updateLeaf(t.root, paneId, { status: 'error', statusMsg: message, sessionId: undefined }) }
+            : t
+        )
+      )
+    },
+    [scheduleReconnect]
+  )
+
   useEffect(() => {
     return window.api.session.onKi((p) => setKiRequest(p))
   }, [])
@@ -129,31 +255,39 @@ export default function App(): JSX.Element {
       )
     })
     const offExit = window.api.session.onExit((p) => {
+      void window.api.session.close(p.id)
       let reconnect: { tabKey: string; paneId: string } | null = null
+      for (const t of tabsRef.current) {
+        const leaf = allLeaves(t.root).find((l) => l.sessionId === p.id)
+        if (!leaf) continue
+        const canAuto =
+          p.reason === 'drop' &&
+          leaf.kind === 'ssh' &&
+          settingsRef.current.autoReconnect &&
+          (leaf.status === 'connected' || leaf.status === 'connecting' || leaf.status === 'reconnecting')
+        if (canAuto) reconnect = { tabKey: t.key, paneId: leaf.id }
+        break
+      }
+      if (reconnect) {
+        scheduleReconnect(reconnect.tabKey, reconnect.paneId)
+        return
+      }
       setTabs((prev) =>
-        prev.map((t) => {
-          const leaf = allLeaves(t.root).find((l) => l.sessionId === p.id)
-          if (!leaf) return t
-          if (settingsRef.current.autoReconnect && leaf.kind === 'ssh' && leaf.status === 'connected') {
-            reconnect = { tabKey: t.key, paneId: leaf.id }
-          }
-          return {
-            ...t,
-            root: updateLeafBySession(t.root, p.id, {
-              status: 'closed',
-              statusMsg: p.error ?? 'Сессия завершена',
-              sessionId: undefined
-            })
-          }
-        })
+        prev.map((t) => ({
+          ...t,
+          root: updateLeafBySession(t.root, p.id, {
+            status: 'closed',
+            statusMsg: p.error ?? 'Сессия завершена',
+            sessionId: undefined
+          })
+        }))
       )
-      if (reconnect) setTimeout(() => reconnectPane(reconnect!.tabKey, reconnect!.paneId), 1500)
     })
     return () => {
       off()
       offExit()
     }
-  }, [reconnectPane])
+  }, [scheduleReconnect])
 
   const openServerTab = useCallback((server: ServerConfig) => {
     const leaf = makeLeaf('ssh', server.name, server.id)
@@ -216,6 +350,7 @@ export default function App(): JSX.Element {
     const tab = tabsRef.current.find((t) => t.key === tabKey)
     const leaf = tab && findLeaf(tab.root, paneId)
     if (leaf?.sessionId) window.api.session.close(leaf.sessionId)
+    clearReconnect(paneId)
     setTabs((prev) => {
       const next: Tab[] = []
       for (const t of prev) {
@@ -231,13 +366,19 @@ export default function App(): JSX.Element {
       setActiveKey((cur) => (next.some((t) => t.key === cur) ? cur : next.length ? next[next.length - 1].key : null))
       return next
     })
-  }, [])
+  }, [clearReconnect])
 
   const resizeSplit = useCallback((tabKey: string, splitId: string, sizes: [number, number]) => {
     setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, root: updateSplitSizes(t.root, splitId, sizes) } : t)))
   }, [])
 
   const handleReady = useCallback((paneId: string, sessionId: string) => {
+    const timer = reconnectTimers.current.get(paneId)
+    if (timer) {
+      clearTimeout(timer)
+      reconnectTimers.current.delete(paneId)
+    }
+    reconnectAttempts.current.delete(paneId)
     setTabs((prev) => prev.map((t) => ({ ...t, root: updateLeaf(t.root, paneId, { sessionId }) })))
   }, [])
 
@@ -261,12 +402,21 @@ export default function App(): JSX.Element {
 
   // Живой статус подключения по серверу (агрегируем по всем вкладкам/панелям).
   const serverStatuses = useMemo(() => {
-    const rank: Record<string, number> = { connected: 3, connecting: 2, error: 1 }
-    const out: Record<string, 'connected' | 'connecting' | 'error'> = {}
+    const rank: Record<string, number> = { connected: 4, reconnecting: 3, connecting: 2, error: 1 }
+    const out: Record<string, 'connected' | 'connecting' | 'reconnecting' | 'error'> = {}
     for (const t of tabs) {
       for (const l of allLeaves(t.root)) {
         if (l.kind !== 'ssh' || !l.serverId) continue
-        const st = l.status === 'connected' ? 'connected' : l.status === 'error' ? 'error' : l.status === 'connecting' ? 'connecting' : null
+        const st =
+          l.status === 'connected'
+            ? 'connected'
+            : l.status === 'reconnecting'
+              ? 'reconnecting'
+              : l.status === 'error'
+                ? 'error'
+                : l.status === 'connecting'
+                  ? 'connecting'
+                  : null
         if (!st) continue
         if (!out[l.serverId] || rank[st] > rank[out[l.serverId]]) out[l.serverId] = st
       }
@@ -279,13 +429,18 @@ export default function App(): JSX.Element {
     if (tab?.kind === 'editor' && tab.editorDirty) {
       if (!confirm(`В «${tab.title}» есть несохранённые изменения. Закрыть без сохранения?`)) return
     }
-    if (tab) for (const l of allLeaves(tab.root)) if (l.sessionId) window.api.session.close(l.sessionId)
+    if (tab) {
+      for (const l of allLeaves(tab.root)) {
+        if (l.sessionId) window.api.session.close(l.sessionId)
+        clearReconnect(l.id)
+      }
+    }
     setTabs((prev) => {
       const next = prev.filter((t) => t.key !== key)
       setActiveKey((cur) => (cur !== key ? cur : next.length ? next[next.length - 1].key : null))
       return next
     })
-  }, [])
+  }, [clearReconnect])
 
   const renameTab = useCallback((key: string, title: string) => {
     setTabs((prev) => prev.map((t) => (t.key === key ? { ...t, title } : t)))
@@ -589,9 +744,11 @@ export default function App(): JSX.Element {
                     canClose={allLeaves(tab.root).length > 1}
                     onFocusPane={(pid) => focusPane(tab.key, pid)}
                     onReady={handleReady}
+                    onFail={handleFail}
                     onInput={broadcastInput}
                     onClosePane={(pid) => closePane(tab.key, pid)}
-                    onReconnect={(pid) => reconnectPane(tab.key, pid)}
+                    onReconnect={(pid) => reconnectPaneManual(tab.key, pid)}
+                    onCancelReconnect={(pid) => cancelReconnect(tab.key, pid)}
                     onResizeSplit={(sid, sizes) => resizeSplit(tab.key, sid, sizes)}
                   />
                 </div>

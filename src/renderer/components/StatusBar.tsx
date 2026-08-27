@@ -15,12 +15,14 @@ interface Props {
 const statusText: Record<string, string> = {
   connecting: 'Подключение…',
   connected: 'Подключено',
+  reconnecting: 'Переподключение…',
   closed: 'Закрыто',
   error: 'Ошибка'
 }
 const statusColor: Record<string, string> = {
   connecting: '#e0af68',
   connected: '#9ece6a',
+  reconnecting: '#e0af68',
   closed: '#565f89',
   error: '#f7768e'
 }
@@ -83,7 +85,7 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
       )}
       {isSsh && !server && <span className="sb-item sb-muted">{leaf.title}</span>}
       {!isSsh && <span className="sb-item sb-muted"><Icon name="desktop" size={13} /> Локальный терминал</span>}
-      {leaf.status === 'error' && leaf.statusMsg && (
+      {(leaf.status === 'error' || leaf.status === 'reconnecting') && leaf.statusMsg && (
         <span className="sb-item sb-error" title={leaf.statusMsg}>
           {leaf.statusMsg}
         </span>

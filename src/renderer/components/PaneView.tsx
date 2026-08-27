@@ -10,9 +10,11 @@ interface Props {
   canClose: boolean
   onFocusPane: (paneId: string) => void
   onReady: (paneId: string, sessionId: string) => void
+  onFail?: (paneId: string, message: string) => void
   onInput: (fromSessionId: string, data: string) => void
   onClosePane: (paneId: string) => void
   onReconnect: (paneId: string) => void
+  onCancelReconnect: (paneId: string) => void
   onResizeSplit: (splitId: string, sizes: [number, number]) => void
 }
 
@@ -47,14 +49,19 @@ export function PaneView(props: Props): JSX.Element {
           active={props.tabActive}
           focused={props.tabActive && isActive}
           onReady={props.onReady}
+          onFail={props.onFail}
           onInput={props.onInput}
         />
-        {(node.status === 'closed' || node.status === 'error') && (
+        {(node.status === 'closed' || node.status === 'error' || node.status === 'reconnecting') && (
           <div className="reconnect-bar">
-            <span>{node.statusMsg || 'Соединение закрыто'}</span>
-            <button className="primary" onClick={() => props.onReconnect(node.id)}>
-              ⟳ Переподключиться
-            </button>
+            <span>{node.statusMsg || (node.status === 'reconnecting' ? 'Переподключение…' : 'Соединение закрыто')}</span>
+            {node.status === 'reconnecting' ? (
+              <button onClick={() => props.onCancelReconnect(node.id)}>Отмена</button>
+            ) : (
+              <button className="primary" onClick={() => props.onReconnect(node.id)}>
+                ⟳ Переподключиться
+              </button>
+            )}
           </div>
         )}
       </div>

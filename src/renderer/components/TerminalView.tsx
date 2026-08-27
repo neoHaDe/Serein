@@ -15,6 +15,7 @@ interface Props {
   active: boolean
   focused: boolean
   onReady: (paneId: string, sessionId: string) => void
+  onFail?: (paneId: string, message: string) => void
   onInput?: (fromSessionId: string, data: string) => void
 }
 
@@ -36,13 +37,15 @@ interface PaneTerm {
 
 const registry = new Map<string, PaneTerm>()
 
-export function TerminalView({ paneId, instanceKey, kind, serverId, active, focused, onReady, onInput }: Props): JSX.Element {
+export function TerminalView({ paneId, instanceKey, kind, serverId, active, focused, onReady, onFail, onInput }: Props): JSX.Element {
   const mountRef = useRef<HTMLDivElement>(null)
   const entryRef = useRef<PaneTerm | null>(null)
 
   const { settings, update } = useSettings()
   const settingsRef = useRef(settings)
   settingsRef.current = settings
+  const onFailRef = useRef(onFail)
+  onFailRef.current = onFail
 
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
@@ -131,6 +134,7 @@ export function TerminalView({ paneId, instanceKey, kind, serverId, active, focu
         })
         .catch((err: Error) => {
           term.writeln(`\r\n\x1b[31mОшибка подключения: ${err.message}\x1b[0m`)
+          onFailRef.current?.(paneId, err.message)
         })
     }
 

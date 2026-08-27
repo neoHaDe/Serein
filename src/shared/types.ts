@@ -106,11 +106,13 @@ export interface SessionExit {
   code?: number | null
   signal?: string | null
   error?: string
+  /** user — сами закрыли вкладку/панель; drop — обрыв канала. */
+  reason?: 'user' | 'drop'
 }
 
 export interface SessionStatus {
   id: string
-  status: 'connecting' | 'connected' | 'closed' | 'error'
+  status: 'connecting' | 'connected' | 'closed' | 'error' | 'reconnecting'
   message?: string
 }
 

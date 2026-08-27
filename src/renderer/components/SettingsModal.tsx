@@ -164,7 +164,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
             checked={settings.autoReconnect}
             onChange={(e) => update({ autoReconnect: e.target.checked })}
           />
-          Авто-переподключение SSH при обрыве
+          Авто-переподключение SSH при обрыве (до 5 попыток)
         </label>
 
         <label className="checkbox-row">

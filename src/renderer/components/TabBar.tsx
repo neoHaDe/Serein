@@ -239,6 +239,7 @@ function TunnelMenu({
 const statusColor: Record<string, string> = {
   connecting: '#e0af68',
   connected: '#9ece6a',
+  reconnecting: '#e0af68',
   closed: '#565f89',
   error: '#f7768e'
 }

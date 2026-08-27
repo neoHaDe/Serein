@@ -8,6 +8,7 @@ use russh::{Channel, ChannelMsg};
 use russh_keys::{load_secret_key, PublicKeyBase64};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -37,6 +38,8 @@ pub struct SshSession {
     /// Промежуточные клиенты цепочки jump-хостов — держим живыми до закрытия сессии.
     #[allow(dead_code)]
     pub jump_handles: Vec<Arc<client::Handle<ClientHandler>>>,
+    /// true, если фронт сам вызвал session_close — не считать обрывом.
+    pub user_closed: Arc<AtomicBool>,
 }
 
 pub struct ClientHandler {
@@ -278,6 +281,8 @@ pub async fn connect_chain(
     let (tx, mut rx) = mpsc::unbounded_channel::<SshCmd>();
     let app2 = app.clone();
     let id2 = id.clone();
+    let user_closed = Arc::new(AtomicBool::new(false));
+    let user_closed2 = user_closed.clone();
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -304,9 +309,16 @@ pub async fn connect_chain(
                 }
             }
         }
+        let is_drop = !user_closed2.load(Ordering::Relaxed);
         let _ = app2.emit(
             "session-exit",
-            json!({ "id": id2, "code": 0, "signal": null, "error": "Сессия завершена" }),
+            json!({
+                "id": id2,
+                "code": 0,
+                "signal": null,
+                "reason": if is_drop { "drop" } else { "user" },
+                "error": is_drop.then_some("Соединение разорвано"),
+            }),
         );
     });
 
@@ -316,6 +328,7 @@ pub async fn connect_chain(
         server_id: field(&target, "id").unwrap_or("").to_string(),
         remote_forwards,
         jump_handles,
+        user_closed,
     })
 }
 

@@ -6,6 +6,7 @@ import { Icon } from './Icon'
 const STATUS_DOT: Record<string, string> = {
   connected: 'var(--green)',
   connecting: '#e0af68',
+  reconnecting: '#e0af68',
   error: 'var(--danger)'
 }
 
@@ -21,7 +22,7 @@ interface Props {
   onImport: (kind: 'ssh' | 'putty') => void
   width: number
   /** Агрегированный статус подключения по serverId (для живого индикатора). */
-  statuses?: Record<string, 'connected' | 'connecting' | 'error'>
+  statuses?: Record<string, 'connected' | 'connecting' | 'reconnecting' | 'error'>
 }
 
 export function Sidebar({ servers, onConnect, onOpenLocal, onNew, onEdit, onDelete, onOpenSettings, onOpenKeyGen, onImport, width, statuses }: Props): JSX.Element {
@@ -112,7 +113,10 @@ export function Sidebar({ servers, onConnect, onOpenLocal, onNew, onEdit, onDele
                   <span className="dot" style={{ background: s.color || '#7aa2f7' }} />
                   {statuses?.[s.id] && (
                     <span
-                      className={'dot-status' + (statuses[s.id] === 'connecting' ? ' pulse' : '')}
+                      className={
+                        'dot-status' +
+                        (statuses[s.id] === 'connecting' || statuses[s.id] === 'reconnecting' ? ' pulse' : '')
+                      }
                       style={{ background: STATUS_DOT[statuses[s.id]] }}
                     />
                   )}
