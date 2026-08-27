@@ -8,7 +8,7 @@
 
 Tabs and split panes, an SFTP file manager with an editor,
 port forwards, resource monitoring, a Docker panel, and a local terminal —
-in an installer of about **3 MB**.
+in an installer of about **6 MB**.
 
 Free, open source, Apache 2.0. Windows x64, **v1.0.0**.
 
@@ -38,12 +38,12 @@ No Chromium tax. We are not racing Tabby on feature count. The point is a **serv
 
 | | **Serein (Tauri)** | Typical Electron client |
 | --- | :---: | :---: |
-| Installer size | **≈ 3 MB** | ≈ 85 MB |
+| Installer size | **≈ 6 MB** | ≈ 85 MB |
 | Idle RAM | **≈ 33 MB** | 150–250 MB |
 | SSH engine | pure Rust [`russh`](https://github.com/Eugeny/russh) | libssh2 / native |
 | Runtime | system WebView2 | full Chromium |
 
-Numbers come from a live `tauri dev` session and an NSIS-size estimate on Windows.
+Numbers come from a live `tauri dev` session (RAM) and the 1.0.0 NSIS build (~6.1 MB packed).
 A weak laptop will not magically match 33 MB.
 
 ---
