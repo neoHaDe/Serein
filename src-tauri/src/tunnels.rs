@@ -83,51 +83,95 @@ impl TunnelManager {
 
         self.close(&session_id, &tunnel_id, &app);
 
+        let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
+        {
+            let mut guard = self.active.lock().unwrap();
+            let m = guard.entry(session_id.clone()).or_default();
+            m.insert(
+                tunnel_id.clone(),
+                TunnelEntry { stop: Some(stop_tx), active: false, error: None },
+            );
+        }
+
         // ---- Remote (-R remotePort:127.0.0.1:localPort) ----
         if ttype == "remote" {
             let remote_port = cfg.get("remotePort").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             remote_forwards.lock().unwrap().insert(remote_port, local_port);
             // tcpip_forward требует &mut — лочим Handle на время вызова.
-            let fwd_res = {
-                let mut h = handle.lock().await;
-                h.tcpip_forward("127.0.0.1", remote_port).await
+            let fwd_res = tokio::select! {
+                r = async {
+                    let mut h = handle.lock().await;
+                    h.tcpip_forward("127.0.0.1", remote_port).await
+                } => Some(r),
+                _ = &mut stop_rx => None,
+                _ = wait_cancel(cancel.clone()) => None,
             };
-            if let Err(e) = fwd_res {
-                remote_forwards.lock().unwrap().remove(&remote_port);
-                let msg = format!("Remote-форвард не удался: {e}");
+            match fwd_res {
+                None => {
+                    remote_forwards.lock().unwrap().remove(&remote_port);
+                    {
+                        let h = handle.lock().await;
+                        let _ = h.cancel_tcpip_forward("127.0.0.1", remote_port).await;
+                    }
+                    return Err("Отменено".into());
+                }
+                Some(Err(e)) => {
+                    remote_forwards.lock().unwrap().remove(&remote_port);
+                    let msg = format!("Remote-форвард не удался: {e}");
+                    self.set_error(&session_id, &tunnel_id, &msg);
+                    emit(&app, &session_id, &tunnel_id, false, Some(&msg));
+                    return Err(msg);
+                }
+                Some(Ok(_)) => {
+                    if !self.mark_active(&session_id, &tunnel_id) {
+                        remote_forwards.lock().unwrap().remove(&remote_port);
+                        {
+                            let h = handle.lock().await;
+                            let _ = h.cancel_tcpip_forward("127.0.0.1", remote_port).await;
+                        }
+                        return Err("Отменено".into());
+                    }
+                    emit(&app, &session_id, &tunnel_id, true, None);
+                    let h2 = handle.clone();
+                    let rf = remote_forwards.clone();
+                    let cancel_r = cancel.clone();
+                    tokio::spawn(async move {
+                        tokio::select! {
+                            _ = stop_rx => {}
+                            _ = wait_cancel(cancel_r) => {}
+                        }
+                        {
+                            let g = h2.lock().await;
+                            let _ = g.cancel_tcpip_forward("127.0.0.1", remote_port).await;
+                        }
+                        rf.lock().unwrap().remove(&remote_port);
+                    });
+                    return Ok(());
+                }
+            }
+        }
+
+        let bind = tokio::select! {
+            r = TcpListener::bind(("127.0.0.1", local_port)) => r,
+            _ = &mut stop_rx => {
+                return Err("Отменено".into());
+            }
+            _ = wait_cancel(cancel.clone()) => {
+                return Err("Отменено".into());
+            }
+        };
+        let listener = match bind {
+            Ok(l) => l,
+            Err(e) => {
+                let msg = format!("Не удалось занять порт {local_port}: {e}");
                 self.set_error(&session_id, &tunnel_id, &msg);
                 emit(&app, &session_id, &tunnel_id, false, Some(&msg));
                 return Err(msg);
             }
-            let (stop_tx, stop_rx) = oneshot::channel::<()>();
-            {
-                let mut guard = self.active.lock().unwrap();
-                let m = guard.entry(session_id.clone()).or_default();
-                m.insert(tunnel_id.clone(), TunnelEntry { stop: Some(stop_tx), active: true, error: None });
-            }
-            emit(&app, &session_id, &tunnel_id, true, None);
-            let h2 = handle.clone();
-            let rf = remote_forwards.clone();
-            tokio::spawn(async move {
-                let _ = stop_rx.await;
-                {
-                    let g = h2.lock().await;
-                    let _ = g.cancel_tcpip_forward("127.0.0.1", remote_port).await;
-                }
-                rf.lock().unwrap().remove(&remote_port);
-            });
-            return Ok(());
-        }
+        };
 
-        let listener = TcpListener::bind(("127.0.0.1", local_port))
-            .await
-            .map_err(|e| format!("Не удалось занять порт {local_port}: {e}"))?;
-
-        let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
-        {
-            let mut guard = self.active.lock().unwrap();
-            let m = guard.entry(session_id.clone()).or_default();
-            m.insert(tunnel_id.clone(), TunnelEntry { stop: Some(stop_tx), active: true, error: None });
+        if !self.mark_active(&session_id, &tunnel_id) {
+            return Err("Отменено".into());
         }
         emit(&app, &session_id, &tunnel_id, true, None);
 
@@ -169,6 +213,16 @@ impl TunnelManager {
             }
         });
         Ok(())
+    }
+
+    fn mark_active(&self, session_id: &str, tunnel_id: &str) -> bool {
+        let mut guard = self.active.lock().unwrap();
+        if let Some(t) = guard.get_mut(session_id).and_then(|m| m.get_mut(tunnel_id)) {
+            t.active = true;
+            true
+        } else {
+            false
+        }
     }
 
     fn set_error(&self, session_id: &str, tunnel_id: &str, err: &str) {

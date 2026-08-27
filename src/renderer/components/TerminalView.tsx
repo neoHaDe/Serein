@@ -33,9 +33,61 @@ interface PaneTerm {
   offData: () => void
   onInput?: (fromSessionId: string, data: string) => void
   detached: boolean
+  opened: boolean
+  sessionStarted: boolean
+  lastCols: number
+  lastRows: number
 }
 
 const registry = new Map<string, PaneTerm>()
+
+const dataWriters = new Map<string, (data: string) => void>()
+let dataBusOff: (() => void) | undefined
+
+function dataBusStart(): void {
+  if (dataBusOff) return
+  dataBusOff = window.api.session.onData((p) => {
+    dataWriters.get(p.id)?.(p.data)
+  })
+}
+
+function bindWriter(id: string, write: (data: string) => void): () => void {
+  dataBusStart()
+  dataWriters.set(id, write)
+  return () => {
+    dataWriters.delete(id)
+  }
+}
+
+function visibleEnough(el: HTMLElement): boolean {
+  if (!el.isConnected) return false
+  if (el.clientWidth < 48 || el.clientHeight < 48) return false
+  const st = getComputedStyle(el)
+  return st.display !== 'none' && st.visibility !== 'hidden'
+}
+
+/** Fit только при реальном размере; крошечный PTY ломает TUI и «сжимает» вывод. */
+function applyFit(entry: PaneTerm, notifyPty: boolean): boolean {
+  if (!visibleEnough(entry.host)) return false
+  const dim = entry.fit.proposeDimensions()
+  if (!dim || dim.cols < 20 || dim.rows < 5) return false
+  if (dim.cols !== entry.term.cols || dim.rows !== entry.term.rows) {
+    try {
+      entry.fit.fit()
+    } catch {
+      return false
+    }
+  }
+  const cols = entry.term.cols
+  const rows = entry.term.rows
+  if (cols === entry.lastCols && rows === entry.lastRows) return true
+  entry.lastCols = cols
+  entry.lastRows = rows
+  if (notifyPty && entry.sessionId) {
+    window.api.session.resize({ id: entry.sessionId, cols, rows })
+  }
+  return true
+}
 
 export function TerminalView({ paneId, instanceKey, kind, serverId, active, focused, onReady, onFail, onInput }: Props): JSX.Element {
   const mountRef = useRef<HTMLDivElement>(null)
@@ -78,9 +130,21 @@ export function TerminalView({ paneId, instanceKey, kind, serverId, active, focu
       term.loadAddon(fit)
       term.loadAddon(search)
       term.loadAddon(new WebLinksAddon())
-      term.open(host)
 
-      const created: PaneTerm = { host, term, fit, search, sessionId: null, offData: () => {}, onInput, detached: false }
+      const created: PaneTerm = {
+        host,
+        term,
+        fit,
+        search,
+        sessionId: null,
+        offData: () => {},
+        onInput,
+        detached: false,
+        opened: false,
+        sessionStarted: false,
+        lastCols: 0,
+        lastRows: 0
+      }
 
       term.attachCustomKeyEventHandler((e) => {
         if (e.type !== 'keydown') return true
@@ -108,9 +172,6 @@ export function TerminalView({ paneId, instanceKey, kind, serverId, active, focu
         return true
       })
 
-      created.offData = window.api.session.onData((p) => {
-        if (p.id === created.sessionId) term.write(p.data)
-      })
       term.onData((d) => {
         if (created.sessionId) {
           window.api.session.write(created.sessionId, d)
@@ -120,45 +181,64 @@ export function TerminalView({ paneId, instanceKey, kind, serverId, active, focu
 
       registry.set(instanceKey, created)
       entry = created
+    }
 
-      // Открытие сессии — единожды на инстанс.
-      const { cols, rows } = term
+    entry.detached = false
+    entryRef.current = entry
+    if (entry.host.parentElement !== mount) mount.appendChild(entry.host)
+    if (!entry.opened) {
+      entry.term.open(entry.host)
+      entry.opened = true
+    }
+
+    const startSession = (e: PaneTerm): void => {
+      if (e.sessionStarted) return
+      e.sessionStarted = true
+      const cols = e.lastCols >= 20 ? e.term.cols : 80
+      const rows = e.lastRows >= 5 ? e.term.rows : 24
       const openPromise =
         kind === 'ssh' && serverId
           ? window.api.session.openSsh({ serverId, cols, rows })
           : window.api.session.openLocal({ cols, rows })
       openPromise
         .then((id) => {
-          created.sessionId = id
+          e.sessionId = id
+          e.lastCols = e.term.cols
+          e.lastRows = e.term.rows
+          e.offData = bindWriter(id, (data) => e.term.write(data))
           onReady(paneId, id)
         })
         .catch((err: Error) => {
-          term.writeln(`\r\n\x1b[31mОшибка подключения: ${err.message}\x1b[0m`)
+          e.term.writeln(`\r\n\x1b[31mОшибка подключения: ${err.message}\x1b[0m`)
           onFailRef.current?.(paneId, err.message)
         })
     }
 
-    entry.detached = false
-    entryRef.current = entry
-    mount.appendChild(entry.host)
-
     const fitNow = (): void => {
-      try {
-        entry!.fit.fit()
-        if (entry!.sessionId)
-          window.api.session.resize({ id: entry!.sessionId, cols: entry!.term.cols, rows: entry!.term.rows })
-      } catch {
-        /* контейнер мог быть скрыт */
-      }
+      if (applyFit(entry!, !!entry!.sessionId) && !entry!.sessionStarted) startSession(entry!)
     }
-    requestAnimationFrame(fitNow)
 
+    let tries = 0
+    const waitFit = (): void => {
+      fitNow()
+      if (!entry!.sessionStarted && tries++ < 45) requestAnimationFrame(waitFit)
+      else if (!entry!.sessionStarted) startSession(entry!)
+    }
+    requestAnimationFrame(waitFit)
+
+    let roTimer: number | undefined
     const ro = new ResizeObserver(() => {
-      if (active) fitNow()
+      if (!active) return
+      if (roTimer !== undefined) window.clearTimeout(roTimer)
+      roTimer = window.setTimeout(() => {
+        roTimer = undefined
+        fitNow()
+      }, 80)
     })
     ro.observe(mount)
 
     return () => {
+      if (roTimer !== undefined) window.clearTimeout(roTimer)
       ro.disconnect()
       const e = registry.get(instanceKey)
       if (e && e.host.parentElement === mount) mount.removeChild(e.host)
@@ -189,12 +269,7 @@ export function TerminalView({ paneId, instanceKey, kind, serverId, active, focu
     e.term.options.fontSize = settings.fontSize
     e.term.options.fontFamily = settings.fontFamily
     requestAnimationFrame(() => {
-      try {
-        e.fit.fit()
-        if (e.sessionId) window.api.session.resize({ id: e.sessionId, cols: e.term.cols, rows: e.term.rows })
-      } catch {
-        /* ignore */
-      }
+      applyFit(e, true)
     })
   }, [settings.theme, settings.fontSize, settings.fontFamily])
 
@@ -204,13 +279,8 @@ export function TerminalView({ paneId, instanceKey, kind, serverId, active, focu
     const e = entryRef.current
     if (!e) return
     requestAnimationFrame(() => {
-      try {
-        e.fit.fit()
-        if (focused) e.term.focus()
-        if (e.sessionId) window.api.session.resize({ id: e.sessionId, cols: e.term.cols, rows: e.term.rows })
-      } catch {
-        /* ignore */
-      }
+      applyFit(e, true)
+      if (focused) e.term.focus()
     })
   }, [active, focused])
 

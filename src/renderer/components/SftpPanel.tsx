@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SftpEntry, LocalEntry, TransferItem, RemoteEditStatus } from '../../shared/types'
 import { isTextFile } from '../editorLang'
 import { Icon } from './Icon'
+import { openAuxWindow, sanitizeWindowLabel } from '../auxWindows'
+import { useCtrlWheelZoom } from '../useCtrlWheelZoom'
+import { AuxDrag, WindowSysButtons } from './WindowChrome'
 
 /** Разбивает абсолютный remote-путь на сегменты-крошки: [{label, path}]. */
 function remoteCrumbs(path: string): { label: string; path: string }[] {
@@ -21,6 +24,7 @@ interface Props {
   onClose: () => void
   width: number
   closing: boolean
+  detached?: boolean
   onOpenInEditor?: (remotePath: string) => void
 }
 
@@ -48,7 +52,7 @@ function joinLocal(dir: string, name: string): string {
   return dir + sep + name
 }
 
-export function SftpPanel({ sessionId, onClose, width, closing, onOpenInEditor }: Props): JSX.Element {
+export function SftpPanel({ sessionId, onClose, width, closing, detached, onOpenInEditor }: Props): JSX.Element {
   const [path, setPath] = useState('.')
   const [entries, setEntries] = useState<SftpEntry[]>([])
   const [loading, setLoading] = useState(false)
@@ -66,6 +70,7 @@ export function SftpPanel({ sessionId, onClose, width, closing, onOpenInEditor }
   // Инлайн-переименование: имя редактируемой записи + текущее значение поля.
   const [renaming, setRenaming] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const { zoom, ref: zoomRef, reset } = useCtrlWheelZoom('serein.sftp.zoom')
 
   const pathRef = useRef(path)
   pathRef.current = path
@@ -255,11 +260,33 @@ export function SftpPanel({ sessionId, onClose, width, closing, onOpenInEditor }
 
   const editList = Object.values(edits)
 
+  const detach = async (): Promise<void> => {
+    await openAuxWindow({
+      label: 'sftp-' + sanitizeWindowLabel(sessionId),
+      query: { sftp: '1', sessionId },
+      title: 'SFTP',
+      width: Math.max(width, 480),
+      height: 720
+    })
+    onClose()
+  }
+
   return (
-    <div className={'sftp-panel' + (closing ? ' closing' : '')} style={{ width }}>
-      <div className="sftp-header">
-        <strong><Icon name="folder" size={15} /> SFTP</strong>
-        <div style={{ display: 'flex', gap: 4 }}>
+    <div
+      className={'sftp-panel' + (closing ? ' closing' : '') + (detached ? ' detached' : '')}
+      ref={zoomRef}
+      style={detached ? { zoom } : { width, zoom }}
+    >
+      <div className={'sftp-header' + (detached ? ' aux-win-header' : '')}>
+        {detached ? (
+          <AuxDrag>
+            <strong><Icon name="folder" size={15} /> SFTP</strong>
+          </AuxDrag>
+        ) : (
+          <strong><Icon name="folder" size={15} /> SFTP</strong>
+        )}
+        <div className="aux-win-actions">
+          <button className="mini" title="Масштаб" onClick={reset}>{Math.round(zoom * 100)}%</button>
           <button
             className={'mini' + (dualPane ? ' on' : '')}
             title="Двухпанельный режим (локальная ФС + сервер)"
@@ -267,9 +294,18 @@ export function SftpPanel({ sessionId, onClose, width, closing, onOpenInEditor }
           >
             ⇄
           </button>
-          <button className="icon-btn" onClick={onClose} title="Закрыть">
-            <Icon name="close" />
-          </button>
+          {!detached && (
+            <button className="mini" title="Открепить в отдельное окно" onClick={() => void detach()}>
+              <Icon name="external" size={14} />
+            </button>
+          )}
+          {detached ? (
+            <WindowSysButtons />
+          ) : (
+            <button className="icon-btn" onClick={onClose} title="Закрыть">
+              <Icon name="close" />
+            </button>
+          )}
         </div>
       </div>
 

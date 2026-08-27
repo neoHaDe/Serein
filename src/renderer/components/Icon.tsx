@@ -44,6 +44,9 @@ export type IconName =
   | 'bolt'
   | 'check'
   | 'up-dir'
+  | 'win-min'
+  | 'win-max'
+  | 'win-restore'
 
 interface Props {
   name: IconName
@@ -239,6 +242,14 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M12 19V8M7 12l5-5 5 5" />
       <path d="M5 5h14" />
+    </>
+  ),
+  'win-min': <path d="M5 19h14" />,
+  'win-max': <rect x="6" y="6" width="12" height="12" rx="1" />,
+  'win-restore': (
+    <>
+      <path d="M8 8h10v10" />
+      <rect x="6" y="10" width="10" height="10" rx="1" />
     </>
   )
 }

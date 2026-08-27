@@ -48,7 +48,8 @@ fn default_settings() -> Value {
         "keybindings": {},
         "restoreTabsOnStart": false,
         "localShell": "auto",
-        "density": "comfortable"
+        "density": "comfortable",
+        "auxInTaskbar": false
     })
 }
 

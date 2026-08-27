@@ -35,6 +35,19 @@ pub async fn wait_cancel(mut rx: CancelRx) {
     }
 }
 
+/// true, как только сработал любой из двух флагов.
+pub fn race_cancel(a: CancelRx, b: CancelRx) -> CancelRx {
+    let (tx, rx) = watch::channel(false);
+    tauri::async_runtime::spawn(async move {
+        tokio::select! {
+            _ = wait_cancel(a) => {}
+            _ = wait_cancel(b) => {}
+        }
+        let _ = tx.send(true);
+    });
+    rx
+}
+
 pub enum SshCmd {
     Write(Vec<u8>),
     Resize(u32, u32),
@@ -471,9 +484,20 @@ pub async fn exec_for(
 }
 
 /// Выполняет команду отдельным exec-каналом. Возвращает (код, stdout, stderr).
+/// `cancel` — оборвать канал (теardown сессии / стоп логов).
 pub async fn exec(
     handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
     command: &str,
+    cancel: Option<CancelRx>,
+) -> Result<(i32, String, String), String> {
+    exec_with(handle, command, cancel, |_| {}).await
+}
+
+pub async fn exec_with(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    command: &str,
+    cancel: Option<CancelRx>,
+    mut on_out: impl FnMut(&[u8]),
 ) -> Result<(i32, String, String), String> {
     let mut channel = {
         let h = handle.lock().await;
@@ -483,11 +507,28 @@ pub async fn exec(
     let mut out: Vec<u8> = Vec::new();
     let mut err: Vec<u8> = Vec::new();
     let mut code = 0i32;
+    let mut cancel = cancel;
     loop {
-        match channel.wait().await {
-            Some(ChannelMsg::Data { ref data }) => out.extend_from_slice(&data[..]),
+        let msg = if let Some(rx) = cancel.as_mut() {
+            tokio::select! {
+                m = channel.wait() => m,
+                _ = wait_cancel(rx.clone()) => {
+                    let _ = channel.close().await;
+                    return Ok((130, String::from_utf8_lossy(&out).to_string(), String::from_utf8_lossy(&err).to_string()));
+                }
+            }
+        } else {
+            channel.wait().await
+        };
+        match msg {
+            Some(ChannelMsg::Data { ref data }) => {
+                on_out(&data[..]);
+                if out.len() < 512 * 1024 {
+                    out.extend_from_slice(&data[..]);
+                }
+            }
             Some(ChannelMsg::ExtendedData { ref data, ext }) => {
-                if ext == 1 {
+                if ext == 1 && err.len() < 128 * 1024 {
                     err.extend_from_slice(&data[..]);
                 }
             }
@@ -507,6 +548,38 @@ pub async fn exec(
 /// Round-trip exec "true" в миллисекундах.
 pub async fn ping(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>) -> Option<u32> {
     let t = std::time::Instant::now();
-    let _ = exec(handle, "true").await;
+    let _ = exec(handle, "true", None).await;
     Some(t.elapsed().as_millis() as u32)
+}
+
+#[derive(Default)]
+pub struct OpHub {
+    tx: Mutex<HashMap<String, watch::Sender<bool>>>,
+}
+
+impl OpHub {
+    pub fn begin(&self, key: &str) -> CancelRx {
+        let (tx, rx) = watch::channel(false);
+        self.tx.lock().unwrap().insert(key.to_string(), tx);
+        rx
+    }
+
+    pub fn cancel(&self, key: &str) {
+        if let Some(tx) = self.tx.lock().unwrap().get(key) {
+            let _ = tx.send(true);
+        }
+    }
+
+    pub fn finish(&self, key: &str) {
+        self.tx.lock().unwrap().remove(key);
+    }
+
+    pub fn cancel_prefix(&self, prefix: &str) {
+        let guard = self.tx.lock().unwrap();
+        for (k, tx) in guard.iter() {
+            if k.starts_with(prefix) {
+                let _ = tx.send(true);
+            }
+        }
+    }
 }

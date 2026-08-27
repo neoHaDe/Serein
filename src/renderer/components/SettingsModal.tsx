@@ -185,6 +185,18 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           Компактный режим (плотнее интерфейс)
         </label>
 
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={!!settings.auxInTaskbar}
+            onChange={(e) => update({ auxInTaskbar: e.target.checked })}
+          />
+          Отдельные кнопки на панели задач для откреплённых окон
+        </label>
+        <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
+          По умолчанию одна кнопка. Галочка — отдельная кнопка у каждого окна (закрой и открепи снова).
+        </div>
+
         <label>
           Shell локального терминала (Windows)
           <select value={settings.localShell ?? 'auto'} onChange={(e) => update({ localShell: e.target.value })}>

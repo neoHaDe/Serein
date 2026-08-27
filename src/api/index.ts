@@ -29,7 +29,8 @@ import type {
   SerializedTab,
   ServerMetrics,
   DockerListResult,
-  DockerAction
+  DockerAction,
+  DockerLogsChunk
 } from '../shared/types'
 
 /** Подписка на событие Tauri с синхронной функцией отписки (как в Electron-preload). */
@@ -151,7 +152,10 @@ export const api = {
     action: (id: string, containerId: string, action: DockerAction): Promise<{ ok: boolean; error?: string }> =>
       invoke('docker_action', { id, containerId, action }),
     logs: (id: string, containerId: string): Promise<{ ok: boolean; logs?: string; error?: string }> =>
-      invoke('docker_logs', { id, containerId })
+      invoke('docker_logs', { id, containerId }),
+    cancelLogs: (id: string, containerId?: string): Promise<void> =>
+      invoke('docker_logs_cancel', { id, containerId: containerId ?? null }),
+    onLogs: (cb: (p: DockerLogsChunk) => void) => sub<DockerLogsChunk>('docker-logs', cb)
   },
   vault: {
     status: (): Promise<{ enabled: boolean; locked: boolean }> => invoke('vault_status'),

@@ -203,6 +203,12 @@ export interface DockerListResult {
 }
 export type DockerAction = 'start' | 'stop' | 'restart' | 'remove'
 
+export interface DockerLogsChunk {
+  sessionId: string
+  containerId: string
+  chunk: string
+}
+
 /** Снимок ресурсов удалённого сервера (для виджета мониторинга). */
 export interface ServerMetrics {
   ok: boolean
@@ -269,6 +275,8 @@ export interface AppSettings {
   localShell?: string
   /** Плотность интерфейса: 'comfortable' (по умолчанию) | 'compact'. */
   density?: 'comfortable' | 'compact'
+  /** Отдельные кнопки на панели задач для откреплённых окон. По умолчанию одно приложение. */
+  auxInTaskbar?: boolean
 }
 
 // ---- Сохранение раскладки вкладок (для восстановления при запуске) ----
@@ -302,5 +310,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   keybindings: {},
   restoreTabsOnStart: false,
   localShell: 'auto',
-  density: 'comfortable'
+  density: 'comfortable',
+  auxInTaskbar: false
 }

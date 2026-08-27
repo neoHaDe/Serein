@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Serein",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "dev.serein.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -17,6 +17,8 @@
         "height": 800,
         "minWidth": 900,
         "minHeight": 560,
+        "decorations": false,
+        "shadow": false,
         "backgroundColor": "#1a1b26"
       }
     ],

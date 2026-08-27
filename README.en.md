@@ -10,13 +10,14 @@ Tabs and split panes, an SFTP file manager with an editor,
 port forwards, resource monitoring, a Docker panel, and a local terminal —
 in an installer of about **3 MB**.
 
-Free, open source, MIT. Windows x64, **v0.1.0**.
+Free, open source, Apache 2.0. Windows x64, **v1.0.0**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](#license)
+[![CI](https://github.com/neoHaDe/Serein/actions/workflows/ci.yml/badge.svg)](https://github.com/neoHaDe/Serein/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](#license)
 
 Windows · no bundled Chromium (system WebView2) ·
 [Русская версия](README.md)
@@ -53,6 +54,7 @@ A weak laptop will not magically match 33 MB.
 - **Multiple SSH tabs** and **split panes** (tree with drag-resize, pick a server per pane)
 - **Local terminal** with a sensible shell (PowerShell → cmd, or a custom / WSL shell)
 - Search (`Ctrl+F`), zoom, **17 UI themes**, **compact mode**
+- **Custom window chrome** (no Windows caption): minimize / maximize / close
 - **Broadcast input** (current tab only), tab restore, tab drag
 - Keyboard pane navigation, remappable shortcuts, **command palette** (`Ctrl+Shift+P`)
 
@@ -61,18 +63,29 @@ A weak laptop will not magically match 33 MB.
 - Auth: **password · key · keyboard-interactive 2FA**
 - **ProxyJump / bastion** chains (recursive, `direct-tcpip`)
 - **TOFU known-hosts** on every hop
+- **Reconnect on drop** — manual or auto (up to 5 attempts, backoff)
 - Import from **`~/.ssh/config`** and **PuTTY** sessions
 
 ### Files (SFTP)
 - Browse with **clickable breadcrumbs**, **inline rename**, drag & drop into the window
-- **Recursive transfers** with progress, dual-pane (local ↔ remote)
+- **Recursive transfers** with progress and **per-file cancel** (✕)
+- Dual-pane (local ↔ remote); **detach SFTP** into its own OS window
+- **Ctrl+wheel** (and Ctrl+/−/0) zooms text in SFTP and logs
 - **Built-in editor** (CodeMirror 6) — atomic save back to the server
 - **External editor** — OS default app, re-upload on save
 
 ### Tunnels and ops
-- Forwards: **local `-L`**, **remote `-R`**, **dynamic SOCKS5 `-D`**
+- Forwards: **local `-L`**, **remote `-R`**, **dynamic SOCKS5 `-D`** (tunnel create can be cancelled)
 - **Resource monitor** — CPU / RAM / disk / load (`/proc` + `df`)
-- **Docker panel** — list, start/stop/restart/remove, logs, shell into a container
+- **Docker panel** — list, start/stop/restart/remove, shell into a container
+- **Docker logs** — coloured levels, follow (`-f`) with stop, wide panel; **detach** to a second monitor
+
+### App windows
+- Detached logs and SFTP are real OS windows, without the Windows caption
+- **Magnet**: windows snap flush and to guides (edges / center)
+- The main window drags a docked group; drag an extra window to undock it
+- Focusing any Serein window raises **all** of them; by default **one taskbar button**
+  (settings can restore a button per window)
 
 ### Security and storage
 - Secrets via **DPAPI** plus an optional **master password**
@@ -84,7 +97,7 @@ A weak laptop will not magically match 33 MB.
 
 ## Quick start
 
-1. Install `Serein_0.1.0_x64-setup.exe` from [Releases](../../releases/latest).
+1. Install `Serein_1.0.0_x64-setup.exe` from [Releases](../../releases/latest).
 2. Import `~/.ssh/config` or add a host by hand.
 3. Connect. The local terminal works with no SSH at all.
 
@@ -96,16 +109,19 @@ Target: install → first session in under two minutes.
 
 | Need | Answer |
 | --- | --- |
-| OS | Windows 10/11, x64. No macOS or Linux builds yet |
+| OS | Windows 10 x64 **22H2+** or Windows 11 x64. No macOS or Linux builds yet |
 | WebView2 | already on current Windows; nothing extra to install |
 | Privileges | admin is not required for daily use |
+| Build from source | Node **18.18+** (tested on 24.16), Rust **stable** `x86_64-pc-windows-msvc` (tested on 1.96.0), Tauri CLI **2.11.x** |
 | SSH agent | **not yet** — password, key file, or keyboard-interactive |
+
+Matrix and smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
 
 ---
 
 ## Install
 
-Download **`Serein_0.1.0_x64-setup.exe`** from
+Download **`Serein_1.0.0_x64-setup.exe`** from
 [Releases](../../releases/latest) and run it.
 
 The build is **unsigned**. SmartScreen will complain. *More info → Run anyway*.
@@ -170,9 +186,10 @@ npm run tauri build
 Installer output: `src-tauri/target/release/bundle/nsis/`.
 
 ```bash
-npm run typecheck
-cargo check --manifest-path src-tauri/Cargo.toml
+npm run smoke
 ```
+
+(`tsc --noEmit` + `cargo check`. Full protocol: `docs/PHASE0.md`.)
 
 ---
 
@@ -188,13 +205,11 @@ and `npm run tauri dev` output.
 
 ## Known limitations
 
-- **Windows x64** only. No `.dmg` / `.AppImage`.
-- Installer is **unsigned**. SmartScreen will fight you.
 - No **SSH agent** and no **agent forwarding**.
 - No drag-out of files onto the desktop.
-- No proper transfer-manager UI (pause / cancel / retry).
-- Remote `-R`, TOFU, the external editor, SFTP, and the master-password vault exist in code;
-  not every path has been live-tested in production. File a bug, do not assume silence is OK.
+- No transfer-queue UI (pause / retry / several files in parallel). Cancelling the current file works.
+- **Windows x64** only. No `.dmg` / `.AppImage`.
+- Installer is **unsigned**. SmartScreen will fight you.
 - Not on the near-term list: cloud sync, mobile, plugins, Telnet/RDP/VNC, a generic LLM chat pane.
 
 Product plan: a reliable SSH core, then Server Workspace, then Copilot. Do not skip the first layer.
@@ -203,4 +218,4 @@ Product plan: a reliable SSH core, then Server Workspace, then Copilot. Do not s
 
 ## License
 
-[MIT](LICENSE) © 2026 HaDe
+[Apache License 2.0](LICENSE) © 2026 HaDe

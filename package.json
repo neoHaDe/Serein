@@ -1,15 +1,18 @@
 {
   "name": "serein",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "Serein — десктоп SSH/SFTP workstation на Tauri + React",
+  "license": "Apache-2.0",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke.ps1",
+    "bench:phase0": "cargo run --release --manifest-path src-tauri/Cargo.toml --bin phase0_bench -- home_server"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",
@@ -37,6 +40,9 @@
     "codemirror": "^6.0.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
+  },
+  "engines": {
+    "node": ">=18.18.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

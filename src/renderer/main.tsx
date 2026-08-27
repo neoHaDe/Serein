@@ -1,24 +1,33 @@
 import { createRoot } from 'react-dom/client'
 import { Gate } from './Gate'
 import { SettingsProvider } from './SettingsContext'
+import { DockerLogsWindow } from './components/dockerLogs'
+import { SftpWindow } from './components/SftpWindow'
 import { api } from '../api'
 import { checkForUpdates } from './updater'
 import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
-// Мост к Rust-бэкенду выставляем как window.api — renderer ждёт его как в Electron.
 window.api = api
 
-// StrictMode намеренно отключён: двойной вызов эффектов в dev приводил бы
-// к открытию лишних SSH-сессий и PTY. Терминалы должны создаваться ровно один раз.
+const q = new URLSearchParams(window.location.search)
+const detachedLogs = q.get('dockerLogs') === '1'
+const detachedSftp = q.get('sftp') === '1'
+
 createRoot(document.getElementById('root')!).render(
-  <SettingsProvider>
-    <Gate />
-  </SettingsProvider>
+  detachedLogs ? (
+    <DockerLogsWindow />
+  ) : detachedSftp ? (
+    <SftpWindow />
+  ) : (
+    <SettingsProvider>
+      <Gate />
+    </SettingsProvider>
+  )
 )
 
-// Тихая авто-проверка обновлений через несколько секунд после старта
-// (не блокирует запуск; молча выходит, если обновлений нет или сети нет).
-setTimeout(() => {
-  void checkForUpdates(true)
-}, 3000)
+if (!detachedLogs && !detachedSftp) {
+  setTimeout(() => {
+    void checkForUpdates(true)
+  }, 3000)
+}

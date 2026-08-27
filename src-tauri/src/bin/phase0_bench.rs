@@ -219,7 +219,7 @@ async fn main() {
         let local_root = std::env::temp_dir().join("serein-phase0-bench");
         let _ = std::fs::create_dir_all(&local_root);
         let remote_root = "/tmp/serein-phase0-bench";
-        let _ = ssh::exec(&h, &format!("mkdir -p {remote_root}")).await;
+        let _ = ssh::exec(&h, &format!("mkdir -p {remote_root}"), None).await;
         let sftp = match sftp::open(&h).await {
             Ok(s) => s,
             Err(e) => {
@@ -228,7 +228,7 @@ async fn main() {
             }
         };
         run_file_batches(&h, sftp, &local_root, remote_root).await;
-        let _ = ssh::exec(&h, &format!("rm -rf {remote_root}")).await;
+        let _ = ssh::exec(&h, &format!("rm -rf {remote_root}"), None).await;
         let _ = std::fs::remove_dir_all(&local_root);
         rec("done", true, json!({ "mode": "files" }));
         return;
@@ -266,7 +266,7 @@ async fn main() {
         Err(e) => rec("term_flood", false, json!({ "error": e })),
     }
 
-    match ssh::exec(&h, "docker ps -q 2>/dev/null | head -1").await {
+    match ssh::exec(&h, "docker ps -q 2>/dev/null | head -1", None).await {
         Ok((0, id, _)) if !id.trim().is_empty() => {
             let cid = id.trim().to_string();
             let cmd = format!("timeout 8 docker logs -f {cid}");
@@ -300,7 +300,7 @@ async fn main() {
     let _ = std::fs::remove_dir_all(&local_root);
     let _ = std::fs::create_dir_all(&local_root);
     let remote_root = "/tmp/serein-phase0-bench";
-    let _ = ssh::exec(&h, &format!("rm -rf {remote_root} && mkdir -p {remote_root}")).await;
+    let _ = ssh::exec(&h, &format!("rm -rf {remote_root} && mkdir -p {remote_root}"), None).await;
 
     let mut sftp = match sftp::open(&h).await {
         Ok(s) => s,
@@ -388,7 +388,7 @@ async fn main() {
     rec("ssh_reconnect", true, json!({ "after": "before_files" }));
     run_file_batches(&h, sftp, &local_root, remote_root).await;
 
-    let _ = ssh::exec(&h, &format!("rm -rf {remote_root}")).await;
+    let _ = ssh::exec(&h, &format!("rm -rf {remote_root}"), None).await;
     let _ = std::fs::remove_dir_all(&local_root);
     rec("done", true, json!({}));
 }

@@ -139,6 +139,7 @@ function TunnelMenu({
   onEditServer: () => void
 }): JSX.Element {
   const [statuses, setStatuses] = useState<Map<string, TunnelStatus>>(new Map())
+  const [opening, setOpening] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     window.api.tunnel.listStatus(sessionId).then((list) => {
@@ -146,6 +147,14 @@ function TunnelMenu({
     })
     return window.api.tunnel.onStatus((s) => {
       if (s.sessionId !== sessionId) return
+      if (s.active || s.error) {
+        setOpening((prev) => {
+          if (!prev.has(s.tunnelId)) return prev
+          const next = new Set(prev)
+          next.delete(s.tunnelId)
+          return next
+        })
+      }
       setStatuses((prev) => {
         const next = new Map(prev)
         next.set(s.tunnelId, s)
@@ -199,14 +208,15 @@ function TunnelMenu({
               const st = statuses.get(t.id)
               const active = st?.active ?? false
               const error = st?.error
+              const isOpening = opening.has(t.id)
               return (
                 <div key={t.id} className="tunnel-row">
                   <span
                     className="tunnel-dot"
                     style={{
-                      background: active ? 'var(--green)' : error ? 'var(--danger)' : 'var(--muted)'
+                      background: active ? 'var(--green)' : error ? 'var(--danger)' : isOpening ? 'var(--yellow, #e0af68)' : 'var(--muted)'
                     }}
-                    title={error ?? (active ? 'Активен' : 'Неактивен')}
+                    title={error ?? (active ? 'Активен' : isOpening ? 'Открывается…' : 'Неактивен')}
                   />
                   <span className="tunnel-type-badge">
                     {t.type === 'local' ? 'L' : t.type === 'remote' ? 'R' : 'D'}
@@ -217,14 +227,29 @@ function TunnelMenu({
                   <button
                     className="mini"
                     onClick={async () => {
-                      if (active) {
+                      if (active || isOpening) {
+                        setOpening((prev) => {
+                          const next = new Set(prev)
+                          next.delete(t.id)
+                          return next
+                        })
                         await window.api.tunnel.close(sessionId, t.id)
                       } else {
-                        await window.api.tunnel.open(sessionId, t.id)
+                        setOpening((prev) => new Set(prev).add(t.id))
+                        try {
+                          await window.api.tunnel.open(sessionId, t.id)
+                        } catch {
+                          /* отмена или ошибка — статус придёт событием */
+                        }
+                        setOpening((prev) => {
+                          const next = new Set(prev)
+                          next.delete(t.id)
+                          return next
+                        })
                       }
                     }}
                   >
-                    {active ? 'Стоп' : 'Старт'}
+                    {active ? 'Стоп' : isOpening ? 'Отмена' : 'Старт'}
                   </button>
                 </div>
               )

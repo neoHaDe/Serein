@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DockerContainer, DockerAction } from '../../shared/types'
 import { Icon } from './Icon'
+import { DockerLogView, openDetachedLogsWindow, useLogsPanelResize } from './dockerLogs'
+import { useCtrlWheelZoom } from '../useCtrlWheelZoom'
 
 interface Props {
   /** SSH-сессия, на которой выполняем docker-команды и shell. */
@@ -15,6 +17,12 @@ export function DockerPanel({ sessionId, onClose }: Props): JSX.Element {
   const [busy, setBusy] = useState<string | null>(null)
   const [logsFor, setLogsFor] = useState<DockerContainer | null>(null)
   const [logsText, setLogsText] = useState('')
+  const [following, setFollowing] = useState(false)
+  const logsForRef = useRef<string | null>(null)
+  const skipCancelRef = useRef(false)
+  const { size, onResizeDown } = useLogsPanelResize()
+  const { zoom, ref: zoomRef, reset } = useCtrlWheelZoom('serein.logs.zoom')
+  const LOADING = 'Загрузка логов…'
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -30,6 +38,26 @@ export function DockerPanel({ sessionId, onClose }: Props): JSX.Element {
     void reload()
   }, [reload])
 
+  useEffect(() => {
+    return window.api.docker.onLogs((p) => {
+      if (p.sessionId !== sessionId) return
+      const want = logsForRef.current
+      if (!want) return
+      if (p.containerId !== want && !p.containerId.startsWith(want)) return
+      setLogsText((t) => {
+        const base = t === LOADING ? '' : t
+        const next = base + p.chunk
+        return next.length > 400000 ? next.slice(-350000) : next
+      })
+    })
+  }, [sessionId])
+
+  useEffect(() => {
+    return () => {
+      if (!skipCancelRef.current) void window.api.docker.cancelLogs(sessionId)
+    }
+  }, [sessionId])
+
   const doAction = async (c: DockerContainer, action: DockerAction): Promise<void> => {
     if (action === 'remove' && !confirm(`Удалить контейнер «${c.name}»?`)) return
     setBusy(c.id)
@@ -40,10 +68,50 @@ export function DockerPanel({ sessionId, onClose }: Props): JSX.Element {
   }
 
   const openLogs = async (c: DockerContainer): Promise<void> => {
+    if (logsForRef.current) void window.api.docker.cancelLogs(sessionId, logsForRef.current)
+    logsForRef.current = c.id
     setLogsFor(c)
-    setLogsText('Загрузка логов…')
+    setFollowing(true)
+    setLogsText(LOADING)
     const res = await window.api.docker.logs(sessionId, c.id)
-    setLogsText(res.ok ? res.logs || '(пусто)' : `Ошибка: ${res.error}`)
+    if (logsForRef.current !== c.id) return
+    setFollowing(false)
+    if (res.ok) {
+      setLogsText((t) => (t === LOADING ? res.logs || '(пусто)' : t))
+    } else {
+      setLogsText((t) => (t === LOADING ? `Ошибка: ${res.error}` : t))
+    }
+  }
+
+  const stopLogs = (): void => {
+    if (logsForRef.current) void window.api.docker.cancelLogs(sessionId, logsForRef.current)
+    logsForRef.current = null
+    setFollowing(false)
+    setLogsFor(null)
+  }
+
+  const detachLogs = async (): Promise<void> => {
+    if (!logsFor) return
+    skipCancelRef.current = true
+    if (logsForRef.current) void window.api.docker.cancelLogs(sessionId, logsForRef.current)
+    logsForRef.current = null
+    try {
+      await openDetachedLogsWindow({
+        sessionId,
+        containerId: logsFor.id,
+        name: logsFor.name,
+        width: size.w,
+        height: size.h
+      })
+    } catch (e) {
+      skipCancelRef.current = false
+      setFollowing(false)
+      setLogsText(`Не удалось открепить: ${e instanceof Error ? e.message : String(e)}`)
+      return
+    }
+    setFollowing(false)
+    setLogsFor(null)
+    onClose()
   }
 
   const openShell = (c: DockerContainer): void => {
@@ -57,18 +125,41 @@ export function DockerPanel({ sessionId, onClose }: Props): JSX.Element {
   return (
     <>
       <div className="split-menu-backdrop" onClick={onClose} />
-      <div className="docker-panel">
+      <div
+        className={`docker-panel${logsFor ? ' is-logs' : ''}`}
+        ref={logsFor ? zoomRef : undefined}
+        style={logsFor ? { width: size.w, height: size.h, zoom } : undefined}
+      >
         <div className="tunnel-menu-header">
-          <span className="tunnel-menu-title">{logsFor ? `Логи: ${logsFor.name}` : 'Docker'}</span>
+          <span className="tunnel-menu-title" title={logsFor ? logsFor.name : undefined}>
+            {logsFor ? `Логи: ${logsFor.name}` : 'Docker'}
+          </span>
           {logsFor ? (
-            <button className="mini" onClick={() => setLogsFor(null)}><Icon name="back" size={14} /> назад</button>
+            <>
+              {following && (
+                <button
+                  className="mini"
+                  onClick={() => {
+                    if (logsForRef.current) void window.api.docker.cancelLogs(sessionId, logsForRef.current)
+                    setFollowing(false)
+                  }}
+                >
+                  Стоп
+                </button>
+              )}
+              <button className="mini" title="Масштаб" onClick={reset}>{Math.round(zoom * 100)}%</button>
+              <button className="mini" title="Открепить в отдельное окно" onClick={() => void detachLogs()}>
+                <Icon name="external" size={14} />
+              </button>
+              <button className="mini" onClick={stopLogs}><Icon name="back" size={14} /> назад</button>
+            </>
           ) : (
             <button className="mini" title="Обновить" onClick={() => void reload()}><Icon name="refresh" size={14} /></button>
           )}
         </div>
 
         {logsFor ? (
-          <pre className="docker-logs">{logsText}</pre>
+          <DockerLogView text={logsText} follow={following} />
         ) : (
           <div className="docker-list">
             {loading && <div className="hint" style={{ padding: '10px 12px' }}>Загрузка…</div>}
@@ -106,6 +197,13 @@ export function DockerPanel({ sessionId, onClose }: Props): JSX.Element {
               </div>
             ))}
           </div>
+        )}
+        {logsFor && (
+          <>
+            <div className="docker-resize e" onMouseDown={onResizeDown('e')} />
+            <div className="docker-resize s" onMouseDown={onResizeDown('s')} />
+            <div className="docker-resize se" onMouseDown={onResizeDown('se')} />
+          </>
         )}
       </div>
     </>

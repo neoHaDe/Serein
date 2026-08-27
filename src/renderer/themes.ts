@@ -183,10 +183,12 @@ export function applyUiTheme(name: string): void {
     '--accent-2': mix(accent, dark ? '#ffffff' : fg, 0.28),
     '--danger': danger,
     '--green': green,
+    '--warn': t.yellow ?? '#e0af68',
     // RGB-тройки: позволяют делать тематические полупрозрачные заливки rgba(var(--accent-rgb), .12).
     '--accent-rgb': rgbTriple(accent),
     '--danger-rgb': rgbTriple(danger),
     '--green-rgb': rgbTriple(green),
+    '--warn-rgb': rgbTriple(t.yellow ?? '#e0af68'),
     '--fg-rgb': rgbTriple(fg),
     // Цвет тени: на тёмных темах — чёрный, на светлых — холодный графит (мягче).
     '--shadow-rgb': dark ? '0, 0, 0' : rgbTriple(mix(bg, '#1a2030', 0.85)),

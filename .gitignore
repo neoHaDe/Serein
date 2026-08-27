@@ -7,5 +7,13 @@ src-tauri/gen/schemas/
 Thumbs.db
 *.bak-*
 
+# Phase 0 helper installer (binary); скрипт .nsi в git
+scripts/*.exe
+
+# Сырые прогоны бенча, не артефакт релиза
+docs/phase0-bench*.jsonl
+docs/phase0-bench*.csv
+docs/phase0-bench.err.txt
+
 # Updater signing keys — приватный ключ НИКОГДА не коммитить
 .tauri/

@@ -34,6 +34,7 @@ pub(crate) struct AppState {
     tunnels: tunnels::TunnelManager,
     edit: remoteedit::EditManager,
     transfers: sftp::TransferHub,
+    ops: ssh::OpHub,
 }
 
 impl AppState {
@@ -44,6 +45,7 @@ impl AppState {
             tunnels: tunnels::TunnelManager::default(),
             edit: remoteedit::EditManager::default(),
             transfers: sftp::TransferHub::default(),
+            ops: ssh::OpHub::default(),
         }
     }
     fn ssh(&self, id: &str) -> Option<Arc<ssh::SshSession>> {
@@ -58,6 +60,7 @@ impl AppState {
         self.tunnels.close_session(id, app);
         self.edit.stop_session(id);
         self.transfers.cancel_session(id);
+        self.ops.cancel_prefix(&format!("{id}:"));
         if let Some(tx) = self.ki.lock().unwrap().remove(id) {
             drop(tx);
         }
@@ -221,6 +224,9 @@ fn session_resize(state: State<'_, AppState>, p: Value) {
     let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80);
     let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24);
+    if cols < 20 || rows < 5 {
+        return;
+    }
     if let Some(s) = state.sessions.lock().unwrap().get(&id) {
         match s {
             Session::Local(l) => l.resize(cols as u16, rows as u16),
@@ -247,7 +253,7 @@ async fn session_ping(state: State<'_, AppState>, id: String) -> Result<Option<u
 #[tauri::command]
 async fn session_monitor(state: State<'_, AppState>, id: String) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let (_c, out, _e) = ssh::exec(&s.handle, monitor::SAMPLE_CMD).await?;
+    let (_c, out, _e) = ssh::exec(&s.handle, monitor::SAMPLE_CMD, Some(s.cancel.subscribe())).await?;
     Ok(monitor::parse(&out))
 }
 
@@ -263,13 +269,13 @@ fn session_ki_respond(state: State<'_, AppState>, id: String, answers: Vec<Strin
 #[tauri::command]
 async fn docker_list(state: State<'_, AppState>, id: String) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let (code, out, err) = ssh::exec(&s.handle, docker::LIST_CMD).await?;
+    let (code, out, err) = ssh::exec(&s.handle, docker::LIST_CMD, Some(s.cancel.subscribe())).await?;
     Ok(docker::parse_list(code, &out, &err))
 }
 #[tauri::command]
 async fn docker_action(state: State<'_, AppState>, id: String, container_id: String, action: String) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let (code, _o, err) = ssh::exec(&s.handle, &docker::action_cmd(&container_id, &action)).await?;
+    let (code, _o, err) = ssh::exec(&s.handle, &docker::action_cmd(&container_id, &action), Some(s.cancel.subscribe())).await?;
     if code != 0 {
         Ok(json!({ "ok": false, "error": if err.trim().is_empty() { format!("Код {code}") } else { err.trim().to_string() } }))
     } else {
@@ -277,10 +283,46 @@ async fn docker_action(state: State<'_, AppState>, id: String, container_id: Str
     }
 }
 #[tauri::command]
-async fn docker_logs(state: State<'_, AppState>, id: String, container_id: String) -> Result<Value, String> {
+async fn docker_logs(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    container_id: String,
+) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let (_c, out, _e) = ssh::exec(&s.handle, &docker::logs_cmd(&container_id)).await?;
+    let key = format!("{id}:docker-logs:{container_id}");
+    let op = state.ops.begin(&key);
+    let cancel = ssh::race_cancel(s.cancel.subscribe(), op);
+    let app2 = app.clone();
+    let sid = id.clone();
+    let cid = container_id.clone();
+    let result = ssh::exec_with(
+        &s.handle,
+        &docker::logs_cmd(&container_id),
+        Some(cancel),
+        move |chunk| {
+            if chunk.is_empty() {
+                return;
+            }
+            let text = String::from_utf8_lossy(chunk);
+            let _ = app2.emit(
+                "docker-logs",
+                json!({ "sessionId": sid, "containerId": cid, "chunk": text.as_ref() }),
+            );
+        },
+    )
+    .await;
+    state.ops.finish(&key);
+    let (_c, out, _e) = result?;
     Ok(json!({ "ok": true, "logs": out }))
+}
+
+#[tauri::command]
+fn docker_logs_cancel(state: State<'_, AppState>, id: String, container_id: Option<String>) {
+    match container_id {
+        Some(cid) if !cid.is_empty() => state.ops.cancel(&format!("{id}:docker-logs:{cid}")),
+        _ => state.ops.cancel_prefix(&format!("{id}:docker-logs:")),
+    }
 }
 
 // ---------------- SFTP ----------------
@@ -413,7 +455,7 @@ fn keygen_save(path: String, key: Value) -> Result<Value, String> {
 #[tauri::command]
 async fn keygen_install(state: State<'_, AppState>, session_id: String, public_key: String) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    let (code, _o, err) = ssh::exec(&s.handle, &keygen::install_cmd(&public_key)).await?;
+    let (code, _o, err) = ssh::exec(&s.handle, &keygen::install_cmd(&public_key), Some(s.cancel.subscribe())).await?;
     if code != 0 {
         return Err(if err.trim().is_empty() { format!("Код {code}") } else { err.trim().to_string() });
     }
@@ -427,6 +469,54 @@ fn servers_import_ssh_config() -> Result<Value, String> {
 #[tauri::command]
 fn servers_import_putty() -> Result<Value, String> {
     Ok(json!({ "imported": importers::import_putty()? }))
+}
+
+/// Поднять все окна приложения над чужими, фокус оставить на `focused`.
+#[tauri::command]
+fn windows_raise_group(app: AppHandle, focused: String) {
+    #[cfg(windows)]
+    windows_raise_group_impl(&app, &focused);
+    #[cfg(not(windows))]
+    let _ = (app, focused);
+}
+
+#[cfg(windows)]
+fn windows_raise_group_impl(app: &AppHandle, focused: &str) {
+    use std::ffi::c_void;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        IsIconic, SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOP, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
+    };
+
+    let mut others: Vec<HWND> = Vec::new();
+    let mut focus_hwnd: Option<HWND> = None;
+
+    for (label, w) in app.webview_windows() {
+        let Ok(h) = w.hwnd() else { continue };
+        let hwnd = HWND(h.0 as isize as *mut c_void);
+        if label == focused {
+            focus_hwnd = Some(hwnd);
+        } else {
+            others.push(hwnd);
+        }
+        unsafe {
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            }
+        }
+    }
+
+    unsafe {
+        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW;
+        for hwnd in others {
+            let _ = SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags);
+        }
+        if let Some(hwnd) = focus_hwnd {
+            let _ = SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags);
+            let _ = SetForegroundWindow(hwnd);
+        }
+    }
 }
 
 pub fn run() {
@@ -446,14 +536,15 @@ pub fn run() {
             localfs_home, localfs_parent, localfs_list,
             session_open_local, session_open_ssh, session_write, session_resize, session_close,
             session_ping, session_monitor, session_ki_respond,
-            docker_list, docker_action, docker_logs,
+            docker_list, docker_action, docker_logs, docker_logs_cancel,
             sftp_list, sftp_mkdir, sftp_remove, sftp_rename, sftp_read_file, sftp_write_file,
             sftp_upload_paths, sftp_download_to, sftp_edit, sftp_edit_stop, sftp_cancel_transfer,
             tunnel_list_status, tunnel_open, tunnel_close,
             vault_status, vault_unlock, vault_enable, vault_disable,
             backup_export, backup_import,
             keygen_generate, keygen_save, keygen_install,
-            servers_import_ssh_config, servers_import_putty
+            servers_import_ssh_config, servers_import_putty,
+            windows_raise_group
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

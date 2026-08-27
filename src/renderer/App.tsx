@@ -15,6 +15,7 @@ import { CommandPalette, type PaletteItem } from './components/CommandPalette'
 import { useSettings } from './SettingsContext'
 import { bindingLookup, comboFromEvent } from './keybindings'
 import { applyUiTheme } from './themes'
+import { useWindowSnap } from './windowSnap'
 import {
   type PaneNode,
   type PaneLeaf,
@@ -67,6 +68,7 @@ export default function App(): JSX.Element {
   const [kiRequest, setKiRequest] = useState<{ id: string; prompts: KIPrompt[] } | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const { settings, update } = useSettings()
+  useWindowSnap()
 
   const tabsRef = useRef<Tab[]>([])
   tabsRef.current = tabs
@@ -321,6 +323,18 @@ export default function App(): JSX.Element {
     ])
     setActiveKey(key)
   }, [])
+
+  useEffect(() => {
+    let off: (() => void) | undefined
+    void import('@tauri-apps/api/event').then(({ listen }) => {
+      void listen<{ sessionId: string; remotePath: string }>('serein-open-editor', (e) => {
+        openEditorTab(e.payload.sessionId, e.payload.remotePath)
+      }).then((u) => {
+        off = u
+      })
+    })
+    return () => off?.()
+  }, [openEditorTab])
 
   const setEditorDirty = useCallback((key: string, dirty: boolean) => {
     setTabs((prev) => prev.map((t) => (t.key === key ? { ...t, editorDirty: dirty } : t)))

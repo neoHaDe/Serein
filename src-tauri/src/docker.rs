@@ -56,5 +56,5 @@ pub fn action_cmd(id: &str, action: &str) -> String {
 }
 
 pub fn logs_cmd(id: &str) -> String {
-    format!("docker logs --tail 300 {} 2>&1", safe_id(id))
+    format!("docker logs --tail 200 -f {} 2>&1", safe_id(id))
 }
