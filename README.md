@@ -96,7 +96,7 @@ Windows · без своего Chromium (системный WebView2) ·
 
 ## Быстрый старт
 
-1. Поставь `Serein_1.0.0_x64-setup.exe` из [Releases](../../releases/latest).
+1. Поставь установщик или скачай portable `Serein_1.0.0_x64-portable.exe` из [Releases](../../releases/latest).
 2. Импортируй `~/.ssh/config` или добавь сервер вручную.
 3. Подключись. Локальный терминал работает и без SSH.
 
@@ -120,8 +120,10 @@ Windows · без своего Chromium (системный WebView2) ·
 
 ## 📦 Установка
 
-Скачай **`Serein_1.0.0_x64-setup.exe`** со страницы
-[Releases](../../releases/latest) и запусти.
+С [Releases](../../releases/latest):
+
+- **`Serein_1.0.0_x64-setup.exe`** — установщик (меню Пуск, удаление).
+- **`Serein_1.0.0_x64-portable.exe`** — один файл, без установки. Положи и запусти. Настройки всё равно в `%APPDATA%\serein`.
 
 Сборка **не подписана** — SmartScreen ругнётся. *Подробнее → Выполнить в любом случае*.
 Проверяй SHA-256 из описания выпуска, если он там есть.

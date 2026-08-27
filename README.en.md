@@ -97,7 +97,7 @@ A weak laptop will not magically match 33 MB.
 
 ## Quick start
 
-1. Install `Serein_1.0.0_x64-setup.exe` from [Releases](../../releases/latest).
+1. Install the setup exe or grab the portable `Serein_1.0.0_x64-portable.exe` from [Releases](../../releases/latest).
 2. Import `~/.ssh/config` or add a host by hand.
 3. Connect. The local terminal works with no SSH at all.
 
@@ -121,8 +121,10 @@ Matrix and smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
 
 ## Install
 
-Download **`Serein_1.0.0_x64-setup.exe`** from
-[Releases](../../releases/latest) and run it.
+From [Releases](../../releases/latest):
+
+- **`Serein_1.0.0_x64-setup.exe`** — installer (Start menu, uninstall).
+- **`Serein_1.0.0_x64-portable.exe`** — a single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`.
 
 The build is **unsigned**. SmartScreen will complain. *More info → Run anyway*.
 If the release notes publish a SHA-256, check that instead of clicking through blindly.
