@@ -42,6 +42,19 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "copyright": "© 2026 HaDe",
+    "category": "DeveloperTool",
+    "shortDescription": "Serein — SSH/SFTP workstation",
+    "longDescription": "Desktop SSH/SFTP: terminal, files, Docker, tunnels.",
+    "windows": {
+      "nsis": {
+        "headerImage": "nsis/header.bmp",
+        "sidebarImage": "nsis/sidebar.bmp",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "languages": ["Russian", "English"]
+      }
+    }
   }
 }
