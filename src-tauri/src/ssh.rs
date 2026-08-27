@@ -163,7 +163,7 @@ fn port_of(server: &Value) -> u16 {
 /// SFTP-чанк в `sftp.rs` режется под этот лимит, иначе DATA не влезает в SSH-пакет.
 pub(crate) fn ssh_client_config() -> Arc<client::Config> {
     let mut cfg = client::Config::default();
-    cfg.window_size = 16 * 1024 * 1024;
+    cfg.window_size = 32 * 1024 * 1024;
     cfg.maximum_packet_size = 32 * 1024;
     cfg.keepalive_interval = Some(std::time::Duration::from_secs(15));
     cfg.keepalive_max = 8;

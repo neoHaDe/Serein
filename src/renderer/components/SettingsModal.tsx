@@ -198,6 +198,20 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
         </div>
 
         <label>
+          Параллельных SFTP-передач: {Math.min(8, Math.max(1, settings.sftpConcurrency ?? 4))}
+          <input
+            type="range"
+            min={1}
+            max={8}
+            value={Math.min(8, Math.max(1, settings.sftpConcurrency ?? 4))}
+            onChange={(e) => update({ sftpConcurrency: Number(e.target.value) })}
+          />
+        </label>
+        <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
+          Одновременно копируемых файлов. Больше — быстрее папки, тяжелее канал SSH.
+        </div>
+
+        <label>
           Shell локального терминала (Windows)
           <select value={settings.localShell ?? 'auto'} onChange={(e) => update({ localShell: e.target.value })}>
             <option value="auto">Авто (PowerShell → cmd)</option>

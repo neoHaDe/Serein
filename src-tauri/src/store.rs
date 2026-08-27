@@ -49,7 +49,8 @@ fn default_settings() -> Value {
         "restoreTabsOnStart": false,
         "localShell": "auto",
         "density": "comfortable",
-        "auxInTaskbar": false
+        "auxInTaskbar": false,
+        "sftpConcurrency": 4
     })
 }
 
@@ -70,6 +71,9 @@ pub fn settings_set(patch: Value) -> Result<Value, String> {
     if let (Some(obj), Some(p)) = (cur.as_object_mut(), patch.as_object()) {
         for (k, v) in p {
             obj.insert(k.clone(), v.clone());
+        }
+        if let Some(n) = obj.get("sftpConcurrency").and_then(|v| v.as_u64()) {
+            obj.insert("sftpConcurrency".into(), json!(n.clamp(1, 8)));
         }
     }
     write_value("settings.json", &cur)?;

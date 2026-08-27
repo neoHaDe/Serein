@@ -35,6 +35,19 @@ function fmtSize(n: number): string {
   return `${(n / 1024 ** 3).toFixed(2)} GB`
 }
 
+function fmtSpeed(bps: number | undefined): string {
+  if (!bps || !isFinite(bps) || bps < 256) return ''
+  return fmtSize(bps) + '/s'
+}
+
+function fmtEta(size: number, transferred: number, bps: number | undefined): string {
+  if (!bps || bps < 1024 || !size || transferred >= size) return ''
+  const sec = Math.round((size - transferred) / bps)
+  if (sec < 1) return ''
+  if (sec < 60) return `${sec}с`
+  return `${Math.floor(sec / 60)}м ${sec % 60}с`
+}
+
 function parentOfRemote(path: string): string {
   if (path === '/' || path === '') return '/'
   const trimmed = path.replace(/\/+$/, '')
@@ -65,6 +78,7 @@ export function SftpPanel({ sessionId, onClose, width, closing, detached, onOpen
   const [localDragOver, setLocalDragOver] = useState(false)
 
   const [transfers, setTransfers] = useState<TransferItem[]>([])
+  const rateRef = useRef(new Map<string, { t: number; b: number; bps: number }>())
   const [edits, setEdits] = useState<Record<string, RemoteEditStatus>>({})
 
   // Инлайн-переименование: имя редактируемой записи + текущее значение поля.
@@ -111,16 +125,41 @@ export function SftpPanel({ sessionId, onClose, width, closing, detached, onOpen
   // Подписка на очередь передач: апдейтим элементы по id, по завершении — обновляем списки.
   useEffect(() => {
     const off = window.api.sftp.onTransfer((item) => {
+      const now = Date.now()
+      const rates = rateRef.current
+      let speedBps = 0
+      if (item.state === 'active') {
+        const prev = rates.get(item.id)
+        if (prev && item.transferred > prev.b) {
+          const dt = (now - prev.t) / 1000
+          if (dt >= 0.2) {
+            const inst = (item.transferred - prev.b) / dt
+            speedBps = prev.bps > 0 ? prev.bps * 0.55 + inst * 0.45 : inst
+            rates.set(item.id, { t: now, b: item.transferred, bps: speedBps })
+          } else {
+            speedBps = prev.bps
+          }
+        } else if (!prev) {
+          rates.set(item.id, { t: now, b: item.transferred, bps: 0 })
+        } else {
+          speedBps = prev.bps
+        }
+      } else {
+        rates.delete(item.id)
+      }
+      const nextItem = { ...item, speedBps }
       setTransfers((prev) => {
-        const idx = prev.findIndex((t) => t.id === item.id)
-        if (idx === -1) return [...prev, item]
+        const idx = prev.findIndex((t) => t.id === nextItem.id)
+        if (idx === -1) return [...prev, nextItem]
         const next = [...prev]
-        next[idx] = item
+        next[idx] = nextItem
         return next
       })
-      if (item.state === 'done' || item.state === 'error' || item.state === 'canceled') {
+      if (item.state === 'done' || item.state === 'error') {
         load(pathRef.current)
         if (localPathRef.current) loadLocal(localPathRef.current)
+      } else if (item.state === 'canceled' && localPathRef.current) {
+        loadLocal(localPathRef.current)
       }
     })
     const offEdit = window.api.sftp.onEditStatus((s) => {
@@ -250,12 +289,47 @@ export function SftpPanel({ sessionId, onClose, width, closing, detached, onOpen
   }
 
   // ---- Transfers ----
-  const activeTransfers = transfers.filter((t) => t.state === 'queued' || t.state === 'active')
+  const activeTransfers = transfers.filter(
+    (t) => t.state === 'queued' || t.state === 'active' || t.state === 'paused'
+  )
   const cancelTransfer = (id: string): void => {
+    setTransfers((prev) =>
+      prev.map((t) =>
+        t.id === id && (t.state === 'queued' || t.state === 'active' || t.state === 'paused')
+          ? { ...t, state: 'canceled' as const }
+          : t
+      )
+    )
     void window.api.sftp.cancelTransfer(id)
   }
+  const pauseTransfer = (id: string): void => {
+    setTransfers((prev) =>
+      prev.map((t) => (t.id === id && t.state === 'active' ? { ...t, state: 'paused' as const, speedBps: 0 } : t))
+    )
+    void window.api.sftp.pauseTransfer(id)
+  }
+  const resumeTransfer = (id: string): void => {
+    setTransfers((prev) =>
+      prev.map((t) => (t.id === id && t.state === 'paused' ? { ...t, state: 'active' as const } : t))
+    )
+    void window.api.sftp.resumeTransfer(id)
+  }
+  const retryTransfer = (t: TransferItem): void => {
+    const parent = (p: string): string => {
+      const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+      return i <= 0 ? p : p.slice(0, i)
+    }
+    setTransfers((prev) => prev.filter((x) => x.id !== t.id))
+    if (t.direction === 'download') {
+      void window.api.sftp.downloadTo(sessionId, t.remotePath, parent(t.localPath))
+    } else {
+      void window.api.sftp.uploadPaths(sessionId, parent(t.remotePath), [t.localPath])
+    }
+  }
   const clearFinished = (): void => {
-    setTransfers((prev) => prev.filter((t) => t.state === 'queued' || t.state === 'active'))
+    setTransfers((prev) =>
+      prev.filter((t) => t.state === 'queued' || t.state === 'active' || t.state === 'paused')
+    )
   }
 
   const editList = Object.values(edits)
@@ -535,7 +609,7 @@ export function SftpPanel({ sessionId, onClose, width, closing, detached, onOpen
                     {t.filename}
                     {t.state === 'error' && <span className="q-err"> — {t.error}</span>}
                   </div>
-                  {(t.state === 'active' || t.state === 'queued') && (
+                  {(t.state === 'active' || t.state === 'queued' || t.state === 'paused') && (
                     <div className="bar">
                       <div
                         className="bar-fill"
@@ -551,13 +625,42 @@ export function SftpPanel({ sessionId, onClose, width, closing, detached, onOpen
                       ? '⚠'
                       : t.state === 'canceled'
                         ? '⊘'
-                        : `${fmtSize(t.transferred)}`}
+                        : t.state === 'queued'
+                          ? 'ожидание'
+                          : t.state === 'paused'
+                            ? 'пауза'
+                            : [
+                                t.size
+                                  ? `${fmtSize(t.transferred)} / ${fmtSize(t.size)}`
+                                  : fmtSize(t.transferred),
+                                fmtSpeed(t.speedBps),
+                                fmtEta(t.size, t.transferred, t.speedBps),
+                              ]
+                                .filter(Boolean)
+                                .join(' · ')}
                 </span>
-                {(t.state === 'queued' || t.state === 'active') && (
-                  <button className="mini danger" title="Отменить" onClick={() => cancelTransfer(t.id)}>
-                    ✕
-                  </button>
-                )}
+                <span className="q-actions">
+                  {t.state === 'active' && (
+                    <button className="mini" title="Пауза" onClick={() => pauseTransfer(t.id)}>
+                      ❚❚
+                    </button>
+                  )}
+                  {t.state === 'paused' && (
+                    <button className="mini" title="Продолжить" onClick={() => resumeTransfer(t.id)}>
+                      ▶
+                    </button>
+                  )}
+                  {(t.state === 'error' || t.state === 'canceled') && (
+                    <button className="mini" title="Повторить" onClick={() => retryTransfer(t)}>
+                      ↻
+                    </button>
+                  )}
+                  {(t.state === 'queued' || t.state === 'active' || t.state === 'paused') && (
+                    <button className="mini danger" title="Отменить" onClick={() => cancelTransfer(t.id)}>
+                      ✕
+                    </button>
+                  )}
+                </span>
               </div>
             ))}
           </div>

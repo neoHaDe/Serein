@@ -1106,6 +1106,9 @@ html.aux-win #root {
   padding: 6px 8px;
   border-radius: var(--r-sm);
   transition: background 0.12s;
+  position: relative;
+  cursor: default;
+  user-select: none;
 }
 .sftp-row:hover {
   background: rgba(var(--accent-rgb), 0.09);
@@ -1115,18 +1118,27 @@ html.aux-win #root {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: default;
 }
 .sftp-size {
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 11px;
+  cursor: default;
 }
 .sftp-row-actions {
-  display: none;
+  display: flex;
   gap: 2px;
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
 }
 .sftp-row:hover .sftp-row-actions {
-  display: flex;
+  opacity: 1;
+  pointer-events: auto;
 }
 .sftp-progress {
   padding: 8px 12px;
@@ -1269,6 +1281,13 @@ html.aux-win #root {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--muted);
+  flex-shrink: 0;
+  text-align: right;
+  max-width: 42%;
+}
+.q-actions {
+  display: flex;
+  gap: 4px;
   flex-shrink: 0;
 }
 

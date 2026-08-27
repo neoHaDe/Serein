@@ -1,6 +1,7 @@
 //! Serein — backend. Команды Tauri и менеджер сессий.
 
 mod backup;
+mod clipboard;
 mod crypto;
 mod docker;
 mod dpapi;
@@ -88,8 +89,12 @@ fn settings_get() -> Value {
     store::settings_get()
 }
 #[tauri::command]
-fn settings_set(patch: Value) -> Result<Value, String> {
-    store::settings_set(patch)
+fn settings_set(state: State<'_, AppState>, patch: Value) -> Result<Value, String> {
+    let cur = store::settings_set(patch)?;
+    if let Some(n) = cur.get("sftpConcurrency").and_then(|v| v.as_u64()) {
+        state.transfers.set_limit(n as usize);
+    }
+    Ok(cur)
 }
 #[tauri::command]
 fn servers_list() -> Vec<Value> {
@@ -118,6 +123,14 @@ fn snippets_delete(id: String) -> Result<(), String> {
 #[tauri::command]
 fn layout_get() -> Value {
     store::layout_get()
+}
+#[tauri::command]
+fn clipboard_write(text: String) -> Result<(), String> {
+    clipboard::write_text(&text)
+}
+#[tauri::command]
+fn clipboard_read() -> Result<String, String> {
+    clipboard::read_text()
 }
 #[tauri::command]
 fn layout_set(tabs: Value) -> Result<(), String> {
@@ -361,15 +374,28 @@ async fn sftp_write_file(state: State<'_, AppState>, session_id: String, remote_
 async fn sftp_upload_paths(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_dir: String, paths: Vec<String>) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let n = paths.len();
-    for p in paths {
-        let _ = sftp::upload_path(app.clone(), &s.handle, &session_id, &p, &remote_dir, Some(&s.alive), &state.transfers).await;
-    }
+    let handle = s.handle.clone();
+    let alive = s.alive.clone();
+    let hub = state.transfers.clone();
+    let futs: Vec<_> = paths
+        .into_iter()
+        .map(|p| {
+            let app = app.clone();
+            let handle = handle.clone();
+            let sid = session_id.clone();
+            let remote = remote_dir.clone();
+            let alive = alive.clone();
+            let hub = hub.clone();
+            async move { sftp::upload_path(app, handle, &sid, &p, &remote, alive, hub).await }
+        })
+        .collect();
+    futures::future::join_all(futs).await;
     Ok(json!({ "uploaded": n }))
 }
 #[tauri::command]
 async fn sftp_download_to(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_path: String, local_dir: String) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    sftp::download_path(app, &s.handle, &session_id, &remote_path, &local_dir, Some(&s.alive), &state.transfers).await
+    sftp::download_path(app, s.handle.clone(), &session_id, &remote_path, &local_dir, s.alive.clone(), state.transfers.clone()).await
 }
 #[tauri::command]
 async fn sftp_edit(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_path: String) -> Result<(), String> {
@@ -379,6 +405,14 @@ async fn sftp_edit(app: AppHandle, state: State<'_, AppState>, session_id: Strin
 #[tauri::command]
 fn sftp_cancel_transfer(state: State<'_, AppState>, id: String) {
     let _ = state.transfers.cancel(&id);
+}
+#[tauri::command]
+fn sftp_pause_transfer(state: State<'_, AppState>, id: String) {
+    let _ = state.transfers.pause(&id);
+}
+#[tauri::command]
+fn sftp_resume_transfer(state: State<'_, AppState>, id: String) {
+    let _ = state.transfers.resume(&id);
 }
 #[tauri::command]
 fn sftp_edit_stop(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_path: String) {
@@ -519,6 +553,22 @@ fn windows_raise_group_impl(app: &AppHandle, focused: &str) {
     }
 }
 
+/// WebView2 по умолчанию вешает Ctrl+Shift+C на Inspect — это ломает копирование в терминале.
+#[cfg(windows)]
+fn disable_browser_accelerators(w: &tauri::WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+    use windows_core::Interface;
+    let _ = w.with_webview(|wv| {
+        let controller = wv.controller();
+        unsafe {
+            let Ok(core) = controller.CoreWebView2() else { return };
+            let Ok(settings) = core.Settings() else { return };
+            let Ok(s3) = settings.cast::<ICoreWebView2Settings3>() else { return };
+            let _ = s3.SetAreBrowserAcceleratorKeysEnabled(false);
+        }
+    });
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -526,6 +576,10 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             app.manage(AppState::new());
+            #[cfg(windows)]
+            if let Some(w) = app.get_webview_window("main") {
+                disable_browser_accelerators(&w);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -539,12 +593,13 @@ pub fn run() {
             docker_list, docker_action, docker_logs, docker_logs_cancel,
             sftp_list, sftp_mkdir, sftp_remove, sftp_rename, sftp_read_file, sftp_write_file,
             sftp_upload_paths, sftp_download_to, sftp_edit, sftp_edit_stop, sftp_cancel_transfer,
+            sftp_pause_transfer, sftp_resume_transfer,
             tunnel_list_status, tunnel_open, tunnel_close,
             vault_status, vault_unlock, vault_enable, vault_disable,
             backup_export, backup_import,
             keygen_generate, keygen_save, keygen_install,
             servers_import_ssh_config, servers_import_putty,
-            windows_raise_group
+            windows_raise_group, clipboard_write, clipboard_read
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,21 +1,119 @@
 //! SFTP через russh-sftp: просмотр, правка (атомарно), рекурсивные передачи (порт sftp.ts).
 
-use crate::ssh::ClientHandler;
+use crate::ssh::{ClientHandler, SharedHandle};
+use futures::stream::{self, FuturesUnordered, StreamExt};
 use russh::client;
+use russh_sftp::client::rawsession::Limits;
 use russh_sftp::client::{error::Error as SftpError, Config as SftpConfig, RawSftpSession, SftpSession};
 use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
+use tokio::sync::Notify;
 
 const CANCELLED: &str = "Передача отменена";
+const PAUSED: &str = "paused";
+/// Параллельных файлов по умолчанию (роадмап 3.2).
+const TRANSFER_SLOTS: usize = 4;
+/// Верхняя граница пула — не открывать безлимит каналов.
+const TRANSFER_MAX: usize = 8;
 
-fn gone(alive: Option<&AtomicBool>, xfer: Option<&AtomicBool>) -> Result<(), String> {
-    if xfer.is_some_and(|a| !a.load(Ordering::Relaxed)) {
+pub struct XferCtrl {
+    live: AtomicBool,
+    paused: AtomicBool,
+    wake: Notify,
+    key: String,
+}
+
+impl XferCtrl {
+    fn new(key: String) -> Arc<Self> {
+        Arc::new(Self {
+            live: AtomicBool::new(true),
+            paused: AtomicBool::new(false),
+            wake: Notify::new(),
+            key,
+        })
+    }
+
+    fn is_live(&self) -> bool {
+        self.live.load(Ordering::Relaxed)
+    }
+
+    fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
+    }
+
+    fn cancel(&self) {
+        self.live.store(false, Ordering::Relaxed);
+        self.wake.notify_waiters();
+    }
+
+    fn pause(&self) {
+        self.paused.store(true, Ordering::Relaxed);
+        self.wake.notify_waiters();
+    }
+
+    fn resume(&self) {
+        self.paused.store(false, Ordering::Relaxed);
+        self.wake.notify_waiters();
+    }
+}
+
+#[derive(Clone)]
+struct SlotPool {
+    active: Arc<Mutex<usize>>,
+    limit: Arc<AtomicUsize>,
+    wait: Arc<Notify>,
+}
+
+struct SlotGuard {
+    pool: SlotPool,
+}
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        if let Ok(mut n) = self.pool.active.lock() {
+            *n = n.saturating_sub(1);
+        }
+        self.pool.wait.notify_one();
+    }
+}
+
+impl SlotPool {
+    fn new(limit: usize) -> Self {
+        Self {
+            active: Arc::new(Mutex::new(0)),
+            limit: Arc::new(AtomicUsize::new(limit.clamp(1, TRANSFER_MAX))),
+            wait: Arc::new(Notify::new()),
+        }
+    }
+
+    fn set_limit(&self, n: usize) {
+        self.limit.store(n.clamp(1, TRANSFER_MAX), Ordering::Relaxed);
+        self.wait.notify_waiters();
+    }
+
+    async fn acquire(&self) -> SlotGuard {
+        loop {
+            {
+                let mut n = self.active.lock().unwrap();
+                let cap = self.limit.load(Ordering::Relaxed).clamp(1, TRANSFER_MAX);
+                if *n < cap {
+                    *n += 1;
+                    return SlotGuard { pool: self.clone() };
+                }
+            }
+            self.wait.notified().await;
+        }
+    }
+}
+
+fn gone(alive: Option<&AtomicBool>, xfer: Option<&XferCtrl>) -> Result<(), String> {
+    if xfer.is_some_and(|c| !c.is_live()) {
         Err(CANCELLED.into())
     } else if alive.is_some_and(|a| !a.load(Ordering::Relaxed)) {
         Err("Сессия закрыта".into())
@@ -24,37 +122,166 @@ fn gone(alive: Option<&AtomicBool>, xfer: Option<&AtomicBool>) -> Result<(), Str
     }
 }
 
-#[derive(Default)]
+async fn wait_cancel(alive: Option<&AtomicBool>, xfer: Option<&XferCtrl>) {
+    if alive.is_none() && xfer.is_none() {
+        std::future::pending::<()>().await;
+        return;
+    }
+    loop {
+        if gone(alive, xfer).is_err() {
+            return;
+        }
+        if let Some(c) = xfer {
+            tokio::select! {
+                _ = c.wake.notified() => {}
+                _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {}
+            }
+        } else {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn wait_if_paused(
+    app: Option<&AppHandle>,
+    alive: Option<&AtomicBool>,
+    xfer: Option<&XferCtrl>,
+    item_id: &str,
+    session_id: &str,
+    direction: &str,
+    local: &str,
+    remote: &str,
+    rel: &str,
+    size: u64,
+    transferred: u64,
+) -> Result<(), String> {
+    let Some(c) = xfer else {
+        return Ok(());
+    };
+    if !c.is_paused() {
+        return Ok(());
+    }
+    if let Some(app) = app {
+        emit_transfer(app, item_id, session_id, direction, local, remote, rel, size, transferred, PAUSED, None);
+    }
+    while c.is_paused() {
+        gone(alive, xfer)?;
+        tokio::select! {
+            _ = c.wake.notified() => {}
+            _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+        }
+    }
+    gone(alive, xfer)?;
+    if let Some(app) = app {
+        emit_transfer(app, item_id, session_id, direction, local, remote, rel, size, transferred, "active", None);
+    }
+    Ok(())
+}
+
+fn dup_key(session_id: &str, direction: &str, local: &str, remote: &str) -> String {
+    format!(
+        "{session_id}|{direction}|{}|{remote}",
+        local.replace('\\', "/")
+    )
+}
+
 pub struct TransferHub {
-    running: Mutex<HashMap<String, Arc<AtomicBool>>>,
-    by_session: Mutex<HashMap<String, Vec<String>>>,
+    running: Arc<Mutex<HashMap<String, Arc<XferCtrl>>>>,
+    by_session: Arc<Mutex<HashMap<String, Vec<String>>>>,
+    dup: Arc<Mutex<HashSet<String>>>,
+    slots: SlotPool,
+}
+
+impl Clone for TransferHub {
+    fn clone(&self) -> Self {
+        Self {
+            running: self.running.clone(),
+            by_session: self.by_session.clone(),
+            dup: self.dup.clone(),
+            slots: self.slots.clone(),
+        }
+    }
+}
+
+fn concurrency_from_settings() -> usize {
+    crate::store::settings_get()
+        .get("sftpConcurrency")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(TRANSFER_SLOTS)
+        .clamp(1, TRANSFER_MAX)
+}
+
+impl Default for TransferHub {
+    fn default() -> Self {
+        Self {
+            running: Arc::new(Mutex::new(HashMap::new())),
+            by_session: Arc::new(Mutex::new(HashMap::new())),
+            dup: Arc::new(Mutex::new(HashSet::new())),
+            slots: SlotPool::new(concurrency_from_settings()),
+        }
+    }
 }
 
 impl TransferHub {
-    pub fn start(&self, id: &str, session_id: &str) -> Arc<AtomicBool> {
-        let flag = Arc::new(AtomicBool::new(true));
-        self.running.lock().unwrap().insert(id.to_string(), flag.clone());
+    /// None — такой файл уже в очереди или качается.
+    pub fn start(&self, id: &str, session_id: &str, key: String) -> Option<Arc<XferCtrl>> {
+        {
+            let mut dup = self.dup.lock().unwrap();
+            if !dup.insert(key.clone()) {
+                return None;
+            }
+        }
+        let ctrl = XferCtrl::new(key);
+        self.running.lock().unwrap().insert(id.to_string(), ctrl.clone());
         self.by_session
             .lock()
             .unwrap()
             .entry(session_id.to_string())
             .or_default()
             .push(id.to_string());
-        flag
+        Some(ctrl)
     }
 
     pub fn cancel(&self, id: &str) -> bool {
         match self.running.lock().unwrap().get(id) {
-            Some(f) => {
-                f.store(false, Ordering::Relaxed);
+            Some(c) => {
+                c.cancel();
                 true
             }
             None => false,
         }
     }
 
+    pub fn pause(&self, id: &str) -> bool {
+        match self.running.lock().unwrap().get(id) {
+            Some(c) if c.is_live() => {
+                c.pause();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn resume(&self, id: &str) -> bool {
+        match self.running.lock().unwrap().get(id) {
+            Some(c) if c.is_live() => {
+                c.resume();
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn finish(&self, id: &str) {
-        self.running.lock().unwrap().remove(id);
+        if let Some(c) = self.running.lock().unwrap().remove(id) {
+            self.dup.lock().unwrap().remove(&c.key);
+        }
+    }
+
+    pub fn set_limit(&self, n: usize) {
+        self.slots.set_limit(n);
     }
 
     pub fn cancel_session(&self, session_id: &str) {
@@ -66,17 +293,19 @@ impl TransferHub {
             .unwrap_or_default();
         let running = self.running.lock().unwrap();
         for id in ids {
-            if let Some(f) = running.get(&id) {
-                f.store(false, Ordering::Relaxed);
+            if let Some(c) = running.get(&id) {
+                c.cancel();
             }
         }
     }
 }
 
 const MAX_EDIT_SIZE: u64 = 5 * 1024 * 1024;
-/// Совпадает с `ssh_client_config().maximum_packet_size`. DATA больше — зависание окна.
+/// WRITE укладываем в SSH-пакет 32 КиБ. READ может быть крупнее: сервер режет CHANNEL_DATA сам.
 const SFTP_CHUNK: u32 = 32 * 1024 - 64;
-const READ_INFLIGHT: usize = 16;
+/// Потолок SSH_FXP_READ, если сервер отдал limits@openssh.com.
+const SFTP_READ_MAX: u32 = 256 * 1024 - 64;
+const READ_INFLIGHT: usize = 64;
 const PIPELINE_AFTER: u64 = 256 * 1024;
 const SFTP_TIMEOUT_SECS: u64 = 300;
 
@@ -276,7 +505,7 @@ async fn copy_remote_to_local(
     rel: &str,
     size: u64,
     alive: Option<&AtomicBool>,
-    xfer: Option<&AtomicBool>,
+    xfer: Option<&XferCtrl>,
 ) -> Result<u64, String> {
     copy_remote_to_local_inner(ssh, sftp, app, item_id, session_id, remote, local, rel, size, alive, xfer).await
 }
@@ -292,7 +521,7 @@ async fn copy_remote_to_local_inner(
     rel: &str,
     mut size: u64,
     alive: Option<&AtomicBool>,
-    xfer: Option<&AtomicBool>,
+    xfer: Option<&XferCtrl>,
 ) -> Result<u64, String> {
     gone(alive, xfer)?;
     if size == 0 {
@@ -315,7 +544,7 @@ async fn sequential_download(
     rel: &str,
     size: u64,
     alive: Option<&AtomicBool>,
-    xfer: Option<&AtomicBool>,
+    xfer: Option<&XferCtrl>,
 ) -> Result<u64, String> {
     gone(alive, xfer)?;
     if let Some(parent) = Path::new(local).parent() {
@@ -328,7 +557,11 @@ async fn sequential_download(
     let mut last_emit: u64 = 0;
     loop {
         gone(alive, xfer)?;
-        let n = rf.read(&mut buf).await.map_err(|e| e.to_string())?;
+        wait_if_paused(app, alive, xfer, item_id, session_id, "download", local, remote, rel, size, transferred).await?;
+        let n = tokio::select! {
+            _ = wait_cancel(alive, xfer) => return Err(CANCELLED.into()),
+            n = rf.read(&mut buf) => n.map_err(|e| e.to_string())?,
+        };
         if n == 0 {
             break;
         }
@@ -357,71 +590,105 @@ async fn pipelined_download(
     rel: &str,
     size: u64,
     alive: Option<&AtomicBool>,
-    xfer: Option<&AtomicBool>,
+    xfer: Option<&XferCtrl>,
 ) -> Result<u64, String> {
     if let Some(parent) = Path::new(local).parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
-    let raw = open_raw(ssh).await?;
+    let mut raw = open_raw(ssh).await?;
+    let mut chunk = SFTP_CHUNK;
+    if let Ok(ext) = raw.limits().await {
+        if ext.max_read_len > 1024 {
+            chunk = ext.max_read_len.min(u64::from(SFTP_READ_MAX)) as u32;
+        }
+        raw.set_limits(Limits::from(ext));
+    }
+    let raw = Arc::new(raw);
     let opened = raw
         .open(remote.to_string(), OpenFlags::READ, FileAttributes::empty())
         .await
         .map_err(|e| e.to_string())?;
     let fh = opened.handle;
-    let mut lf = tokio::fs::File::create(local).await.map_err(|e| e.to_string())?;
-    let mut offset = 0u64;
+    let mut lf = BufWriter::with_capacity(
+        1024 * 1024,
+        tokio::fs::File::create(local).await.map_err(|e| e.to_string())?,
+    );
+    let mut next_send = 0u64;
+    let mut next_write = 0u64;
     let mut transferred = 0u64;
     let mut last_emit = 0u64;
     let mut eof = false;
-    while !eof && (size == 0 || offset < size) {
+    let mut inflight = FuturesUnordered::new();
+    let mut ready: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
+
+    loop {
         gone(alive, xfer)?;
-        let mut batch = Vec::new();
-        let mut offs = Vec::new();
-        for _ in 0..READ_INFLIGHT {
-            if size > 0 && offset >= size {
-                break;
-            }
+        wait_if_paused(app, alive, xfer, item_id, session_id, "download", local, remote, rel, size, transferred).await?;
+        while !eof
+            && !xfer.is_some_and(|c| c.is_paused())
+            && inflight.len() < READ_INFLIGHT
+            && (size == 0 || next_send < size)
+        {
             let len = if size > 0 {
-                (size - offset).min(SFTP_CHUNK as u64) as u32
+                (size - next_send).min(u64::from(chunk)) as u32
             } else {
-                SFTP_CHUNK
+                chunk
             };
             if len == 0 {
                 break;
             }
-            offs.push(offset);
-            batch.push(raw.read(fh.clone(), offset, len));
-            offset += u64::from(len);
+            let off = next_send;
+            next_send += u64::from(len);
+            let raw = raw.clone();
+            let fh = fh.clone();
+            inflight.push(async move { (off, raw.read(fh, off, len).await) });
         }
-        if batch.is_empty() {
+        let next = tokio::select! {
+            _ = wait_cancel(alive, xfer) => {
+                let _ = raw.close_session();
+                return Err(CANCELLED.into());
+            }
+            next = inflight.next() => next,
+        };
+        let Some((off, res)) = next else {
             break;
-        }
-        let results = futures::future::join_all(batch).await;
-        for res in results {
-            match res {
-                Ok(pkt) => {
-                    if pkt.data.is_empty() {
-                        eof = true;
-                        break;
-                    }
-                    lf.write_all(&pkt.data).await.map_err(|e| e.to_string())?;
-                    transferred += pkt.data.len() as u64;
+        };
+        match res {
+            Ok(pkt) => {
+                if pkt.data.is_empty() {
+                    eof = true;
+                    continue;
+                }
+                ready.insert(off, pkt.data);
+                while let Some(data) = ready.remove(&next_write) {
+                    let n = data.len() as u64;
+                    lf.write_all(&data).await.map_err(|e| e.to_string())?;
+                    next_write += n;
+                    transferred += n;
                     if let Some(app) = app {
-                        if transferred - last_emit >= 262144 {
+                        if transferred - last_emit >= 1024 * 1024 {
                             last_emit = transferred;
-                            emit_transfer(app, item_id, session_id, "download", local, remote, rel, size, transferred, "active", None);
+                            emit_transfer(
+                                app, item_id, session_id, "download", local, remote, rel, size,
+                                transferred, "active", None,
+                            );
                         }
                     }
                 }
-                Err(SftpError::Status(st)) if st.status_code == StatusCode::Eof => {
-                    eof = true;
-                    break;
-                }
-                Err(e) => {
-                    let _ = raw.close(fh.clone()).await;
-                    return Err(e.to_string());
-                }
             }
+            Err(SftpError::Status(st)) if st.status_code == StatusCode::Eof => {
+                eof = true;
+            }
+            Err(e) => {
+                let _ = raw.close_session();
+                return Err(e.to_string());
+            }
+        }
+        if eof && inflight.is_empty() {
+            break;
+        }
+        if size > 0 && next_write >= size && inflight.is_empty() {
+            break;
         }
     }
     lf.flush().await.ok();
@@ -440,7 +707,7 @@ async fn copy_local_to_remote(
     rel: &str,
     size: u64,
     alive: Option<&AtomicBool>,
-    xfer: Option<&AtomicBool>,
+    xfer: Option<&XferCtrl>,
 ) -> Result<u64, String> {
     copy_local_to_remote_inner(sftp, app, item_id, session_id, local, remote, rel, size, alive, xfer).await
 }
@@ -455,7 +722,7 @@ async fn copy_local_to_remote_inner(
     rel: &str,
     size: u64,
     alive: Option<&AtomicBool>,
-    xfer: Option<&AtomicBool>,
+    xfer: Option<&XferCtrl>,
 ) -> Result<u64, String> {
     let mut lf = tokio::fs::File::open(local).await.map_err(|e| e.to_string())?;
     let mut rf = sftp.create(remote).await.map_err(|e| e.to_string())?;
@@ -464,11 +731,18 @@ async fn copy_local_to_remote_inner(
     let mut last_emit: u64 = 0;
     loop {
         gone(alive, xfer)?;
-        let n = lf.read(&mut buf).await.map_err(|e| e.to_string())?;
+        wait_if_paused(app, alive, xfer, item_id, session_id, "upload", local, remote, rel, size, transferred).await?;
+        let n = tokio::select! {
+            _ = wait_cancel(alive, xfer) => return Err(CANCELLED.into()),
+            n = lf.read(&mut buf) => n.map_err(|e| e.to_string())?,
+        };
         if n == 0 {
             break;
         }
-        rf.write_all(&buf[..n]).await.map_err(|e| e.to_string())?;
+        tokio::select! {
+            _ = wait_cancel(alive, xfer) => return Err(CANCELLED.into()),
+            r = rf.write_all(&buf[..n]) => r.map_err(|e| e.to_string())?,
+        }
         transferred += n as u64;
         if let Some(app) = app {
             if transferred - last_emit >= 262144 {
@@ -524,71 +798,208 @@ fn emit_transfer(
 /// Рекурсивно заливает локальный путь (файл/папка) в remoteDir, эмитя события.
 pub async fn upload_path(
     app: AppHandle,
-    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    handle: SharedHandle,
     session_id: &str,
     local: &str,
     remote_dir: &str,
-    alive: Option<&AtomicBool>,
-    hub: &TransferHub,
+    alive: Arc<AtomicBool>,
+    hub: TransferHub,
 ) -> Result<(), String> {
-    gone(alive, None)?;
-    let sftp = open(handle).await?;
+    gone(Some(&alive), None)?;
     let local = local.replace('\\', "/");
-    let root_name = Path::new(&local).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "file".into());
+    let root_name = Path::new(&local)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "file".into());
     let mut files: Vec<(String, String, String, u64)> = Vec::new();
     collect_local(&local, &join_remote(remote_dir, &root_name), &root_name, &mut files).await?;
-    for (lp, rp, rel, size) in files {
-        gone(alive, None)?;
-        let id = uuid::Uuid::new_v4().to_string();
-        let flag = hub.start(&id, session_id);
-        emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "active", None);
-        if let Some(parent) = Path::new(&rp).parent() {
-            let _ = ensure_remote_dir(&sftp, &parent.to_string_lossy().replace('\\', "/")).await;
-        }
-        let result = copy_local_to_remote(Some(&app), &sftp, &id, session_id, &lp, &rp, &rel, size, alive, Some(&flag)).await;
-        hub.finish(&id);
-        match result {
-            Ok(_) => emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, size, "done", None),
-            Err(e) if e == CANCELLED => {
-                emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "canceled", None)
-            }
-            Err(e) => emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "error", Some(&e)),
-        }
+
+    let sftp = open(handle.as_ref()).await?;
+    let mut parents: Vec<String> = files
+        .iter()
+        .filter_map(|(_, rp, _, _)| {
+            Path::new(rp)
+                .parent()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+        })
+        .collect();
+    parents.sort_by_key(|p| p.len());
+    parents.dedup();
+    for p in parents {
+        let _ = ensure_remote_dir(&sftp, &p).await;
     }
+    drop(sftp);
+
+    let mut jobs = Vec::new();
+    for (lp, rp, rel, size) in files {
+        let key = dup_key(session_id, "upload", &lp, &rp);
+        let id = uuid::Uuid::new_v4().to_string();
+        let Some(ctrl) = hub.start(&id, session_id, key) else {
+            continue;
+        };
+        emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "queued", None);
+        jobs.push((id, ctrl, lp, rp, rel, size));
+    }
+
+    let session_id = session_id.to_string();
+    stream::iter(jobs)
+        .map(|(id, ctrl, lp, rp, rel, size)| {
+            let app = app.clone();
+            let handle = handle.clone();
+            let hub = hub.clone();
+            let alive = alive.clone();
+            let session_id = session_id.clone();
+            async move {
+                let _permit = hub.slots.acquire().await;
+                if !ctrl.is_live() || !alive.load(Ordering::Relaxed) {
+                    hub.finish(&id);
+                    emit_transfer(
+                        &app, &id, &session_id, "upload", &lp, &rp, &rel, size, 0, "canceled", None,
+                    );
+                    return;
+                }
+                emit_transfer(&app, &id, &session_id, "upload", &lp, &rp, &rel, size, 0, "active", None);
+                let result = match open(handle.as_ref()).await {
+                    Ok(sftp) => {
+                        copy_local_to_remote(
+                            Some(&app),
+                            &sftp,
+                            &id,
+                            &session_id,
+                            &lp,
+                            &rp,
+                            &rel,
+                            size,
+                            Some(&alive),
+                            Some(ctrl.as_ref()),
+                        )
+                        .await
+                    }
+                    Err(e) => Err(e),
+                };
+                hub.finish(&id);
+                match result {
+                    Ok(_) => emit_transfer(
+                        &app, &id, &session_id, "upload", &lp, &rp, &rel, size, size, "done", None,
+                    ),
+                    Err(e) if e == CANCELLED => emit_transfer(
+                        &app, &id, &session_id, "upload", &lp, &rp, &rel, size, 0, "canceled", None,
+                    ),
+                    Err(e) => emit_transfer(
+                        &app, &id, &session_id, "upload", &lp, &rp, &rel, size, 0, "error", Some(&e),
+                    ),
+                }
+            }
+        })
+        .buffer_unordered(TRANSFER_MAX * 2)
+        .for_each(|_| async {})
+        .await;
     Ok(())
 }
 
 /// Рекурсивно скачивает удалённый путь (файл/папка) в localDir, эмитя события.
 pub async fn download_path(
     app: AppHandle,
-    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    handle: SharedHandle,
     session_id: &str,
     remote: &str,
     local_dir: &str,
-    alive: Option<&AtomicBool>,
-    hub: &TransferHub,
+    alive: Arc<AtomicBool>,
+    hub: TransferHub,
 ) -> Result<(), String> {
-    gone(alive, None)?;
-    let sftp = open(handle).await?;
-    let root_name = Path::new(remote).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "download".into());
+    gone(Some(&alive), None)?;
+    let sftp = open(handle.as_ref()).await?;
+    let root_name = Path::new(remote)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download".into());
     let local_dir = local_dir.replace('\\', "/");
     let mut files: Vec<(String, String, String, u64)> = Vec::new();
     collect_remote(&sftp, remote, &format!("{local_dir}/{root_name}"), &root_name, &mut files).await?;
-    for (lp, rp, rel, size) in files {
-        gone(alive, None)?;
-        let id = uuid::Uuid::new_v4().to_string();
-        let flag = hub.start(&id, session_id);
-        emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "active", None);
-        let result = copy_remote_to_local(Some(&app), handle, &sftp, &id, session_id, &rp, &lp, &rel, size, alive, Some(&flag)).await;
-        hub.finish(&id);
-        match result {
-            Ok(n) => emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, n, "done", None),
-            Err(e) if e == CANCELLED => {
-                emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "canceled", None)
-            }
-            Err(e) => emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "error", Some(&e)),
+    drop(sftp);
+
+    for (lp, _, _, _) in &files {
+        if let Some(parent) = Path::new(lp).parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
         }
     }
+
+    let mut jobs = Vec::new();
+    for (lp, rp, rel, size) in files {
+        if size > 0 {
+            if let Ok(meta) = tokio::fs::metadata(&lp).await {
+                if meta.is_file() && meta.len() == size {
+                    let id = uuid::Uuid::new_v4().to_string();
+                    emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, size, "done", None);
+                    continue;
+                }
+            }
+        }
+        let key = dup_key(session_id, "download", &lp, &rp);
+        let id = uuid::Uuid::new_v4().to_string();
+        let Some(ctrl) = hub.start(&id, session_id, key) else {
+            continue;
+        };
+        emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "queued", None);
+        jobs.push((id, ctrl, lp, rp, rel, size));
+    }
+
+    let session_id = session_id.to_string();
+    stream::iter(jobs)
+        .map(|(id, ctrl, lp, rp, rel, size)| {
+            let app = app.clone();
+            let handle = handle.clone();
+            let hub = hub.clone();
+            let alive = alive.clone();
+            let session_id = session_id.clone();
+            async move {
+                let _permit = hub.slots.acquire().await;
+                if !ctrl.is_live() || !alive.load(Ordering::Relaxed) {
+                    hub.finish(&id);
+                    emit_transfer(
+                        &app, &id, &session_id, "download", &lp, &rp, &rel, size, 0, "canceled", None,
+                    );
+                    return;
+                }
+                emit_transfer(
+                    &app, &id, &session_id, "download", &lp, &rp, &rel, size, 0, "active", None,
+                );
+                let result = match open(handle.as_ref()).await {
+                    Ok(sftp) => {
+                        copy_remote_to_local(
+                            Some(&app),
+                            handle.as_ref(),
+                            &sftp,
+                            &id,
+                            &session_id,
+                            &rp,
+                            &lp,
+                            &rel,
+                            size,
+                            Some(&alive),
+                            Some(ctrl.as_ref()),
+                        )
+                        .await
+                    }
+                    Err(e) => Err(e),
+                };
+                hub.finish(&id);
+                match result {
+                    Ok(n) => emit_transfer(
+                        &app, &id, &session_id, "download", &lp, &rp, &rel, size, n, "done", None,
+                    ),
+                    Err(e) if e == CANCELLED => emit_transfer(
+                        &app, &id, &session_id, "download", &lp, &rp, &rel, size, 0, "canceled", None,
+                    ),
+                    Err(e) => emit_transfer(
+                        &app, &id, &session_id, "download", &lp, &rp, &rel, size, 0, "error", Some(&e),
+                    ),
+                }
+            }
+        })
+        .buffer_unordered(TRANSFER_MAX * 2)
+        .for_each(|_| async {})
+        .await;
     Ok(())
 }
 

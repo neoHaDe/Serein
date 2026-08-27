@@ -150,7 +150,7 @@ export interface TransferProgress {
 }
 
 export type TransferDirection = 'upload' | 'download'
-export type TransferState = 'queued' | 'active' | 'done' | 'error' | 'canceled'
+export type TransferState = 'queued' | 'active' | 'paused' | 'done' | 'error' | 'canceled'
 
 /** Один элемент очереди передач (файл). Папки разворачиваются в набор файлов. */
 export interface TransferItem {
@@ -165,6 +165,8 @@ export interface TransferItem {
   transferred: number
   state: TransferState
   error?: string
+  /** Считается на фронте по дельтам transferred. */
+  speedBps?: number
 }
 
 /** Запись локальной файловой системы (для двухпанельного менеджера). */
@@ -277,6 +279,8 @@ export interface AppSettings {
   density?: 'comfortable' | 'compact'
   /** Отдельные кнопки на панели задач для откреплённых окон. По умолчанию одно приложение. */
   auxInTaskbar?: boolean
+  /** Параллельных SFTP-файлов (1–8, по умолчанию 4). */
+  sftpConcurrency?: number
 }
 
 // ---- Сохранение раскладки вкладок (для восстановления при запуске) ----
@@ -311,5 +315,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   restoreTabsOnStart: false,
   localShell: 'auto',
   density: 'comfortable',
-  auxInTaskbar: false
+  auxInTaskbar: false,
+  sftpConcurrency: 4
 }

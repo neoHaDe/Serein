@@ -47,6 +47,10 @@ function notYet(feature: string): Promise<never> {
 }
 
 export const api = {
+  clipboard: {
+    write: (text: string): Promise<void> => invoke('clipboard_write', { text }),
+    read: (): Promise<string> => invoke('clipboard_read')
+  },
   settings: {
     get: (): Promise<AppSettings> => invoke('settings_get'),
     set: (patch: Partial<AppSettings>): Promise<AppSettings> => invoke('settings_set', { patch })
@@ -108,6 +112,8 @@ export const api = {
       invoke('sftp_download_to', { sessionId, remotePath, localDir }),
     listTransfers: (): Promise<TransferItem[]> => Promise.resolve([]),
     cancelTransfer: (id: string): Promise<void> => invoke('sftp_cancel_transfer', { id }),
+    pauseTransfer: (id: string): Promise<void> => invoke('sftp_pause_transfer', { id }),
+    resumeTransfer: (id: string): Promise<void> => invoke('sftp_resume_transfer', { id }),
     clearFinished: (): Promise<TransferItem[]> => Promise.resolve([]),
     readFile: (sessionId: string, remotePath: string): Promise<RemoteFileContent> =>
       invoke('sftp_read_file', { sessionId, remotePath }),

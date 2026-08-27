@@ -41,6 +41,52 @@ interface PaneTerm {
 
 const registry = new Map<string, PaneTerm>()
 
+function copyText(text: string): void {
+  if (!text) return
+  void window.api.clipboard.write(text)
+}
+
+function pasteInto(term: Terminal): void {
+  void window.api.clipboard.read().then((t) => {
+    if (t) term.paste(t)
+  })
+}
+
+/** Правый клик не должен сбрасывать выделение; копирование — через Win32, не navigator.clipboard. */
+function bindTermClipboard(term: Terminal, host: HTMLDivElement): void {
+  host.addEventListener(
+    'mousedown',
+    (e) => {
+      if (e.button === 2) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+      }
+    },
+    true
+  )
+  host.addEventListener('contextmenu', (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const sel = term.getSelection()
+    if (sel) copyText(sel)
+    else pasteInto(term)
+  })
+  term.parser.registerOscHandler(52, (data) => {
+    const i = data.indexOf(';')
+    if (i < 0) return true
+    const payload = data.slice(i + 1)
+    if (!payload || payload === '?') return true
+    try {
+      const bin = atob(payload)
+      const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0))
+      copyText(new TextDecoder().decode(bytes))
+    } catch {
+      /* bad OSC 52 */
+    }
+    return true
+  })
+}
+
 const dataWriters = new Map<string, (data: string) => void>()
 let dataBusOff: (() => void) | undefined
 
@@ -130,6 +176,7 @@ export function TerminalView({ paneId, instanceKey, kind, serverId, active, focu
       term.loadAddon(fit)
       term.loadAddon(search)
       term.loadAddon(new WebLinksAddon())
+      bindTermClipboard(term, host)
 
       const created: PaneTerm = {
         host,
@@ -148,6 +195,19 @@ export function TerminalView({ paneId, instanceKey, kind, serverId, active, focu
 
       term.attachCustomKeyEventHandler((e) => {
         if (e.type !== 'keydown') return true
+        if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.code === 'KeyC') {
+          e.preventDefault()
+          e.stopPropagation()
+          const text = term.getSelection()
+          if (text) copyText(text)
+          return false
+        }
+        if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.code === 'KeyV') {
+          e.preventDefault()
+          e.stopPropagation()
+          pasteInto(term)
+          return false
+        }
         if (e.ctrlKey && (e.key === 'f' || e.key === 'F')) {
           setSearchOpen(true)
           requestAnimationFrame(() => searchInputRef.current?.focus())
