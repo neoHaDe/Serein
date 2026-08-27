@@ -33,6 +33,7 @@ pub(crate) struct AppState {
     ki: ssh::KiBridge,
     tunnels: tunnels::TunnelManager,
     edit: remoteedit::EditManager,
+    transfers: sftp::TransferHub,
 }
 
 impl AppState {
@@ -42,6 +43,7 @@ impl AppState {
             ki: Arc::new(Mutex::new(HashMap::new())),
             tunnels: tunnels::TunnelManager::default(),
             edit: remoteedit::EditManager::default(),
+            transfers: sftp::TransferHub::default(),
         }
     }
     fn ssh(&self, id: &str) -> Option<Arc<ssh::SshSession>> {
@@ -55,6 +57,7 @@ impl AppState {
     pub(crate) fn teardown(&self, app: &AppHandle, id: &str, user: bool) {
         self.tunnels.close_session(id, app);
         self.edit.stop_session(id);
+        self.transfers.cancel_session(id);
         if let Some(tx) = self.ki.lock().unwrap().remove(id) {
             drop(tx);
         }
@@ -317,19 +320,23 @@ async fn sftp_upload_paths(app: AppHandle, state: State<'_, AppState>, session_i
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let n = paths.len();
     for p in paths {
-        let _ = sftp::upload_path(app.clone(), &s.handle, &session_id, &p, &remote_dir, Some(&s.alive)).await;
+        let _ = sftp::upload_path(app.clone(), &s.handle, &session_id, &p, &remote_dir, Some(&s.alive), &state.transfers).await;
     }
     Ok(json!({ "uploaded": n }))
 }
 #[tauri::command]
 async fn sftp_download_to(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_path: String, local_dir: String) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    sftp::download_path(app, &s.handle, &session_id, &remote_path, &local_dir, Some(&s.alive)).await
+    sftp::download_path(app, &s.handle, &session_id, &remote_path, &local_dir, Some(&s.alive), &state.transfers).await
 }
 #[tauri::command]
 async fn sftp_edit(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_path: String) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     state.edit.open(app, s.handle.clone(), session_id, remote_path).await
+}
+#[tauri::command]
+fn sftp_cancel_transfer(state: State<'_, AppState>, id: String) {
+    let _ = state.transfers.cancel(&id);
 }
 #[tauri::command]
 fn sftp_edit_stop(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_path: String) {
@@ -441,7 +448,7 @@ pub fn run() {
             session_ping, session_monitor, session_ki_respond,
             docker_list, docker_action, docker_logs,
             sftp_list, sftp_mkdir, sftp_remove, sftp_rename, sftp_read_file, sftp_write_file,
-            sftp_upload_paths, sftp_download_to, sftp_edit, sftp_edit_stop,
+            sftp_upload_paths, sftp_download_to, sftp_edit, sftp_edit_stop, sftp_cancel_transfer,
             tunnel_list_status, tunnel_open, tunnel_close,
             vault_status, vault_unlock, vault_enable, vault_disable,
             backup_export, backup_import,

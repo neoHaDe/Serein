@@ -5,16 +5,71 @@ use russh::client;
 use russh_sftp::client::{error::Error as SftpError, Config as SftpConfig, RawSftpSession, SftpSession};
 use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-fn gone(alive: Option<&AtomicBool>) -> Result<(), String> {
-    if alive.is_some_and(|a| !a.load(Ordering::Relaxed)) {
+const CANCELLED: &str = "Передача отменена";
+
+fn gone(alive: Option<&AtomicBool>, xfer: Option<&AtomicBool>) -> Result<(), String> {
+    if xfer.is_some_and(|a| !a.load(Ordering::Relaxed)) {
+        Err(CANCELLED.into())
+    } else if alive.is_some_and(|a| !a.load(Ordering::Relaxed)) {
         Err("Сессия закрыта".into())
     } else {
         Ok(())
+    }
+}
+
+#[derive(Default)]
+pub struct TransferHub {
+    running: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    by_session: Mutex<HashMap<String, Vec<String>>>,
+}
+
+impl TransferHub {
+    pub fn start(&self, id: &str, session_id: &str) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(true));
+        self.running.lock().unwrap().insert(id.to_string(), flag.clone());
+        self.by_session
+            .lock()
+            .unwrap()
+            .entry(session_id.to_string())
+            .or_default()
+            .push(id.to_string());
+        flag
+    }
+
+    pub fn cancel(&self, id: &str) -> bool {
+        match self.running.lock().unwrap().get(id) {
+            Some(f) => {
+                f.store(false, Ordering::Relaxed);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn finish(&self, id: &str) {
+        self.running.lock().unwrap().remove(id);
+    }
+
+    pub fn cancel_session(&self, session_id: &str) {
+        let ids = self
+            .by_session
+            .lock()
+            .unwrap()
+            .remove(session_id)
+            .unwrap_or_default();
+        let running = self.running.lock().unwrap();
+        for id in ids {
+            if let Some(f) = running.get(&id) {
+                f.store(false, Ordering::Relaxed);
+            }
+        }
     }
 }
 
@@ -110,7 +165,7 @@ pub async fn list(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, pa
 /// Скачивает один удалённый файл в локальный путь (без событий) — для внешнего редактора.
 pub async fn download_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str, local: &str) -> Result<(), String> {
     let sftp = open(handle).await?;
-    copy_remote_to_local_inner(handle, &sftp, None, "", "", remote, local, "", 0, None).await?;
+    copy_remote_to_local_inner(handle, &sftp, None, "", "", remote, local, "", 0, None, None).await?;
     Ok(())
 }
 
@@ -118,7 +173,7 @@ pub async fn download_file(handle: &tokio::sync::Mutex<client::Handle<ClientHand
 pub async fn put_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, local: &str, remote: &str) -> Result<(), String> {
     let sftp = open(handle).await?;
     let size = tokio::fs::metadata(local).await.map(|m| m.len()).unwrap_or(0);
-    copy_local_to_remote_inner(&sftp, None, "", "", local, remote, "", size, None).await?;
+    copy_local_to_remote_inner(&sftp, None, "", "", local, remote, "", size, None, None).await?;
     Ok(())
 }
 
@@ -221,8 +276,9 @@ async fn copy_remote_to_local(
     rel: &str,
     size: u64,
     alive: Option<&AtomicBool>,
+    xfer: Option<&AtomicBool>,
 ) -> Result<u64, String> {
-    copy_remote_to_local_inner(ssh, sftp, app, item_id, session_id, remote, local, rel, size, alive).await
+    copy_remote_to_local_inner(ssh, sftp, app, item_id, session_id, remote, local, rel, size, alive, xfer).await
 }
 
 async fn copy_remote_to_local_inner(
@@ -236,15 +292,16 @@ async fn copy_remote_to_local_inner(
     rel: &str,
     mut size: u64,
     alive: Option<&AtomicBool>,
+    xfer: Option<&AtomicBool>,
 ) -> Result<u64, String> {
-    gone(alive)?;
+    gone(alive, xfer)?;
     if size == 0 {
         size = sftp.metadata(remote).await.ok().and_then(|m| m.size).unwrap_or(0);
     }
     if size >= PIPELINE_AFTER {
-        pipelined_download(ssh, app, item_id, session_id, remote, local, rel, size, alive).await
+        pipelined_download(ssh, app, item_id, session_id, remote, local, rel, size, alive, xfer).await
     } else {
-        sequential_download(sftp, app, item_id, session_id, remote, local, rel, size, alive).await
+        sequential_download(sftp, app, item_id, session_id, remote, local, rel, size, alive, xfer).await
     }
 }
 
@@ -258,8 +315,9 @@ async fn sequential_download(
     rel: &str,
     size: u64,
     alive: Option<&AtomicBool>,
+    xfer: Option<&AtomicBool>,
 ) -> Result<u64, String> {
-    gone(alive)?;
+    gone(alive, xfer)?;
     if let Some(parent) = Path::new(local).parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
@@ -269,7 +327,7 @@ async fn sequential_download(
     let mut transferred: u64 = 0;
     let mut last_emit: u64 = 0;
     loop {
-        gone(alive)?;
+        gone(alive, xfer)?;
         let n = rf.read(&mut buf).await.map_err(|e| e.to_string())?;
         if n == 0 {
             break;
@@ -299,6 +357,7 @@ async fn pipelined_download(
     rel: &str,
     size: u64,
     alive: Option<&AtomicBool>,
+    xfer: Option<&AtomicBool>,
 ) -> Result<u64, String> {
     if let Some(parent) = Path::new(local).parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
@@ -315,7 +374,7 @@ async fn pipelined_download(
     let mut last_emit = 0u64;
     let mut eof = false;
     while !eof && (size == 0 || offset < size) {
-        gone(alive)?;
+        gone(alive, xfer)?;
         let mut batch = Vec::new();
         let mut offs = Vec::new();
         for _ in 0..READ_INFLIGHT {
@@ -381,8 +440,9 @@ async fn copy_local_to_remote(
     rel: &str,
     size: u64,
     alive: Option<&AtomicBool>,
+    xfer: Option<&AtomicBool>,
 ) -> Result<u64, String> {
-    copy_local_to_remote_inner(sftp, app, item_id, session_id, local, remote, rel, size, alive).await
+    copy_local_to_remote_inner(sftp, app, item_id, session_id, local, remote, rel, size, alive, xfer).await
 }
 
 async fn copy_local_to_remote_inner(
@@ -395,6 +455,7 @@ async fn copy_local_to_remote_inner(
     rel: &str,
     size: u64,
     alive: Option<&AtomicBool>,
+    xfer: Option<&AtomicBool>,
 ) -> Result<u64, String> {
     let mut lf = tokio::fs::File::open(local).await.map_err(|e| e.to_string())?;
     let mut rf = sftp.create(remote).await.map_err(|e| e.to_string())?;
@@ -402,7 +463,7 @@ async fn copy_local_to_remote_inner(
     let mut transferred: u64 = 0;
     let mut last_emit: u64 = 0;
     loop {
-        gone(alive)?;
+        gone(alive, xfer)?;
         let n = lf.read(&mut buf).await.map_err(|e| e.to_string())?;
         if n == 0 {
             break;
@@ -424,7 +485,7 @@ async fn copy_local_to_remote_inner(
 /// Для бенча: те же пути, что у UI.
 pub async fn copy_file_up(sftp: &SftpSession, local: &str, remote: &str) -> Result<u64, String> {
     let size = tokio::fs::metadata(local).await.map(|m| m.len()).unwrap_or(0);
-    copy_local_to_remote_inner(sftp, None, "", "", local, remote, "", size, None).await
+    copy_local_to_remote_inner(sftp, None, "", "", local, remote, "", size, None, None).await
 }
 
 pub async fn copy_file_down(
@@ -433,7 +494,7 @@ pub async fn copy_file_down(
     remote: &str,
     local: &str,
 ) -> Result<u64, String> {
-    copy_remote_to_local_inner(ssh, sftp, None, "", "", remote, local, "", 0, None).await
+    copy_remote_to_local_inner(ssh, sftp, None, "", "", remote, local, "", 0, None, None).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -468,22 +529,29 @@ pub async fn upload_path(
     local: &str,
     remote_dir: &str,
     alive: Option<&AtomicBool>,
+    hub: &TransferHub,
 ) -> Result<(), String> {
-    gone(alive)?;
+    gone(alive, None)?;
     let sftp = open(handle).await?;
     let local = local.replace('\\', "/");
     let root_name = Path::new(&local).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "file".into());
-    let mut files: Vec<(String, String, String, u64)> = Vec::new(); // (local, remote, rel, size)
+    let mut files: Vec<(String, String, String, u64)> = Vec::new();
     collect_local(&local, &join_remote(remote_dir, &root_name), &root_name, &mut files).await?;
     for (lp, rp, rel, size) in files {
-        gone(alive)?;
+        gone(alive, None)?;
         let id = uuid::Uuid::new_v4().to_string();
+        let flag = hub.start(&id, session_id);
         emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "active", None);
         if let Some(parent) = Path::new(&rp).parent() {
             let _ = ensure_remote_dir(&sftp, &parent.to_string_lossy().replace('\\', "/")).await;
         }
-        match copy_local_to_remote(Some(&app), &sftp, &id, session_id, &lp, &rp, &rel, size, alive).await {
+        let result = copy_local_to_remote(Some(&app), &sftp, &id, session_id, &lp, &rp, &rel, size, alive, Some(&flag)).await;
+        hub.finish(&id);
+        match result {
             Ok(_) => emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, size, "done", None),
+            Err(e) if e == CANCELLED => {
+                emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "canceled", None)
+            }
             Err(e) => emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "error", Some(&e)),
         }
     }
@@ -498,19 +566,26 @@ pub async fn download_path(
     remote: &str,
     local_dir: &str,
     alive: Option<&AtomicBool>,
+    hub: &TransferHub,
 ) -> Result<(), String> {
-    gone(alive)?;
+    gone(alive, None)?;
     let sftp = open(handle).await?;
     let root_name = Path::new(remote).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "download".into());
     let local_dir = local_dir.replace('\\', "/");
     let mut files: Vec<(String, String, String, u64)> = Vec::new();
     collect_remote(&sftp, remote, &format!("{local_dir}/{root_name}"), &root_name, &mut files).await?;
     for (lp, rp, rel, size) in files {
-        gone(alive)?;
+        gone(alive, None)?;
         let id = uuid::Uuid::new_v4().to_string();
+        let flag = hub.start(&id, session_id);
         emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "active", None);
-        match copy_remote_to_local(Some(&app), handle, &sftp, &id, session_id, &rp, &lp, &rel, size, alive).await {
-            Ok(_) => emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, size, "done", None),
+        let result = copy_remote_to_local(Some(&app), handle, &sftp, &id, session_id, &rp, &lp, &rel, size, alive, Some(&flag)).await;
+        hub.finish(&id);
+        match result {
+            Ok(n) => emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, n, "done", None),
+            Err(e) if e == CANCELLED => {
+                emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "canceled", None)
+            }
             Err(e) => emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "error", Some(&e)),
         }
     }

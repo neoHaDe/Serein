@@ -106,7 +106,7 @@ export const api = {
     downloadTo: (sessionId: string, remotePath: string, localDir: string): Promise<void> =>
       invoke('sftp_download_to', { sessionId, remotePath, localDir }),
     listTransfers: (): Promise<TransferItem[]> => Promise.resolve([]),
-    cancelTransfer: (_id: string): Promise<void> => Promise.resolve(),
+    cancelTransfer: (id: string): Promise<void> => invoke('sftp_cancel_transfer', { id }),
     clearFinished: (): Promise<TransferItem[]> => Promise.resolve([]),
     readFile: (sessionId: string, remotePath: string): Promise<RemoteFileContent> =>
       invoke('sftp_read_file', { sessionId, remotePath }),

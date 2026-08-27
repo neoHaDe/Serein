@@ -246,8 +246,12 @@ export function SftpPanel({ sessionId, onClose, width, closing, onOpenInEditor }
 
   // ---- Transfers ----
   const activeTransfers = transfers.filter((t) => t.state === 'queued' || t.state === 'active')
-  const cancelTransfer = (id: string): void => void window.api.sftp.cancelTransfer(id)
-  const clearFinished = async (): Promise<void> => setTransfers(await window.api.sftp.clearFinished())
+  const cancelTransfer = (id: string): void => {
+    void window.api.sftp.cancelTransfer(id)
+  }
+  const clearFinished = (): void => {
+    setTransfers((prev) => prev.filter((t) => t.state === 'queued' || t.state === 'active'))
+  }
 
   const editList = Object.values(edits)
 
