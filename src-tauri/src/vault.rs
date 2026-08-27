@@ -57,7 +57,7 @@ pub fn enable(password: &str) -> Value {
         return json!({ "ok": false, "error": "Пароль слишком короткий (мин. 4 символа)" });
     }
     // Вынимаем секреты при текущем (пустом) ключе, затем перешифровываем с мастер-слоем.
-    let plain = store::export_all_secrets();
+    let plain = crate::store::export_all_secrets();
     let salt = {
         use rand::RngCore;
         let mut s = [0u8; 16];
@@ -66,7 +66,7 @@ pub fn enable(password: &str) -> Value {
     };
     let key = crypto::derive_key(password, &salt);
     vaultkey::set(Some(key));
-    if let Err(e) = store::import_all_secrets(&plain) {
+    if let Err(e) = crate::store::import_all_secrets(&plain) {
         return json!({ "ok": false, "error": e });
     }
     let verifier = match crypto::aes_encrypt(VERIFY_TOKEN, &key) {
@@ -93,9 +93,9 @@ pub fn disable(password: &str) -> Value {
         return json!({ "ok": false, "error": "Неверный пароль" });
     }
     vaultkey::set(Some(key));
-    let plain = store::export_all_secrets();
+    let plain = crate::store::export_all_secrets();
     vaultkey::set(None);
-    if let Err(e) = store::import_all_secrets(&plain) {
+    if let Err(e) = crate::store::import_all_secrets(&plain) {
         return json!({ "ok": false, "error": e });
     }
     let _ = std::fs::remove_file(vault_path());
