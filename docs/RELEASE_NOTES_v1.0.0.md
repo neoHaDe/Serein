@@ -54,4 +54,4 @@ In-place с TermiNAL 0.1.0 не будет (другой identifier). Поста
 Tauri 2 · React 18 + TypeScript · [`russh`](https://github.com/Eugeny/russh) / `russh-sftp` / `portable-pty`.
 
 ---
-Полный список — в [README](../README.md). English: [README.en.md](../README.en.md).
+Полный список — в [README](https://github.com/neoHaDe/Serein/blob/master/README.md). English: [README.en.md](https://github.com/neoHaDe/Serein/blob/master/README.en.md).
