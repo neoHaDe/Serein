@@ -93,6 +93,17 @@ fn port_of(server: &Value) -> u16 {
     server.get("port").and_then(|v| v.as_u64()).unwrap_or(22) as u16
 }
 
+/// Окно и keepalive под длинные SFTP. `maximum_packet_size` 32 КиБ — как у OpenSSH;
+/// SFTP-чанк в `sftp.rs` режется под этот лимит, иначе DATA не влезает в SSH-пакет.
+pub(crate) fn ssh_client_config() -> Arc<client::Config> {
+    let mut cfg = client::Config::default();
+    cfg.window_size = 16 * 1024 * 1024;
+    cfg.maximum_packet_size = 32 * 1024;
+    cfg.keepalive_interval = Some(std::time::Duration::from_secs(15));
+    cfg.keepalive_max = 8;
+    Arc::new(cfg)
+}
+
 async fn request_ki(app: &AppHandle, ki: &KiBridge, id: &str, prompts: Vec<Value>) -> Vec<String> {
     let (tx, rx) = oneshot::channel();
     ki.lock().unwrap().insert(id.to_string(), tx);
@@ -104,7 +115,7 @@ async fn request_ki(app: &AppHandle, ki: &KiBridge, id: &str, prompts: Vec<Value
 async fn authenticate(
     handle: &mut client::Handle<ClientHandler>,
     server: &Value,
-    app: &AppHandle,
+    app: Option<&AppHandle>,
     ki: &KiBridge,
     id: Option<&str>,
 ) -> Result<bool, String> {
@@ -148,6 +159,9 @@ async fn authenticate(
                                 .iter()
                                 .map(|p| json!({ "prompt": p.prompt, "echo": p.echo }))
                                 .collect();
+                            let Some(app) = app else {
+                                return Err("keyboard-interactive недоступен без UI".into());
+                            };
                             let answers = request_ki(app, ki, sid, pl).await;
                             resp = handle
                                 .authenticate_keyboard_interactive_respond(answers)
@@ -168,7 +182,7 @@ async fn connect_one(server: &Value, rf: RemoteForwards) -> Result<client::Handl
         host_id: knownhosts::host_id(host, port_of(server)),
         remote_forwards: rf,
     };
-    let config = Arc::new(client::Config::default());
+    let config = ssh_client_config();
     // Таймаут подключения: к офлайн/firewall-хосту (DROP без TCP-reset) connect иначе
     // виснет надолго. russh отдаёт ошибку Result (не EventEmitter, как ssh2 в Electron),
     // поэтому "двойного error" тут нет — достаточно ограничить ожидание и вернуть Err.
@@ -207,7 +221,7 @@ pub async fn connect_chain(
     if !authenticate(
         &mut handle,
         far,
-        &app,
+        Some(&app),
         &ki,
         if far_is_target { Some(id.as_str()) } else { None },
     )
@@ -226,7 +240,7 @@ pub async fn connect_chain(
             .await
             .map_err(|e| format!("ProxyJump к {nhost} не удался: {e}"))?;
         jump_handles.push(Arc::new(cur));
-        let config = Arc::new(client::Config::default());
+        let config = ssh_client_config();
         let handler = ClientHandler {
             host_id: knownhosts::host_id(nhost, port_of(next)),
             remote_forwards: remote_forwards.clone(),
@@ -238,7 +252,7 @@ pub async fn connect_chain(
         if !authenticate(
             &mut nh,
             next,
-            &app,
+            Some(&app),
             &ki,
             if is_target { Some(id.as_str()) } else { None },
         )
@@ -303,6 +317,78 @@ pub async fn connect_chain(
         remote_forwards,
         jump_handles,
     })
+}
+
+/// Подключение без PTY/shell — для exec/SFTP (bench и служебные каналы).
+pub async fn connect_client(chain: Vec<Value>) -> Result<SharedHandle, String> {
+    if chain.is_empty() {
+        return Err("Пустая цепочка хостов".into());
+    }
+    let dummy_ki: KiBridge = Arc::new(Mutex::new(HashMap::new()));
+    let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
+    let far = chain.last().unwrap();
+    let mut handle = connect_one(far, remote_forwards.clone()).await?;
+    if !authenticate(&mut handle, far, None, &dummy_ki, None).await? {
+        return Err("Аутентификация отклонена сервером".into());
+    }
+    let mut cur = handle;
+    for i in (0..chain.len() - 1).rev() {
+        let next = &chain[i];
+        let nhost = field(next, "host").ok_or("Не задан host промежуточного хоста")?;
+        let channel = cur
+            .channel_open_direct_tcpip(nhost, port_of(next) as u32, "127.0.0.1", 0)
+            .await
+            .map_err(|e| format!("ProxyJump к {nhost} не удался: {e}"))?;
+        let config = ssh_client_config();
+        let handler = ClientHandler {
+            host_id: knownhosts::host_id(nhost, port_of(next)),
+            remote_forwards: remote_forwards.clone(),
+        };
+        let mut nh = client::connect_stream(config, channel.into_stream(), handler)
+            .await
+            .map_err(|e| e.to_string())?;
+        if !authenticate(&mut nh, next, None, &dummy_ki, None).await? {
+            return Err("Аутентификация отклонена сервером".into());
+        }
+        cur = nh;
+    }
+    Ok(Arc::new(tokio::sync::Mutex::new(cur)))
+}
+
+/// Exec, который режет поток по времени (логи -f, yes). Возвращает байты stdout+stderr.
+pub async fn exec_for(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    command: &str,
+    limit: std::time::Duration,
+) -> Result<(u64, i32), String> {
+    let mut channel = {
+        let h = handle.lock().await;
+        h.channel_open_session().await.map_err(|e| e.to_string())?
+    };
+    channel.exec(true, command).await.map_err(|e| e.to_string())?;
+    let mut bytes = 0u64;
+    let mut code = 0i32;
+    let deadline = tokio::time::Instant::now() + limit;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            let _ = channel.close().await;
+            break;
+        }
+        match tokio::time::timeout(left, channel.wait()).await {
+            Ok(Some(ChannelMsg::Data { ref data })) => bytes += data.len() as u64,
+            Ok(Some(ChannelMsg::ExtendedData { ref data, .. })) => bytes += data.len() as u64,
+            Ok(Some(ChannelMsg::ExitStatus { exit_status })) => code = exit_status as i32,
+            Ok(Some(ChannelMsg::Eof)) => {}
+            Ok(Some(ChannelMsg::Close) | None) => break,
+            Ok(Some(_)) => {}
+            Err(_) => {
+                let _ = channel.close().await;
+                break;
+            }
+        }
+    }
+    Ok((bytes, code))
 }
 
 /// Выполняет команду отдельным exec-каналом. Возвращает (код, stdout, stderr).

@@ -2,16 +2,31 @@
 
 use crate::ssh::ClientHandler;
 use russh::client;
-use russh_sftp::client::SftpSession;
+use russh_sftp::client::{error::Error as SftpError, Config as SftpConfig, RawSftpSession, SftpSession};
+use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
 use serde_json::{json, Value};
 use std::path::Path;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const MAX_EDIT_SIZE: u64 = 5 * 1024 * 1024;
+/// Совпадает с `ssh_client_config().maximum_packet_size`. DATA больше — зависание окна.
+const SFTP_CHUNK: u32 = 32 * 1024 - 64;
+const READ_INFLIGHT: usize = 16;
+const PIPELINE_AFTER: u64 = 256 * 1024;
+const SFTP_TIMEOUT_SECS: u64 = 300;
 
-/// Открывает новый SFTP-канал поверх SSH-соединения.
-pub async fn open(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>) -> Result<SftpSession, String> {
+fn sftp_config() -> SftpConfig {
+    SftpConfig {
+        max_packet_len: 32 * 1024,
+        max_concurrent_writes: 16,
+        request_timeout_secs: SFTP_TIMEOUT_SECS,
+    }
+}
+
+async fn open_stream(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+) -> Result<russh::ChannelStream<russh::client::Msg>, String> {
     let channel = {
         let h = handle.lock().await;
         h.channel_open_session().await.map_err(|e| e.to_string())?
@@ -20,9 +35,25 @@ pub async fn open(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>) ->
         .request_subsystem(true, "sftp")
         .await
         .map_err(|e| e.to_string())?;
-    SftpSession::new(channel.into_stream())
+    Ok(channel.into_stream())
+}
+
+/// Открывает новый SFTP-канал поверх SSH-соединения.
+pub async fn open(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>) -> Result<SftpSession, String> {
+    let stream = open_stream(handle).await?;
+    let sftp = SftpSession::new_with_config(stream, sftp_config())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    sftp.set_timeout(SFTP_TIMEOUT_SECS);
+    Ok(sftp)
+}
+
+async fn open_raw(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>) -> Result<RawSftpSession, String> {
+    let stream = open_stream(handle).await?;
+    let raw = RawSftpSession::new_with_config(stream, sftp_config());
+    raw.init().await.map_err(|e| e.to_string())?;
+    raw.set_timeout(SFTP_TIMEOUT_SECS);
+    Ok(raw)
 }
 
 fn join_remote(dir: &str, name: &str) -> String {
@@ -70,23 +101,15 @@ pub async fn list(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, pa
 /// Скачивает один удалённый файл в локальный путь (без событий) — для внешнего редактора.
 pub async fn download_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str, local: &str) -> Result<(), String> {
     let sftp = open(handle).await?;
-    if let Some(p) = Path::new(local).parent() {
-        let _ = tokio::fs::create_dir_all(p).await;
-    }
-    let mut rf = sftp.open(remote).await.map_err(|e| e.to_string())?;
-    let mut buf = Vec::new();
-    rf.read_to_end(&mut buf).await.map_err(|e| e.to_string())?;
-    tokio::fs::write(local, buf).await.map_err(|e| e.to_string())
+    copy_remote_to_local_inner(handle, &sftp, None, "", "", remote, local, "", 0).await?;
+    Ok(())
 }
 
 /// Заливает один локальный файл на удалённый путь (без событий).
 pub async fn put_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, local: &str, remote: &str) -> Result<(), String> {
     let sftp = open(handle).await?;
-    let data = tokio::fs::read(local).await.map_err(|e| e.to_string())?;
-    let mut f = sftp.create(remote).await.map_err(|e| e.to_string())?;
-    f.write_all(&data).await.map_err(|e| e.to_string())?;
-    f.flush().await.ok();
-    f.shutdown().await.ok();
+    let size = tokio::fs::metadata(local).await.map(|m| m.len()).unwrap_or(0);
+    copy_local_to_remote_inner(&sftp, None, "", "", local, remote, "", size).await?;
     Ok(())
 }
 
@@ -121,6 +144,7 @@ pub async fn read_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>
     let mut file = sftp.open(remote).await.map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     file.read_to_end(&mut buf).await.map_err(|e| e.to_string())?;
+    file.shutdown().await.ok();
     if buf.iter().take(8192).any(|b| *b == 0) {
         return Ok(json!({ "content": "", "eol": "lf", "mode": mode, "mtime": mtime, "binary": true }));
     }
@@ -178,7 +202,8 @@ pub async fn write_file(
 
 /// Скачивает один файл с прогрессом (эмит `sftp-transfer`).
 async fn copy_remote_to_local(
-    app: &AppHandle,
+    app: Option<&AppHandle>,
+    ssh: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
     sftp: &SftpSession,
     item_id: &str,
     session_id: &str,
@@ -186,13 +211,47 @@ async fn copy_remote_to_local(
     local: &str,
     rel: &str,
     size: u64,
-) -> Result<(), String> {
+) -> Result<u64, String> {
+    copy_remote_to_local_inner(ssh, sftp, app, item_id, session_id, remote, local, rel, size).await
+}
+
+async fn copy_remote_to_local_inner(
+    ssh: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    sftp: &SftpSession,
+    app: Option<&AppHandle>,
+    item_id: &str,
+    session_id: &str,
+    remote: &str,
+    local: &str,
+    rel: &str,
+    mut size: u64,
+) -> Result<u64, String> {
+    if size == 0 {
+        size = sftp.metadata(remote).await.ok().and_then(|m| m.size).unwrap_or(0);
+    }
+    if size >= PIPELINE_AFTER {
+        pipelined_download(ssh, app, item_id, session_id, remote, local, rel, size).await
+    } else {
+        sequential_download(sftp, app, item_id, session_id, remote, local, rel, size).await
+    }
+}
+
+async fn sequential_download(
+    sftp: &SftpSession,
+    app: Option<&AppHandle>,
+    item_id: &str,
+    session_id: &str,
+    remote: &str,
+    local: &str,
+    rel: &str,
+    size: u64,
+) -> Result<u64, String> {
     if let Some(parent) = Path::new(local).parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
     let mut rf = sftp.open(remote).await.map_err(|e| e.to_string())?;
     let mut lf = tokio::fs::File::create(local).await.map_err(|e| e.to_string())?;
-    let mut buf = vec![0u8; 65536];
+    let mut buf = vec![0u8; SFTP_CHUNK as usize];
     let mut transferred: u64 = 0;
     let mut last_emit: u64 = 0;
     loop {
@@ -202,17 +261,101 @@ async fn copy_remote_to_local(
         }
         lf.write_all(&buf[..n]).await.map_err(|e| e.to_string())?;
         transferred += n as u64;
-        if transferred - last_emit >= 262144 {
-            last_emit = transferred;
-            emit_transfer(app, item_id, session_id, "download", local, remote, rel, size, transferred, "active", None);
+        if let Some(app) = app {
+            if transferred - last_emit >= 262144 {
+                last_emit = transferred;
+                emit_transfer(app, item_id, session_id, "download", local, remote, rel, size, transferred, "active", None);
+            }
         }
     }
     lf.flush().await.ok();
-    Ok(())
+    rf.shutdown().await.ok();
+    Ok(transferred)
+}
+
+/// Несколько SSH_FXP_READ в полёте — иначе download упирается в RTT и на 1 ГБ «замирает».
+async fn pipelined_download(
+    ssh: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    app: Option<&AppHandle>,
+    item_id: &str,
+    session_id: &str,
+    remote: &str,
+    local: &str,
+    rel: &str,
+    size: u64,
+) -> Result<u64, String> {
+    if let Some(parent) = Path::new(local).parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    let raw = open_raw(ssh).await?;
+    let opened = raw
+        .open(remote.to_string(), OpenFlags::READ, FileAttributes::empty())
+        .await
+        .map_err(|e| e.to_string())?;
+    let fh = opened.handle;
+    let mut lf = tokio::fs::File::create(local).await.map_err(|e| e.to_string())?;
+    let mut offset = 0u64;
+    let mut transferred = 0u64;
+    let mut last_emit = 0u64;
+    let mut eof = false;
+    while !eof && (size == 0 || offset < size) {
+        let mut batch = Vec::new();
+        let mut offs = Vec::new();
+        for _ in 0..READ_INFLIGHT {
+            if size > 0 && offset >= size {
+                break;
+            }
+            let len = if size > 0 {
+                (size - offset).min(SFTP_CHUNK as u64) as u32
+            } else {
+                SFTP_CHUNK
+            };
+            if len == 0 {
+                break;
+            }
+            offs.push(offset);
+            batch.push(raw.read(fh.clone(), offset, len));
+            offset += u64::from(len);
+        }
+        if batch.is_empty() {
+            break;
+        }
+        let results = futures::future::join_all(batch).await;
+        for res in results {
+            match res {
+                Ok(pkt) => {
+                    if pkt.data.is_empty() {
+                        eof = true;
+                        break;
+                    }
+                    lf.write_all(&pkt.data).await.map_err(|e| e.to_string())?;
+                    transferred += pkt.data.len() as u64;
+                    if let Some(app) = app {
+                        if transferred - last_emit >= 262144 {
+                            last_emit = transferred;
+                            emit_transfer(app, item_id, session_id, "download", local, remote, rel, size, transferred, "active", None);
+                        }
+                    }
+                }
+                Err(SftpError::Status(st)) if st.status_code == StatusCode::Eof => {
+                    eof = true;
+                    break;
+                }
+                Err(e) => {
+                    let _ = raw.close(fh.clone()).await;
+                    return Err(e.to_string());
+                }
+            }
+        }
+    }
+    lf.flush().await.ok();
+    let _ = raw.close(fh).await;
+    let _ = raw.close_session();
+    Ok(transferred)
 }
 
 async fn copy_local_to_remote(
-    app: &AppHandle,
+    app: Option<&AppHandle>,
     sftp: &SftpSession,
     item_id: &str,
     session_id: &str,
@@ -220,10 +363,23 @@ async fn copy_local_to_remote(
     remote: &str,
     rel: &str,
     size: u64,
-) -> Result<(), String> {
+) -> Result<u64, String> {
+    copy_local_to_remote_inner(sftp, app, item_id, session_id, local, remote, rel, size).await
+}
+
+async fn copy_local_to_remote_inner(
+    sftp: &SftpSession,
+    app: Option<&AppHandle>,
+    item_id: &str,
+    session_id: &str,
+    local: &str,
+    remote: &str,
+    rel: &str,
+    size: u64,
+) -> Result<u64, String> {
     let mut lf = tokio::fs::File::open(local).await.map_err(|e| e.to_string())?;
     let mut rf = sftp.create(remote).await.map_err(|e| e.to_string())?;
-    let mut buf = vec![0u8; 65536];
+    let mut buf = vec![0u8; SFTP_CHUNK as usize];
     let mut transferred: u64 = 0;
     let mut last_emit: u64 = 0;
     loop {
@@ -233,14 +389,31 @@ async fn copy_local_to_remote(
         }
         rf.write_all(&buf[..n]).await.map_err(|e| e.to_string())?;
         transferred += n as u64;
-        if transferred - last_emit >= 262144 {
-            last_emit = transferred;
-            emit_transfer(app, item_id, session_id, "upload", local, remote, rel, size, transferred, "active", None);
+        if let Some(app) = app {
+            if transferred - last_emit >= 262144 {
+                last_emit = transferred;
+                emit_transfer(app, item_id, session_id, "upload", local, remote, rel, size, transferred, "active", None);
+            }
         }
     }
     rf.flush().await.ok();
     rf.shutdown().await.ok();
-    Ok(())
+    Ok(transferred)
+}
+
+/// Для бенча: те же пути, что у UI.
+pub async fn copy_file_up(sftp: &SftpSession, local: &str, remote: &str) -> Result<u64, String> {
+    let size = tokio::fs::metadata(local).await.map(|m| m.len()).unwrap_or(0);
+    copy_local_to_remote_inner(sftp, None, "", "", local, remote, "", size).await
+}
+
+pub async fn copy_file_down(
+    ssh: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    sftp: &SftpSession,
+    remote: &str,
+    local: &str,
+) -> Result<u64, String> {
+    copy_remote_to_local_inner(ssh, sftp, None, "", "", remote, local, "", 0).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -280,7 +453,7 @@ pub async fn upload_path(app: AppHandle, handle: &tokio::sync::Mutex<client::Han
         if let Some(parent) = Path::new(&rp).parent() {
             let _ = ensure_remote_dir(&sftp, &parent.to_string_lossy().replace('\\', "/")).await;
         }
-        match copy_local_to_remote(&app, &sftp, &id, session_id, &lp, &rp, &rel, size).await {
+        match copy_local_to_remote(Some(&app), &sftp, &id, session_id, &lp, &rp, &rel, size).await {
             Ok(_) => emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, size, "done", None),
             Err(e) => emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "error", Some(&e)),
         }
@@ -298,7 +471,7 @@ pub async fn download_path(app: AppHandle, handle: &tokio::sync::Mutex<client::H
     for (lp, rp, rel, size) in files {
         let id = uuid::Uuid::new_v4().to_string();
         emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "active", None);
-        match copy_remote_to_local(&app, &sftp, &id, session_id, &rp, &lp, &rel, size).await {
+        match copy_remote_to_local(Some(&app), handle, &sftp, &id, session_id, &rp, &lp, &rel, size).await {
             Ok(_) => emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, size, "done", None),
             Err(e) => emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "error", Some(&e)),
         }
