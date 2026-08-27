@@ -33,6 +33,8 @@ npm run smoke
 
 Это `tsc --noEmit` и `cargo check` по `src-tauri`. SSH и UI не трогает.
 
+То же на GitHub: `.github/workflows/ci.yml` (`windows-latest`) — плюс `cargo test --lib` (крипта). `tauri build` и живой SSH в Actions нет.
+
 ## Ручной smoke (установленный exe, без toolchain)
 
 1. Запуск из меню Пуск → окно **Serein**, не падает за 10 секунд.
