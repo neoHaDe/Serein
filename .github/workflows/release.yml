@@ -35,16 +35,21 @@ jobs:
       - name: npm ci
         run: npm ci
 
+      # Подписанная сборка — только если в репозитории заведён секрет с приватным ключом.
+      # Без него tauri видит pubkey в конфиге, требует ключ и падает с кодом 1,
+      # хотя установщик при этом уже собран.
       - name: tauri build
         id: build
         run: npm run tauri -- build
         continue-on-error: true
-
-      - name: tauri build (retry without updater signing)
-        if: steps.build.outcome == 'failure'
-        run: npm run tauri -- build
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ""
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      # Запасной путь: та же сборка, но без артефактов апдейтера — они и требуют подпись.
+      - name: tauri build (without updater artifacts)
+        if: steps.build.outcome == 'failure'
+        run: npm run tauri -- build --config src-tauri/tauri.ci.conf.json
 
       - name: portable exe
         shell: pwsh
