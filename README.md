@@ -10,7 +10,7 @@
 проброс портов, мониторинг ресурсов, панель Docker и локальный терминал —
 в установщике на **≈ 6 МБ**.
 
-Бесплатно, открытый код, Apache 2.0. Windows x64, **v1.0.0**.
+Бесплатно, открытый код, Apache 2.0. Windows x64, **v1.1.0**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -43,7 +43,7 @@ Windows · без своего Chromium (системный WebView2) ·
 | SSH-движок | чистый Rust [`russh`](https://github.com/Eugeny/russh) | libssh2 / нативный |
 | Рантайм | системный WebView2 | полный Chromium |
 
-Цифры — живой `tauri dev` (RAM) и NSIS 1.0.0 (~6.1 МБ сжатый). На слабом ноутбуке те же 33 МБ не обещаем.
+Цифры — живой `tauri dev` (RAM) и NSIS 1.1.0 (~6 МБ сжатый). На слабом ноутбуке те же 33 МБ не обещаем.
 
 ---
 
@@ -96,7 +96,7 @@ Windows · без своего Chromium (системный WebView2) ·
 
 ## Быстрый старт
 
-1. Поставь установщик или скачай portable `Serein_1.0.0_x64-portable.exe` из [Releases](../../releases/latest).
+1. Поставь установщик или скачай portable `Serein_1.1.0_x64-portable.exe` из [Releases](../../releases/latest).
 2. Импортируй `~/.ssh/config` или добавь сервер вручную.
 3. Подключись. Локальный терминал работает и без SSH.
 
@@ -122,8 +122,8 @@ Windows · без своего Chromium (системный WebView2) ·
 
 С [Releases](../../releases/latest):
 
-- **`Serein_1.0.0_x64-setup.exe`** — установщик (меню Пуск, удаление).
-- **`Serein_1.0.0_x64-portable.exe`** — один файл, без установки. Положи и запусти. Настройки всё равно в `%APPDATA%\serein`.
+- **`Serein_1.1.0_x64-setup.exe`** — установщик (меню Пуск, удаление).
+- **`Serein_1.1.0_x64-portable.exe`** — один файл, без установки. Положи и запусти. Настройки всё равно в `%APPDATA%\serein`.
 
 Сборка **не подписана** — SmartScreen ругнётся. *Подробнее → Выполнить в любом случае*.
 Проверяй SHA-256 из описания выпуска, если он там есть.

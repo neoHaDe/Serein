@@ -10,7 +10,7 @@ Tabs and split panes, an SFTP file manager with an editor,
 port forwards, resource monitoring, a Docker panel, and a local terminal —
 in an installer of about **6 MB**.
 
-Free, open source, Apache 2.0. Windows x64, **v1.0.0**.
+Free, open source, Apache 2.0. Windows x64, **v1.1.0**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -43,7 +43,7 @@ No Chromium tax. We are not racing Tabby on feature count. The point is a **serv
 | SSH engine | pure Rust [`russh`](https://github.com/Eugeny/russh) | libssh2 / native |
 | Runtime | system WebView2 | full Chromium |
 
-Numbers come from a live `tauri dev` session (RAM) and the 1.0.0 NSIS build (~6.1 MB packed).
+Numbers come from a live `tauri dev` session (RAM) and the 1.1.0 NSIS build (~6 MB packed).
 A weak laptop will not magically match 33 MB.
 
 ---
@@ -97,7 +97,7 @@ A weak laptop will not magically match 33 MB.
 
 ## Quick start
 
-1. Install the setup exe or grab the portable `Serein_1.0.0_x64-portable.exe` from [Releases](../../releases/latest).
+1. Install the setup exe or grab the portable `Serein_1.1.0_x64-portable.exe` from [Releases](../../releases/latest).
 2. Import `~/.ssh/config` or add a host by hand.
 3. Connect. The local terminal works with no SSH at all.
 
@@ -123,8 +123,8 @@ Matrix and smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
 
 From [Releases](../../releases/latest):
 
-- **`Serein_1.0.0_x64-setup.exe`** — installer (Start menu, uninstall).
-- **`Serein_1.0.0_x64-portable.exe`** — a single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`.
+- **`Serein_1.1.0_x64-setup.exe`** — installer (Start menu, uninstall).
+- **`Serein_1.1.0_x64-portable.exe`** — a single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`.
 
 The build is **unsigned**. SmartScreen will complain. *More info → Run anyway*.
 If the release notes publish a SHA-256, check that instead of clicking through blindly.
