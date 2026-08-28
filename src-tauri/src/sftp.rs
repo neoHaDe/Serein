@@ -358,6 +358,28 @@ fn join_remote(dir: &str, name: &str) -> String {
     }
 }
 
+/// Проверка удалённого пути перед операцией.
+///
+/// `list` разрешает путь через `canonicalize` на сервере, а остальные операции работают
+/// с тем, что пришло из UI, — поэтому здесь требуем абсолютный путь без `..` и управляющих
+/// символов. Иначе одна кривая строка в поле пути уводит удаление или заливку туда,
+/// куда пользователь не смотрел.
+pub fn check_remote_path(p: &str) -> Result<(), String> {
+    if p.trim().is_empty() {
+        return Err("Пустой удалённый путь".into());
+    }
+    if !p.starts_with('/') {
+        return Err(format!("Ожидался абсолютный удалённый путь, получен «{p}»"));
+    }
+    if p.contains('\0') || p.contains('\n') || p.contains('\r') {
+        return Err("Недопустимый символ в удалённом пути".into());
+    }
+    if p.split('/').any(|seg| seg == "..") {
+        return Err(format!("Удалённый путь с «..» недопустим: «{p}»"));
+    }
+    Ok(())
+}
+
 pub async fn list(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, path: &str) -> Result<Value, String> {
     let sftp = open(handle).await?;
     let target = if path.is_empty() { ".".to_string() } else { path.to_string() };
@@ -412,6 +434,7 @@ pub async fn list(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, pa
 
 /// Скачивает один удалённый файл в локальный путь (без событий) — для внешнего редактора.
 pub async fn download_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str, local: &str) -> Result<(), String> {
+    check_remote_path(remote)?;
     let sftp = open(handle).await?;
     copy_remote_to_local_inner(handle, &sftp, None, "", "", remote, local, "", 0, None, None).await?;
     Ok(())
@@ -419,6 +442,7 @@ pub async fn download_file(handle: &tokio::sync::Mutex<client::Handle<ClientHand
 
 /// Заливает один локальный файл на удалённый путь (без событий).
 pub async fn put_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, local: &str, remote: &str) -> Result<(), String> {
+    check_remote_path(remote)?;
     let sftp = open(handle).await?;
     let size = tokio::fs::metadata(local).await.map(|m| m.len()).unwrap_or(0);
     copy_local_to_remote_inner(&sftp, None, "", "", local, remote, "", size, None, None).await?;
@@ -426,11 +450,13 @@ pub async fn put_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>
 }
 
 pub async fn mkdir(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, path: &str) -> Result<(), String> {
+    check_remote_path(path)?;
     let sftp = open(handle).await?;
     sftp.create_dir(path).await.map_err(|e| e.to_string())
 }
 
 pub async fn remove(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, path: &str, is_dir: bool) -> Result<(), String> {
+    check_remote_path(path)?;
     let sftp = open(handle).await?;
     if is_dir {
         sftp.remove_dir(path).await.map_err(|e| e.to_string())
@@ -440,11 +466,14 @@ pub async fn remove(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, 
 }
 
 pub async fn rename(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, from: &str, to: &str) -> Result<(), String> {
+    check_remote_path(from)?;
+    check_remote_path(to)?;
     let sftp = open(handle).await?;
     sftp.rename(from, to).await.map_err(|e| e.to_string())
 }
 
 pub async fn chmod(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, path: &str, mode: u32) -> Result<(), String> {
+    check_remote_path(path)?;
     let sftp = open(handle).await?;
     let meta = sftp.symlink_metadata(path).await.map_err(|e| e.to_string())?;
     let old = meta.permissions.unwrap_or(0);
@@ -456,6 +485,7 @@ pub async fn chmod(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, p
 const MAX_PREVIEW: u64 = 8 * 1024 * 1024;
 
 pub async fn preview(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str) -> Result<Value, String> {
+    check_remote_path(remote)?;
     let sftp = open(handle).await?;
     let meta = sftp.metadata(remote).await.map_err(|e| e.to_string())?;
     let size = meta.size.unwrap_or(0);
@@ -474,6 +504,7 @@ pub async fn preview(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
 }
 
 pub async fn read_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str) -> Result<Value, String> {
+    check_remote_path(remote)?;
     let sftp = open(handle).await?;
     let meta = sftp.metadata(remote).await.map_err(|e| e.to_string())?;
     let size = meta.size.unwrap_or(0);
@@ -503,6 +534,7 @@ pub async fn write_file(
     base_mtime: u64,
     eol: &str,
 ) -> Result<Value, String> {
+    check_remote_path(remote)?;
     let sftp = open(handle).await?;
     // Детект конфликта по mtime.
     if let Ok(meta) = sftp.metadata(remote).await {
@@ -854,6 +886,7 @@ pub async fn upload_path(
     hub: TransferHub,
 ) -> Result<(), String> {
     gone(Some(&alive), None)?;
+    check_remote_path(remote_dir)?;
     let local = local.replace('\\', "/");
     let root_name = Path::new(&local)
         .file_name()
@@ -956,6 +989,7 @@ pub async fn download_path(
     hub: TransferHub,
 ) -> Result<(), String> {
     gone(Some(&alive), None)?;
+    check_remote_path(remote)?;
     let sftp = open(handle.as_ref()).await?;
     let root_name = Path::new(remote)
         .file_name()
@@ -1125,6 +1159,7 @@ pub async fn name_conflicts(
     remote_dir: &str,
     names: &[String],
 ) -> Result<Vec<String>, String> {
+    check_remote_path(remote_dir)?;
     let sftp = open(handle).await?;
     let mut out = Vec::new();
     for raw in names {
@@ -1139,4 +1174,39 @@ pub async fn name_conflicts(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_remote_path;
+
+    #[test]
+    fn absolute_paths_pass() {
+        assert!(check_remote_path("/srv/site/docker-compose.yml").is_ok());
+        assert!(check_remote_path("/").is_ok());
+        assert!(check_remote_path("/home/hade/файл с пробелом.txt").is_ok());
+        // «..» как часть имени — не выход наверх.
+        assert!(check_remote_path("/srv/..hidden").is_ok());
+    }
+
+    #[test]
+    fn relative_and_empty_rejected() {
+        assert!(check_remote_path("").is_err());
+        assert!(check_remote_path("   ").is_err());
+        assert!(check_remote_path("srv/site").is_err());
+        assert!(check_remote_path("~/notes").is_err());
+    }
+
+    #[test]
+    fn parent_traversal_rejected() {
+        assert!(check_remote_path("/srv/../etc/shadow").is_err());
+        assert!(check_remote_path("/..").is_err());
+        assert!(check_remote_path("/srv/site/..").is_err());
+    }
+
+    #[test]
+    fn control_chars_rejected() {
+        assert!(check_remote_path("/srv/site\nrm -rf /").is_err());
+        assert!(check_remote_path("/srv/\u{0}etc").is_err());
+    }
 }

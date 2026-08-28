@@ -4,7 +4,16 @@
 use crate::{crypto, store};
 use serde_json::{json, Value};
 
+/// Бэкап несёт пароли серверов, поэтому пустой или совсем короткий пароль запрещаем:
+/// иначе файл только выглядит зашифрованным.
+const MIN_BACKUP_PASSWORD: usize = 8;
+
 pub fn export(password: &str) -> Result<String, String> {
+    if password.chars().count() < MIN_BACKUP_PASSWORD {
+        return Err(format!(
+            "Пароль бэкапа — минимум {MIN_BACKUP_PASSWORD} символов: файл содержит пароли серверов"
+        ));
+    }
     let payload = json!({
         "version": 1,
         "exportedAt": chrono_now(),

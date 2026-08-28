@@ -136,7 +136,11 @@ fn os_protect(v: &str) -> Option<String> {
     }
     #[cfg(not(windows))]
     {
-        Some(format!("plain:{}", STANDARD.encode(v.as_bytes())))
+        // Без DPAPI класть секрет в файл нельзя: base64 — не шифрование, а видимость его.
+        // Лучше не сохранить вовсе, чем сохранить открытым текстом. Порт на macOS/Linux
+        // должен подключить сюда Keychain / Secret Service.
+        let _ = v;
+        None
     }
 }
 
@@ -153,6 +157,8 @@ fn encrypt_secret(value: &str) -> Option<String> {
 }
 
 fn decrypt_secret(enc: &str) -> Option<String> {
+    // Префикс `plain:` больше не пишется (см. os_protect) — разбор оставлен только
+    // для чтения профилей, сохранённых старыми сборками.
     let v = if let Some(rest) = enc.strip_prefix("plain:") {
         String::from_utf8(STANDARD.decode(rest).ok()?).ok()?
     } else {

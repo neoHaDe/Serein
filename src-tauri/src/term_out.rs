@@ -4,9 +4,11 @@
 //! BATCH_BYTES. If the UI lags, oldest pending bytes are dropped so the tail stays visible.
 
 use serde_json::json;
+use std::collections::HashMap;
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Notify;
 
@@ -123,6 +125,7 @@ impl TermOut {
             if !chunk.is_empty() {
                 self.emits.fetch_add(1, Ordering::Relaxed);
                 self.bytes.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+                log_write(&id, &chunk);
                 let _ = app.emit("session-data", json!({ "id": id, "data": chunk }));
             }
             if stats && last_stats.elapsed() >= Duration::from_secs(2) {
@@ -132,6 +135,7 @@ impl TermOut {
                 last_stats = Instant::now();
             }
         }
+        log_stop(&id);
         self.finished.store(true, Ordering::Release);
     }
 
@@ -176,5 +180,197 @@ fn take_utf8(buf: &mut Vec<u8>) -> String {
                 s
             }
         }
+    }
+}
+
+// ---------- Логирование сессии в файл ----------
+//
+// Точка одна для SSH и локального терминала: пишем то, что уходит в xterm, но без
+// ANSI-кодов — иначе лог невозможно читать глазами. Состояние разбора escape-последо-
+// вательностей живёт между пачками, потому что пачка может оборваться посреди кода.
+
+struct LogSink {
+    file: std::fs::File,
+    path: String,
+    esc: Esc,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Esc {
+    None,
+    Start,
+    Csi,
+    Osc,
+    OscEsc,
+}
+
+fn logs() -> &'static Mutex<HashMap<String, LogSink>> {
+    static LOGS: OnceLock<Mutex<HashMap<String, LogSink>>> = OnceLock::new();
+    LOGS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn strip_ansi_into(state: &mut Esc, s: &str, out: &mut String) {
+    for ch in s.chars() {
+        match *state {
+            Esc::None => match ch {
+                '\x1b' => *state = Esc::Start,
+                '\r' => {}
+                '\n' | '\t' => out.push(ch),
+                c if !c.is_control() => out.push(c),
+                _ => {}
+            },
+            Esc::Start => {
+                *state = match ch {
+                    '[' => Esc::Csi,
+                    ']' => Esc::Osc,
+                    _ => Esc::None,
+                }
+            }
+            Esc::Csi => {
+                if ('\x40'..='\x7e').contains(&ch) {
+                    *state = Esc::None;
+                }
+            }
+            Esc::Osc => match ch {
+                '\x07' => *state = Esc::None,
+                '\x1b' => *state = Esc::OscEsc,
+                _ => {}
+            },
+            Esc::OscEsc => *state = Esc::None,
+        }
+    }
+}
+
+/// Дата-время UTC как `YYYYMMDD-HHMMSS` без зависимости от chrono.
+fn stamp_utc() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0) as i64;
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    // Алгоритм Хиннанта: дни от эпохи → григорианская дата.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{y:04}{m:02}{d:02}-{:02}{:02}{:02}",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
+}
+
+/// Имя файла из заголовка вкладки: только то, что Windows примет как имя файла.
+fn safe_name(title: &str) -> String {
+    let mut cleaned = String::new();
+    for c in title.chars() {
+        if c.is_alphanumeric() || c == '_' || c == '.' {
+            cleaned.push(c);
+        } else if !cleaned.ends_with('-') {
+            cleaned.push('-'); // пробелы, «@», «:» и слэши схлопываем в один дефис
+        }
+    }
+    let short: String = cleaned.trim_matches('-').chars().take(48).collect();
+    let short = short.trim_end_matches('-');
+    if short.is_empty() {
+        "session".into()
+    } else {
+        short.to_string()
+    }
+}
+
+/// Включает запись лога сессии. Возвращает путь к файлу.
+pub fn log_start(id: &str, title: &str) -> Result<String, String> {
+    let dir = crate::store::config_dir().join("logs");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{}-{}.log", safe_name(title), stamp_utc()));
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    let header = format!("# Serein — лог сессии «{title}», начат {} UTC\n", stamp_utc());
+    file.write_all(header.as_bytes()).map_err(|e| e.to_string())?;
+    let path_str = path.to_string_lossy().to_string();
+    logs().lock().map_err(|_| "Реестр логов занят")?.insert(
+        id.to_string(),
+        LogSink { file, path: path_str.clone(), esc: Esc::None },
+    );
+    Ok(path_str)
+}
+
+/// Выключает запись. `true`, если лог действительно писался.
+pub fn log_stop(id: &str) -> bool {
+    match logs().lock() {
+        Ok(mut g) => g.remove(id).is_some(),
+        Err(_) => false,
+    }
+}
+
+pub fn log_active(id: &str) -> bool {
+    logs().lock().map(|g| g.contains_key(id)).unwrap_or(false)
+}
+
+pub fn log_path_of(id: &str) -> Option<String> {
+    logs().lock().ok()?.get(id).map(|s| s.path.clone())
+}
+
+fn log_write(id: &str, chunk: &str) {
+    let Ok(mut g) = logs().lock() else { return };
+    let Some(sink) = g.get_mut(id) else { return };
+    let mut text = String::with_capacity(chunk.len());
+    strip_ansi_into(&mut sink.esc, chunk, &mut text);
+    if text.is_empty() {
+        return;
+    }
+    // Сессию не рвём из-за проблемы с диском: просто прекращаем писать.
+    if sink.file.write_all(text.as_bytes()).is_err() {
+        g.remove(id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{safe_name, strip_ansi_into, Esc};
+
+    #[test]
+    fn strips_colors_and_keeps_text() {
+        let mut st = Esc::None;
+        let mut out = String::new();
+        strip_ansi_into(&mut st, "\x1b[32mhade@srv\x1b[0m:~$ ls\r\n", &mut out);
+        assert_eq!(out, "hade@srv:~$ ls\n");
+    }
+
+    #[test]
+    fn escape_split_across_chunks() {
+        let mut st = Esc::None;
+        let mut out = String::new();
+        strip_ansi_into(&mut st, "ab\x1b[3", &mut out);
+        strip_ansi_into(&mut st, "1mcd", &mut out);
+        assert_eq!(out, "abcd");
+    }
+
+    #[test]
+    fn strips_osc_title() {
+        let mut st = Esc::None;
+        let mut out = String::new();
+        strip_ansi_into(&mut st, "\x1b]0;заголовок\x07готово", &mut out);
+        assert_eq!(out, "готово");
+    }
+
+    #[test]
+    fn file_name_is_safe() {
+        assert_eq!(safe_name("hade@192.168.0.156: /srv"), "hade-192.168.0.156-srv");
+        assert_eq!(safe_name("Локальный терминал"), "Локальный-терминал");
+        assert_eq!(safe_name("///"), "session");
+        assert_eq!(safe_name(""), "session");
     }
 }

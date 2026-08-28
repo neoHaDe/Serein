@@ -18,22 +18,22 @@ const detachedSftp = q.get('sftp') === '1'
 const detachedWorkspace = q.get('workspace') === '1'
 const detachedTab = q.get('detachedTab') === '1'
 
+// Каждое окно — свой процесс рендера, поэтому провайдер настроек нужен в каждом,
+// иначе открепленные панели берут DEFAULT_SETTINGS вместо сохранённых.
 createRoot(document.getElementById('root')!).render(
-  detachedLogs ? (
-    <DockerLogsWindow />
-  ) : detachedSftp ? (
-    <SftpWindow />
-  ) : detachedWorkspace ? (
-    <WorkspaceWindow />
-  ) : detachedTab ? (
-    <SettingsProvider>
+  <SettingsProvider>
+    {detachedLogs ? (
+      <DockerLogsWindow />
+    ) : detachedSftp ? (
+      <SftpWindow />
+    ) : detachedWorkspace ? (
+      <WorkspaceWindow />
+    ) : detachedTab ? (
       <DetachedTabWindow />
-    </SettingsProvider>
-  ) : (
-    <SettingsProvider>
+    ) : (
       <Gate />
-    </SettingsProvider>
-  )
+    )}
+  </SettingsProvider>
 )
 
 if (!detachedLogs && !detachedSftp && !detachedWorkspace && !detachedTab) {

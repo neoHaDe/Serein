@@ -50,11 +50,6 @@ function sub<T>(event: string, cb: (payload: T) => void): () => void {
   }
 }
 
-/** Ошибка для ещё не перенесённых на Rust возможностей. */
-function notYet(feature: string): Promise<never> {
-  return Promise.reject(new Error(`«${feature}» ещё не перенесён в Tauri-сборку`))
-}
-
 export const api = {
   clipboard: {
     write: (text: string): Promise<void> => invoke('clipboard_write', { text }),
@@ -76,9 +71,9 @@ export const api = {
     openLocal: (p: OpenLocalPayload): Promise<string> => invoke('session_open_local', { p }),
     ping: (id: string): Promise<number | null> => invoke('session_ping', { id }),
     monitor: (id: string): Promise<ServerMetrics> => invoke('session_monitor', { id }),
-    logStatus: (_id: string): Promise<boolean> => Promise.resolve(false),
-    logToggle: (_id: string, _title: string): Promise<{ logging: boolean; path?: string }> =>
-      notYet('Логирование сессии'),
+    logStatus: (id: string): Promise<boolean> => invoke('session_log_status', { id }),
+    logToggle: (id: string, title: string): Promise<{ logging: boolean; path?: string }> =>
+      invoke('session_log_toggle', { id, title }),
     write: (id: string, data: string): void => void invoke('session_write', { id, data }),
     resize: (p: ResizePayload): void => void invoke('session_resize', { p }),
     close: (id: string): Promise<void> => invoke('session_close', { id }),
@@ -127,11 +122,9 @@ export const api = {
       invoke('sftp_download_to', { sessionId, remotePath, localDir }),
     startOsDrag: (sessionId: string, remotePaths: string[]): Promise<void> =>
       invoke('sftp_drag_out', { sessionId, remotePaths }),
-    listTransfers: (): Promise<TransferItem[]> => Promise.resolve([]),
     cancelTransfer: (id: string): Promise<void> => invoke('sftp_cancel_transfer', { id }),
     pauseTransfer: (id: string): Promise<void> => invoke('sftp_pause_transfer', { id }),
     resumeTransfer: (id: string): Promise<void> => invoke('sftp_resume_transfer', { id }),
-    clearFinished: (): Promise<TransferItem[]> => Promise.resolve([]),
     readFile: (sessionId: string, remotePath: string): Promise<RemoteFileContent> =>
       invoke('sftp_read_file', { sessionId, remotePath }),
     writeFile: (
@@ -172,8 +165,7 @@ export const api = {
       })
       if (Array.isArray(sel)) return sel
       return typeof sel === 'string' ? [sel] : []
-    },
-    pathForFile: (_file: File): string => ''
+    }
   },
   layout: {
     get: (): Promise<SerializedTab[]> => invoke('layout_get'),

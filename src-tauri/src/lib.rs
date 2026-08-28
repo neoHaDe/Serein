@@ -280,6 +280,23 @@ async fn session_ping(state: State<'_, AppState>, id: String) -> Result<Option<u
 }
 
 #[tauri::command]
+fn session_log_status(id: String) -> bool {
+    term_out::log_active(&id)
+}
+
+/// Включает или выключает запись вывода сессии в файл (`%APPDATA%\serein\logs`).
+#[tauri::command]
+fn session_log_toggle(id: String, title: String) -> Result<Value, String> {
+    if term_out::log_active(&id) {
+        let path = term_out::log_path_of(&id);
+        term_out::log_stop(&id);
+        return Ok(json!({ "logging": false, "path": path }));
+    }
+    let path = term_out::log_start(&id, &title)?;
+    Ok(json!({ "logging": true, "path": path }))
+}
+
+#[tauri::command]
 async fn session_monitor(state: State<'_, AppState>, id: String) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
     let (_c, out, _e) = ssh::exec(&s.handle, monitor::SAMPLE_CMD, Some(s.cancel.subscribe())).await?;
@@ -993,6 +1010,7 @@ pub fn run() {
             localfs_home, localfs_parent, localfs_list, localfs_copy_into,
             session_open_local, session_open_ssh, session_write, session_resize, session_close,
             session_ping, session_monitor, session_ki_respond,
+            session_log_status, session_log_toggle,
             docker_list, docker_action, docker_logs, docker_stats, docker_logs_cancel, docker_container_files,
             docker_compose_list, docker_compose_ps, docker_compose_action, docker_compose_read,
             docker_compose_logs, docker_compose_logs_cancel,
