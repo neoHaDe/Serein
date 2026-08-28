@@ -2140,6 +2140,22 @@ button.secondary:hover {
   gap: 5px;
   white-space: nowrap;
 }
+/* Действие прямо в статус-строке (BREAK у COM-порта). */
+.sb-button {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  padding: 1px 7px;
+  cursor: pointer;
+}
+.sb-button:hover {
+  color: var(--warn);
+  border-color: var(--warn);
+}
 .sb-muted {
   color: var(--muted);
   font-family: var(--font-mono);

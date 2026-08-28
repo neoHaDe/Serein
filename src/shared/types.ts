@@ -85,6 +85,34 @@ export interface ServerConfig {
    * Пусто — перебирать все ключи агента подряд.
    */
   agentKey?: string
+  /** Вид подключения. Отсутствует = `ssh` (все профили, созданные до появления COM). */
+  connection?: 'ssh' | 'serial'
+  /** Параметры линии для `connection: 'serial'`. */
+  serial?: SerialConfig
+}
+
+/** Что открыто в панели терминала. */
+export type PaneKind = 'ssh' | 'local' | 'serial'
+
+/** Параметры линии последовательного порта. */
+export interface SerialConfig {
+  /** Имя порта: `COM3` на Windows, `/dev/ttyUSB0` на Unix. */
+  port: string
+  baudRate: number
+  dataBits?: 5 | 6 | 7 | 8
+  stopBits?: 1 | 2
+  parity?: 'none' | 'odd' | 'even'
+  flowControl?: 'none' | 'software' | 'hardware'
+  /** Часть плат (CH340 и подобные) без поднятых DTR/RTS молчит. */
+  dtr?: boolean
+  rts?: boolean
+}
+
+/** Порт, найденный в системе. */
+export interface SerialPortInfo {
+  port: string
+  kind: 'usb' | 'bluetooth' | 'pci' | 'unknown'
+  label: string
 }
 
 /** Ключ, загруженный в локальный SSH-агент. */
@@ -384,7 +412,7 @@ export interface AppSettings {
 
 export interface SerializedLeaf {
   t: 'leaf'
-  kind: 'ssh' | 'local'
+  kind: PaneKind
   serverId?: string
   title: string
 }

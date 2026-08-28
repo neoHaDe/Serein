@@ -6,12 +6,13 @@ import { SearchAddon } from '@xterm/addon-search'
 import { useSettings } from '../SettingsContext'
 import { getTheme } from '../themes'
 import { shouldPreserveSession } from '../detachedSessions'
+import type { PaneKind } from '../../shared/types'
 
 interface Props {
   paneId: string
   /** Стабильный ключ инстанса (paneId:gen) — переживает split, меняется при reconnect. */
   instanceKey: string
-  kind: 'ssh' | 'local'
+  kind: PaneKind
   serverId?: string
   /** Подключиться к уже открытой сессии (откреплённая вкладка). */
   attachSessionId?: string
@@ -303,7 +304,9 @@ export function TerminalView({
       const openPromise =
         kind === 'ssh' && serverId
           ? window.api.session.openSsh({ serverId, cols, rows })
-          : window.api.session.openLocal({ cols, rows })
+          : kind === 'serial' && serverId
+            ? window.api.session.openSerial({ serverId })
+            : window.api.session.openLocal({ cols, rows })
       openPromise
         .then((id) => {
           e.sessionId = id

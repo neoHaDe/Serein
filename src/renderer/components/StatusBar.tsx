@@ -88,7 +88,31 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
         </span>
       )}
       {isSsh && !server && <span className="sb-item sb-muted">{leaf.title}</span>}
-      {!isSsh && <span className="sb-item sb-muted"><Icon name="desktop" size={13} /> Локальный терминал</span>}
+      {leaf.kind === 'serial' && (
+        <>
+          <span className="sb-item sb-muted">
+            <Icon name="desktop" size={13} />{' '}
+            {server?.serial ? `${server.serial.port} · ${server.serial.baudRate} бод` : 'COM-порт'}
+          </span>
+          {leaf.status === 'connected' && leaf.sessionId && (
+            <button
+              className="sb-item sb-button"
+              title="Послать BREAK в линию — им сетевое железо переводят в recovery"
+              onClick={() => {
+                const id = leaf.sessionId
+                if (id) void window.api.serial.sendBreak(id).catch(() => {})
+              }}
+            >
+              BREAK
+            </button>
+          )}
+        </>
+      )}
+      {leaf.kind === 'local' && (
+        <span className="sb-item sb-muted">
+          <Icon name="desktop" size={13} /> Локальный терминал
+        </span>
+      )}
       {(leaf.status === 'error' || leaf.status === 'reconnecting') && leaf.statusMsg && (
         <span className="sb-item sb-error" title={leaf.statusMsg}>
           {leaf.statusMsg}

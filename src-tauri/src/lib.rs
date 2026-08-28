@@ -14,6 +14,7 @@ mod localfs;
 mod monitor;
 mod pty;
 mod remoteedit;
+mod serial;
 pub mod sftp;
 mod ssh_agent;
 pub mod ssh;
@@ -32,6 +33,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 pub(crate) enum Session {
     Local(pty::LocalSession),
     Ssh(Arc<ssh::SshSession>),
+    Serial(serial::SerialSession),
 }
 
 pub(crate) struct AppState {
@@ -73,6 +75,7 @@ impl AppState {
         if let Some(s) = self.sessions.lock().unwrap().remove(id) {
             match s {
                 Session::Local(l) => l.close(),
+                Session::Serial(p) => p.close(),
                 Session::Ssh(s) => s.shutdown(user),
             }
         }
@@ -206,6 +209,59 @@ fn session_open_local(app: AppHandle, state: State<'_, AppState>, p: Value) -> R
     Ok(id)
 }
 
+/// Доступные COM-порты — для выпадающего списка в форме сервера.
+#[tauri::command]
+fn serial_ports() -> Vec<Value> {
+    serial::list_ports()
+}
+
+/// Открывает сессию по COM-порту. `p.serial` — секция параметров линии из профиля,
+/// либо разовые настройки, если пользователь открывает порт без сохранённого профиля.
+#[tauri::command]
+fn session_open_serial(app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
+    // Профиль сервера имеет приоритет: в нём настройки, которые пользователь сохранил.
+    let cfg = match p.get("serverId").and_then(|v| v.as_str()) {
+        Some(sid) => {
+            let srv = store::servers_list()
+                .into_iter()
+                .find(|s| s.get("id").and_then(|v| v.as_str()) == Some(sid))
+                .ok_or("Сервер не найден")?;
+            srv.get("serial").cloned().ok_or("У профиля нет настроек COM-порта")?
+        }
+        None => p.get("serial").cloned().ok_or("Не заданы настройки COM-порта")?,
+    };
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let sess = serial::open_serial(app.clone(), id.clone(), &cfg)?;
+    state.sessions.lock().unwrap().insert(id.clone(), Session::Serial(sess));
+
+    // Первой строкой показываем параметры линии: с COM-портом молчащий экран
+    // неотличим от неверной скорости, и это первое, что надо проверить.
+    let _ = app.emit(
+        "session-data",
+        json!({ "id": id, "data": format!("\x1b[90m[{}]\x1b[0m\r\n", serial::describe(&cfg)) }),
+    );
+    emit_connected(&app, id.clone());
+    Ok(id)
+}
+
+/// BREAK на линию — им сетевое железо переводят в recovery.
+#[tauri::command]
+fn serial_send_break(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    match state.sessions.lock().unwrap().get(&id) {
+        Some(Session::Serial(p)) => p.send_break(),
+        _ => Err("Это не сессия COM-порта".into()),
+    }
+}
+
+#[tauri::command]
+fn serial_set_signal(state: State<'_, AppState>, id: String, line: String, on: bool) -> Result<(), String> {
+    match state.sessions.lock().unwrap().get(&id) {
+        Some(Session::Serial(p)) => p.set_signal(&line, on),
+        _ => Err("Это не сессия COM-порта".into()),
+    }
+}
+
 #[tauri::command]
 async fn session_open_ssh(app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
     let server_id = p.get("serverId").and_then(|v| v.as_str()).ok_or("Не задан serverId")?;
@@ -242,6 +298,7 @@ fn session_write(state: State<'_, AppState>, id: String, data: String) {
     if let Some(s) = state.sessions.lock().unwrap().get(&id) {
         match s {
             Session::Local(l) => l.write(&data),
+            Session::Serial(p) => p.write(&data),
             Session::Ssh(s) => {
                 let _ = s.tx.send(ssh::SshCmd::Write(data.into_bytes()));
             }
@@ -260,6 +317,8 @@ fn session_resize(state: State<'_, AppState>, p: Value) {
     if let Some(s) = state.sessions.lock().unwrap().get(&id) {
         match s {
             Session::Local(l) => l.resize(cols as u16, rows as u16),
+            // У последовательного порта нет размера окна — ресайз игнорируем.
+            Session::Serial(_) => {}
             Session::Ssh(s) => {
                 let _ = s.tx.send(ssh::SshCmd::Resize(cols as u32, rows as u32));
             }
@@ -1025,6 +1084,7 @@ pub fn run() {
             session_open_local, session_open_ssh, session_write, session_resize, session_close,
             session_ping, session_monitor, session_ki_respond,
             session_log_status, session_log_toggle, ssh_agent_identities,
+            serial_ports, session_open_serial, serial_send_break, serial_set_signal,
             docker_list, docker_action, docker_logs, docker_stats, docker_logs_cancel, docker_container_files,
             docker_compose_list, docker_compose_ps, docker_compose_action, docker_compose_read,
             docker_compose_logs, docker_compose_logs_cancel,

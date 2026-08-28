@@ -1,10 +1,10 @@
-import type { SessionStatus, SerializedPane } from '../shared/types'
+import type { SessionStatus, SerializedPane, PaneKind } from '../shared/types'
 
-/** Лист дерева — один терминал (SSH или локальный). */
+/** Лист дерева — один терминал (SSH, локальный или COM-порт). */
 export interface PaneLeaf {
   type: 'leaf'
   id: string
-  kind: 'ssh' | 'local'
+  kind: PaneKind
   serverId?: string
   title: string
   sessionId?: string
@@ -30,7 +30,7 @@ function uid(): string {
   return crypto.randomUUID()
 }
 
-export function makeLeaf(kind: 'ssh' | 'local', title: string, serverId?: string): PaneLeaf {
+export function makeLeaf(kind: PaneKind, title: string, serverId?: string): PaneLeaf {
   return { type: 'leaf', id: uid(), kind, serverId, title, status: 'connecting', gen: 0 }
 }
 

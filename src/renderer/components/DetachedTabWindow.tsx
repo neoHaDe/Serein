@@ -19,6 +19,7 @@ import { ServicePanel } from './ServicePanel'
 import { TunnelPanel } from './TunnelPanel'
 import { AuxReattachButton } from './AuxReattachButton'
 import { Icon } from './Icon'
+import type { PaneKind } from '../../shared/types'
 
 const paneStack: CSSProperties = {
   minWidth: 0,
@@ -34,7 +35,7 @@ export async function openDetachedTabWindow(opts: {
   title: string
   workspace: WorkspaceTool
   sftpOpen: boolean
-  kind: 'ssh' | 'local'
+  kind: PaneKind
 }): Promise<void> {
   const label = `tab-${sanitizeWindowLabel(opts.sessionId)}`
   await openAuxWindow({
@@ -61,7 +62,9 @@ export function DetachedTabWindow(): JSX.Element {
   const sessionId = q.get('sessionId') ?? ''
   const serverId = q.get('serverId') ?? ''
   const title = q.get('title') ?? 'Terminal'
-  const kind = q.get('kind') === 'local' ? 'local' : 'ssh'
+  const kindParam = q.get('kind')
+  const kind: PaneKind =
+    kindParam === 'local' ? 'local' : kindParam === 'serial' ? 'serial' : 'ssh'
   const initialTool = parseWorkspaceTool(q.get('workspace'))
   const initialSftp = q.get('sftpOpen') === '1'
   const reattachingRef = useRef(false)

@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { WorkspaceTool } from '../shared/types'
 import { markSessionDetached } from './detachedSessions'
+import type { PaneKind } from '../shared/types'
 
 export interface ReattachTabPayload {
   sessionId: string
@@ -10,7 +11,7 @@ export interface ReattachTabPayload {
   title: string
   workspace: WorkspaceTool
   sftpOpen: boolean
-  kind: 'ssh' | 'local'
+  kind: PaneKind
 }
 
 export interface ReattachWorkspacePayload {

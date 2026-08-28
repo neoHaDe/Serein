@@ -372,7 +372,7 @@ export default function App(): JSX.Element {
   }, [scheduleReconnect])
 
   const openServerTab = useCallback((server: ServerConfig) => {
-    const leaf = makeLeaf('ssh', server.name, server.id)
+    const leaf = makeLeaf(server.connection === 'serial' ? 'serial' : 'ssh', server.name, server.id)
     const key = uid()
     setTabs((prev) => [...prev, { key, title: server.name, kind: 'terminal', root: leaf, activePaneId: leaf.id, sftpOpen: false, workspace: 'terminal' }])
     setActiveKey(key)

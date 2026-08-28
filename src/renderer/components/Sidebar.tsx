@@ -27,6 +27,15 @@ interface Props {
   statuses?: Record<string, 'connected' | 'connecting' | 'reconnecting' | 'error'>
 }
 
+/** Подпись под именем: у SSH — user@host, у COM-порта — порт и скорость. */
+function serverSubtitle(s: ServerConfig): string {
+  if (s.connection === 'serial') {
+    const cfg = s.serial
+    return cfg ? `${cfg.port} · ${cfg.baudRate} бод` : 'COM-порт не настроен'
+  }
+  return `${s.username}@${s.host}`
+}
+
 export function Sidebar({ servers, onConnect, onOpenLocal, onNew, onEdit, onDelete, onOpenSettings, onOpenKeyGen, onImport, width, collapsed, onToggleCollapse, statuses }: Props): JSX.Element {
   const [filter, setFilter] = useState('')
   const [importMenu, setImportMenu] = useState(false)
@@ -38,7 +47,8 @@ export function Sidebar({ servers, onConnect, onOpenLocal, onNew, onEdit, onDele
         !q ||
         s.name.toLowerCase().includes(q) ||
         s.host.toLowerCase().includes(q) ||
-        s.username.toLowerCase().includes(q)
+        s.username.toLowerCase().includes(q) ||
+        (s.serial?.port ?? '').toLowerCase().includes(q)
     )
     const map = new Map<string, ServerConfig[]>()
     for (const s of filtered) {
@@ -123,7 +133,7 @@ export function Sidebar({ servers, onConnect, onOpenLocal, onNew, onEdit, onDele
                 className="server-item"
                 onClick={collapsed ? () => onConnect(s) : undefined}
                 onDoubleClick={() => onConnect(s)}
-                title={`${s.name} — ${s.username}@${s.host}:${s.port}`}
+                title={`${s.name} — ${serverSubtitle(s)}`}
               >
                 <span className="dot-wrap" title={statuses?.[s.id] ? `Статус: ${statuses[s.id]}` : undefined}>
                   <span className="dot" style={{ background: s.color || '#7aa2f7' }} />
@@ -141,9 +151,7 @@ export function Sidebar({ servers, onConnect, onOpenLocal, onNew, onEdit, onDele
                 <>
                 <div className="server-info">
                   <div className="server-name">{s.name}</div>
-                  <div className="server-host">
-                    {s.username}@{s.host}
-                  </div>
+                  <div className="server-host">{serverSubtitle(s)}</div>
                 </div>
                 <div className="server-actions">
                   <button className="mini" title="Подключиться" onClick={() => onConnect(s)}>

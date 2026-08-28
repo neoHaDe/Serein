@@ -8,6 +8,8 @@ import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialo
 import type {
   ServerConfig,
   AgentIdentitiesResult,
+  SerialConfig,
+  SerialPortInfo,
   OpenSshPayload,
   OpenLocalPayload,
   ResizePayload,
@@ -71,9 +73,19 @@ export const api = {
     /** Ключи локального SSH-агента. `ok: false` — агент не запущен, не ошибка вызова. */
     identities: (): Promise<AgentIdentitiesResult> => invoke('ssh_agent_identities')
   },
+  serial: {
+    ports: (): Promise<SerialPortInfo[]> => invoke('serial_ports'),
+    /** BREAK на линию (recovery-режим сетевого железа). */
+    sendBreak: (id: string): Promise<void> => invoke('serial_send_break', { id }),
+    setSignal: (id: string, line: 'dtr' | 'rts', on: boolean): Promise<void> =>
+      invoke('serial_set_signal', { id, line, on })
+  },
   session: {
     openSsh: (p: OpenSshPayload): Promise<string> => invoke('session_open_ssh', { p }),
     openLocal: (p: OpenLocalPayload): Promise<string> => invoke('session_open_local', { p }),
+    /** COM-порт: по профилю сервера (`serverId`) либо разовыми настройками (`serial`). */
+    openSerial: (p: { serverId?: string; serial?: SerialConfig }): Promise<string> =>
+      invoke('session_open_serial', { p }),
     ping: (id: string): Promise<number | null> => invoke('session_ping', { id }),
     monitor: (id: string): Promise<ServerMetrics> => invoke('session_monitor', { id }),
     logStatus: (id: string): Promise<boolean> => invoke('session_log_status', { id }),

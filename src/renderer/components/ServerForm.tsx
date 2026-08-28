@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import type {
   AgentIdentity,
   AuthType,
+  SerialConfig,
+  SerialPortInfo,
   ServerConfig,
   TunnelConfig,
   TunnelType
@@ -123,6 +125,19 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
   const [tunnels, setTunnels] = useState<TunnelConfig[]>(initial?.tunnels ?? [])
   const [addingTunnel, setAddingTunnel] = useState(false)
   const [executeOnConnect, setExecuteOnConnect] = useState(initial?.executeOnConnect ?? '')
+  const [connection, setConnection] = useState<'ssh' | 'serial'>(initial?.connection ?? 'ssh')
+  const [serial, setSerial] = useState<SerialConfig>(
+    initial?.serial ?? {
+      port: '',
+      baudRate: 115200,
+      dataBits: 8,
+      stopBits: 1,
+      parity: 'none',
+      flowControl: 'none'
+    }
+  )
+  const [comPorts, setComPorts] = useState<SerialPortInfo[]>([])
+  const patchSerial = (patch: Partial<SerialConfig>): void => setSerial((s) => ({ ...s, ...patch }))
   const [agentForward, setAgentForward] = useState(initial?.agentForward ?? false)
   const [agentKey, setAgentKey] = useState(initial?.agentKey ?? '')
   const [agentKeys, setAgentKeys] = useState<AgentIdentity[]>([])
@@ -151,18 +166,43 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
     if (authType === 'agent') void loadAgentKeys()
   }, [authType])
 
+  const loadComPorts = async (): Promise<void> => {
+    try {
+      setComPorts(await window.api.serial.ports())
+    } catch {
+      setComPorts([])
+    }
+  }
+
+  useEffect(() => {
+    if (connection === 'serial') void loadComPorts()
+  }, [connection])
+
   const submit = (): void => {
-    if (!name.trim() || !host.trim() || !username.trim()) {
-      alert('Заполните название, хост и пользователя')
+    if (!name.trim()) {
+      alert('Заполните название')
+      return
+    }
+    // У COM-порта нет ни хоста, ни пользователя — требуем только имя порта.
+    if (connection === 'serial') {
+      if (!serial.port.trim()) {
+        alert('Выберите COM-порт')
+        return
+      }
+    } else if (!host.trim() || !username.trim()) {
+      alert('Заполните хост и пользователя')
       return
     }
     const cfg: ServerConfig = {
       id: initial?.id ?? '',
       name: name.trim(),
+      // Поля SSH сохраняем как есть: если профиль переключат обратно, настройки не пропадут.
       host: host.trim(),
       port: Number(port) || 22,
-      username: username.trim(),
+      username: username.trim() || 'root',
       authType,
+      connection,
+      serial: connection === 'serial' ? { ...serial, port: serial.port.trim() } : initial?.serial,
       group: group.trim() || undefined,
       color,
       proxyJump: proxyJump || undefined,
@@ -193,37 +233,181 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Прод-сервер" autoFocus />
         </label>
 
-        <div className="row">
-          <label style={{ flex: 3 }}>
-            Хост
-            <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="192.168.1.10 / example.com" />
-          </label>
-          <label style={{ flex: 1 }}>
-            Порт
-            <input type="number" value={port} onChange={(e) => setPort(Number(e.target.value))} />
-          </label>
-        </div>
-
-        <div className="row">
-          <label style={{ flex: 2 }}>
-            Пользователь
-            <input value={username} onChange={(e) => setUsername(e.target.value)} />
-          </label>
-          <label style={{ flex: 2 }}>
-            Группа
-            <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Продакшен" />
-          </label>
-        </div>
-
         <label>
-          Аутентификация
-          <select value={authType} onChange={(e) => setAuthType(e.target.value as AuthType)}>
-            <option value="password">Пароль</option>
-            <option value="key">Приватный ключ</option>
-            <option value="agent">SSH-агент</option>
+          Тип подключения
+          <select
+            value={connection}
+            onChange={(e) => setConnection(e.target.value as 'ssh' | 'serial')}
+          >
+            <option value="ssh">SSH</option>
+            <option value="serial">Последовательный порт (COM)</option>
           </select>
         </label>
 
+        {connection === 'serial' ? (
+          <>
+            <div className="row">
+              <label style={{ flex: 3 }}>
+                <span className="agent-label">
+                  COM-порт
+                  <button type="button" className="mini" onClick={() => void loadComPorts()}>
+                    Обновить
+                  </button>
+                </span>
+                <select value={serial.port} onChange={(e) => patchSerial({ port: e.target.value })}>
+                  <option value="">— Выберите порт —</option>
+                  {comPorts.map((p) => (
+                    <option key={p.port} value={p.port}>
+                      {p.port}
+                      {p.label ? ` · ${p.label}` : ''}
+                    </option>
+                  ))}
+                  {/* Порт мог быть сохранён при воткнутом переходнике, а сейчас его нет. */}
+                  {serial.port && !comPorts.some((p) => p.port === serial.port) && (
+                    <option value={serial.port}>{serial.port} (сейчас не подключён)</option>
+                  )}
+                </select>
+              </label>
+              <label style={{ flex: 2 }}>
+                Скорость, бод
+                <input
+                  type="number"
+                  value={serial.baudRate}
+                  onChange={(e) => patchSerial({ baudRate: Number(e.target.value) || 115200 })}
+                  list="baud-presets"
+                />
+                <datalist id="baud-presets">
+                  {[9600, 19200, 38400, 57600, 115200, 230400, 921600].map((b) => (
+                    <option key={b} value={b} />
+                  ))}
+                </datalist>
+              </label>
+            </div>
+
+            {comPorts.length === 0 && (
+              <div className="agent-hint">
+                Портов не найдено. Воткните переходник USB-UART или проверьте драйвер.
+              </div>
+            )}
+
+            <div className="row">
+              <label style={{ flex: 1 }}>
+                Биты данных
+                <select
+                  value={serial.dataBits ?? 8}
+                  onChange={(e) => patchSerial({ dataBits: Number(e.target.value) as 5 | 6 | 7 | 8 })}
+                >
+                  {[8, 7, 6, 5].map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ flex: 1 }}>
+                Стоп-биты
+                <select
+                  value={serial.stopBits ?? 1}
+                  onChange={(e) => patchSerial({ stopBits: Number(e.target.value) as 1 | 2 })}
+                >
+                  <option value={1}>1</option>
+                  <option value={2}>2</option>
+                </select>
+              </label>
+              <label style={{ flex: 1 }}>
+                Чётность
+                <select
+                  value={serial.parity ?? 'none'}
+                  onChange={(e) =>
+                    patchSerial({ parity: e.target.value as 'none' | 'odd' | 'even' })
+                  }
+                >
+                  <option value="none">Нет</option>
+                  <option value="even">Чётная</option>
+                  <option value="odd">Нечётная</option>
+                </select>
+              </label>
+              <label style={{ flex: 1 }}>
+                Управление потоком
+                <select
+                  value={serial.flowControl ?? 'none'}
+                  onChange={(e) =>
+                    patchSerial({
+                      flowControl: e.target.value as 'none' | 'software' | 'hardware'
+                    })
+                  }
+                >
+                  <option value="none">Нет</option>
+                  <option value="hardware">RTS/CTS</option>
+                  <option value="software">XON/XOFF</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="row">
+              <label className="checkbox-row" style={{ flex: 1 }}>
+                <input
+                  type="checkbox"
+                  checked={serial.dtr ?? false}
+                  onChange={(e) => patchSerial({ dtr: e.target.checked })}
+                />
+                Поднять DTR
+              </label>
+              <label className="checkbox-row" style={{ flex: 1 }}>
+                <input
+                  type="checkbox"
+                  checked={serial.rts ?? false}
+                  onChange={(e) => patchSerial({ rts: e.target.checked })}
+                />
+                Поднять RTS
+              </label>
+              <label style={{ flex: 2 }}>
+                Группа
+                <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Стойка 1" />
+              </label>
+            </div>
+
+            <div className="agent-hint">
+              Типовая консоль сетевого железа — 9600 8N1 без управления потоком. Платы на CH340
+              и подобных часто требуют поднятых DTR/RTS.
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="row">
+              <label style={{ flex: 3 }}>
+                Хост
+                <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="192.168.1.10 / example.com" />
+              </label>
+              <label style={{ flex: 1 }}>
+                Порт
+                <input type="number" value={port} onChange={(e) => setPort(Number(e.target.value))} />
+              </label>
+            </div>
+
+            <div className="row">
+              <label style={{ flex: 2 }}>
+                Пользователь
+                <input value={username} onChange={(e) => setUsername(e.target.value)} />
+              </label>
+              <label style={{ flex: 2 }}>
+                Группа
+                <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Продакшен" />
+              </label>
+            </div>
+
+            <label>
+              Аутентификация
+              <select value={authType} onChange={(e) => setAuthType(e.target.value as AuthType)}>
+                <option value="password">Пароль</option>
+                <option value="key">Приватный ключ</option>
+                <option value="agent">SSH-агент</option>
+              </select>
+            </label>
+          </>
+        )}
+
+        {/* Пароли, ключи, jump-хост и туннели относятся только к SSH. */}
+        {connection === 'ssh' && (
+          <>
         {authType === 'password' && (
           <label>
             Пароль
@@ -357,6 +541,8 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
             />
           )}
         </div>
+          </>
+        )}
 
         <label>
           Цвет
