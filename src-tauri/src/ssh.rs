@@ -3,11 +3,12 @@
 //! SFTP и туннели.
 
 use crate::knownhosts;
+use crate::ssh_agent;
 use russh::client::{self, Handler, KeyboardInteractiveAuthResponse, Msg, Session};
-use russh::{Channel, ChannelMsg};
+use russh::{Channel, ChannelId, ChannelMsg, CryptoVec};
 use russh_keys::{load_secret_key, PublicKeyBase64};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
@@ -104,6 +105,9 @@ pub struct ClientHandler {
     host_id: String,
     remote_forwards: RemoteForwards,
     cancel: CancelRx,
+    /// Каналы agent forwarding → локальный ssh-agent.
+    agent_forward_channels: Arc<Mutex<HashSet<ChannelId>>>,
+    agent_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[async_trait::async_trait]
@@ -149,6 +153,43 @@ impl Handler for ClientHandler {
         }
         Ok(())
     }
+
+    /// Проброс SSH-агента: сервер открыл канал auth-agent@openssh.com.
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: ChannelId,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.agent_forward_channels.lock().unwrap().insert(channel);
+        Ok(())
+    }
+
+    /// Данные с канала agent forwarding → локальный ssh-agent → ответ обратно.
+    async fn data(
+        &mut self,
+        channel: ChannelId,
+        data: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if !self.agent_forward_channels.lock().unwrap().contains(&channel) {
+            return Ok(());
+        }
+        let _guard = self.agent_lock.lock().await;
+        match ssh_agent::agent_roundtrip(data).await {
+            Ok(reply) => session.data(channel, CryptoVec::from(reply)),
+            Err(_) => session.close(channel),
+        }
+        Ok(())
+    }
+
+    async fn channel_close(
+        &mut self,
+        channel: ChannelId,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.agent_forward_channels.lock().unwrap().remove(&channel);
+        Ok(())
+    }
 }
 
 fn field<'a>(server: &'a Value, key: &str) -> Option<&'a str> {
@@ -178,6 +219,14 @@ async fn request_ki(app: &AppHandle, ki: &KiBridge, id: &str, prompts: Vec<Value
 }
 
 /// Аутентификация одного хопа. Для целевого сервера (есть `id`/`ki`) — с поддержкой 2FA.
+fn wants_agent_forward(server: &Value) -> bool {
+    server
+        .get("agentForward")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || field(server, "authType") == Some("agent")
+}
+
 async fn authenticate(
     handle: &mut client::Handle<ClientHandler>,
     server: &Value,
@@ -198,6 +247,7 @@ async fn authenticate(
                 .await
                 .map_err(|e| e.to_string())
         }
+        "agent" => ssh_agent::authenticate_with_agent(handle, &user).await,
         _ => {
             // password (+ фолбэк на keyboard-interactive/2FA для целевого сервера).
             let pass = field(server, "password").unwrap_or("");
@@ -252,6 +302,8 @@ async fn connect_one(
         host_id: knownhosts::host_id(host, port_of(server)),
         remote_forwards: rf,
         cancel,
+        agent_forward_channels: Arc::new(Mutex::new(HashSet::new())),
+        agent_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
     let config = ssh_client_config();
     // Таймаут подключения: к офлайн/firewall-хосту (DROP без TCP-reset) connect иначе
@@ -318,6 +370,8 @@ pub async fn connect_chain(
             host_id: knownhosts::host_id(nhost, port_of(next)),
             remote_forwards: remote_forwards.clone(),
             cancel: cancel_rx.clone(),
+            agent_forward_channels: Arc::new(Mutex::new(HashSet::new())),
+            agent_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
         let mut nh = client::connect_stream(config, channel.into_stream(), handler)
             .await
@@ -346,6 +400,9 @@ pub async fn connect_chain(
         .request_pty(false, "xterm-256color", cols, rows, 0, 0, &[])
         .await
         .map_err(|e| e.to_string())?;
+    if wants_agent_forward(&target) {
+        channel.agent_forward(true).await.map_err(|e| e.to_string())?;
+    }
     channel.request_shell(true).await.map_err(|e| e.to_string())?;
 
     let handle: SharedHandle = Arc::new(tokio::sync::Mutex::new(cur));
@@ -436,6 +493,8 @@ pub async fn connect_client(chain: Vec<Value>) -> Result<SharedHandle, String> {
             host_id: knownhosts::host_id(nhost, port_of(next)),
             remote_forwards: remote_forwards.clone(),
             cancel: cancel_rx.clone(),
+            agent_forward_channels: Arc::new(Mutex::new(HashSet::new())),
+            agent_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
         let mut nh = client::connect_stream(config, channel.into_stream(), handler)
             .await

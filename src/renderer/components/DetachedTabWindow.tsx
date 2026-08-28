@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { ServerConfig, WorkspaceTool } from '../../shared/types'
 import { parseWorkspaceTool } from '../../shared/types'
@@ -19,6 +19,14 @@ import { ServicePanel } from './ServicePanel'
 import { TunnelPanel } from './TunnelPanel'
 import { AuxReattachButton } from './AuxReattachButton'
 import { Icon } from './Icon'
+
+const paneStack: CSSProperties = {
+  minWidth: 0,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'hidden'
+}
 
 export async function openDetachedTabWindow(opts: {
   sessionId: string
@@ -57,6 +65,7 @@ export function DetachedTabWindow(): JSX.Element {
   const initialTool = parseWorkspaceTool(q.get('workspace'))
   const initialSftp = q.get('sftpOpen') === '1'
   const reattachingRef = useRef(false)
+  const slotRef = useRef<HTMLDivElement>(null)
 
   const [servers, setServers] = useState<ServerConfig[]>([])
   const [tool, setTool] = useState<WorkspaceTool>(initialTool)
@@ -98,7 +107,11 @@ export function DetachedTabWindow(): JSX.Element {
 
   const startSftpResize = useCallback((e: ReactMouseEvent) => {
     e.preventDefault()
-    const onMove = (ev: MouseEvent): void => setSftpWidth(Math.max(260, Math.min(820, window.innerWidth - ev.clientX)))
+    const slot = slotRef.current
+    const onMove = (ev: MouseEvent): void => {
+      const right = slot?.getBoundingClientRect().right ?? window.innerWidth
+      setSftpWidth(Math.max(260, Math.min(820, right - ev.clientX)))
+    }
     const onUp = (): void => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
@@ -111,6 +124,26 @@ export function DetachedTabWindow(): JSX.Element {
 
   const showRail = kind === 'ssh' && !!serverId
   const canSftp = kind === 'ssh' && !!sessionId
+  const showSftp = tool === 'terminal' && sftpOpen && !!sessionId
+
+  const bodyStyle: CSSProperties = {
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+    overflow: 'hidden',
+    display: 'grid',
+    gridTemplateRows: 'minmax(0, 1fr)',
+    gridTemplateColumns: showRail ? 'auto minmax(0, 1fr)' : 'minmax(0, 1fr)'
+  }
+
+  const slotStyle: CSSProperties = {
+    minWidth: 0,
+    minHeight: 0,
+    overflow: 'hidden',
+    display: 'grid',
+    gridTemplateRows: 'minmax(0, 1fr)',
+    gridTemplateColumns: showSftp ? `minmax(0, 1fr) 5px ${sftpWidth}px` : 'minmax(0, 1fr)'
+  }
 
   const doReattach = (): void => {
     reattachingRef.current = true
@@ -148,7 +181,7 @@ export function DetachedTabWindow(): JSX.Element {
           </>
         }
       />
-      <div className="detached-tab-body">
+      <div className="detached-tab-body" style={bodyStyle}>
         {showRail && (
           <WorkspaceRail
             title={title}
@@ -160,36 +193,46 @@ export function DetachedTabWindow(): JSX.Element {
             onEditServer={() => {}}
           />
         )}
-        <div className="detached-tab-main">
-          <div className="pane-area" style={{ display: tool === 'terminal' ? 'flex' : 'none' }}>
-            <div className="pane pane-active">
-              <TerminalView
-                key={`detached:${sessionId}`}
-                instanceKey={`detached:${sessionId}`}
-                paneId="detached-pane"
-                kind={kind}
-                serverId={serverId || undefined}
-                attachSessionId={sessionId}
-                active
-                focused
-                onReady={() => {}}
-              />
-            </div>
-          </div>
-          {tool === 'terminal' && sftpOpen && sessionId && (
+        <div ref={slotRef} className="detached-tab-slot" style={slotStyle}>
+          {tool === 'terminal' ? (
             <>
-              <div className="sftp-resizer" onMouseDown={startSftpResize} />
-              <SftpPanel
-                sessionId={sessionId}
-                serverId={serverId || undefined}
-                width={sftpWidth}
-                closing={false}
-                onClose={() => setSftpOpen(false)}
-              />
+              <div className="pane-area" style={{ ...paneStack, gridColumn: 1 }}>
+                <div className="pane pane-active" style={paneStack}>
+                  <TerminalView
+                    key={`detached:${sessionId}`}
+                    instanceKey={`detached:${sessionId}`}
+                    paneId="detached-pane"
+                    kind={kind}
+                    serverId={serverId || undefined}
+                    attachSessionId={sessionId}
+                    active
+                    focused
+                    onReady={() => {}}
+                  />
+                </div>
+              </div>
+              {showSftp && (
+                <>
+                  <div
+                    className="sftp-resizer"
+                    style={{ gridColumn: 2, width: 5, minHeight: 0 }}
+                    onMouseDown={startSftpResize}
+                  />
+                  <div style={{ ...paneStack, gridColumn: 3 }}>
+                    <SftpPanel
+                      sessionId={sessionId}
+                      serverId={serverId || undefined}
+                      width={sftpWidth}
+                      closing={false}
+                      fill
+                      onClose={() => setSftpOpen(false)}
+                    />
+                  </div>
+                </>
+              )}
             </>
-          )}
-          {showRail && tool !== 'terminal' && (
-            <div className="ws-body">
+          ) : (
+            <div className="ws-body" style={paneStack}>
               {tool === 'docker' && (
                 <DockerPanel sessionId={sessionId} serverId={serverId || undefined} docked onClose={() => setTool('terminal')} />
               )}

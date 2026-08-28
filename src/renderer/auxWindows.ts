@@ -78,18 +78,19 @@ export async function openAuxWindow(opts: {
   y?: number
   persist?: AuxPersistMeta
 }): Promise<void> {
+  const q = new URLSearchParams(opts.query)
+  if (import.meta.env.DEV) q.set('_cb', String(Date.now()))
+  const url = new URL(window.location.href)
+  url.search = q.toString()
+  url.hash = ''
   const existing = await WebviewWindow.getByLabel(opts.label)
   if (existing) {
     try {
-      if (await existing.isMinimized()) {
-        await invoke('windows_restore_minimized')
-      }
+      await existing.close()
     } catch {
       /* */
     }
-    await invoke('windows_raise_group', { focused: opts.label }).catch(() => {})
-    await existing.setFocus()
-    return
+    await new Promise((r) => window.setTimeout(r, 80))
   }
   let auxInTaskbar = false
   try {
@@ -97,10 +98,6 @@ export async function openAuxWindow(opts: {
   } catch {
     /* */
   }
-  const q = new URLSearchParams(opts.query)
-  const url = new URL(window.location.href)
-  url.search = q.toString()
-  url.hash = ''
   const w = new WebviewWindow(opts.label, {
     url: url.href,
     title: opts.title,

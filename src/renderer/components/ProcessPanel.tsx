@@ -73,7 +73,7 @@ export function ProcessPanel({
           </button>
         </div>
       </div>
-      <MonitorMetrics sessionId={sessionId} compact />
+      <MonitorMetrics sessionId={sessionId} variant="dashboard" />
       <div className="ws-toolbar">
         <input
           className="search"
@@ -114,8 +114,14 @@ export function ProcessPanel({
                 <tr key={r.pid}>
                   <td className="mono">{r.pid}</td>
                   <td>{r.user}</td>
-                  <td className="mono">{r.cpu.toFixed(1)}</td>
-                  <td className="mono">{r.mem.toFixed(1)}</td>
+                  <td className="mono ws-metric-cell">
+                    <span className="ws-metric-num">{r.cpu.toFixed(1)}</span>
+                    <span className="ws-metric-bar" style={{ width: `${Math.min(100, r.cpu)}%` }} />
+                  </td>
+                  <td className="mono ws-metric-cell">
+                    <span className="ws-metric-num">{r.mem.toFixed(1)}</span>
+                    <span className="ws-metric-bar mem" style={{ width: `${Math.min(100, r.mem)}%` }} />
+                  </td>
                   <td className="mono">{r.stat}</td>
                   <td className="ws-cmd" title={r.cmd}>
                     {r.cmd}

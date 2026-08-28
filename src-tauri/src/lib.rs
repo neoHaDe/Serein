@@ -15,6 +15,7 @@ mod monitor;
 mod pty;
 mod remoteedit;
 pub mod sftp;
+mod ssh_agent;
 pub mod ssh;
 pub mod store;
 mod term_out;

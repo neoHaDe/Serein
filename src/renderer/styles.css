@@ -1483,6 +1483,9 @@ html.aux-win #root {
   border-radius: var(--r-pill);
   transition: width 0.15s;
 }
+.bar-fill.tone-ok { background: var(--green); }
+.bar-fill.tone-warn { background: var(--warn); }
+.bar-fill.tone-bad { background: var(--danger); }
 
 /* ---- SFTP: двухпанельный режим, drag&drop, очередь, редактирование ---- */
 .mini.on {
@@ -3489,6 +3492,238 @@ button.secondary:hover {
   padding: 0;
   gap: 8px;
 }
+
+/* Dashboard метрик — вкладка Processes */
+.ws-metrics.dashboard {
+  padding: 12px 14px 10px;
+  background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.05) 0%, transparent 100%);
+}
+.ws-metrics-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.srv-live {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--green);
+  opacity: 0.75;
+}
+.srv-live.ping {
+  opacity: 1;
+  animation: srvLivePing 0.6s ease-out;
+}
+@keyframes srvLivePing {
+  0% { opacity: 0.4; transform: scale(0.95); }
+  50% { opacity: 1; }
+  100% { opacity: 0.75; transform: none; }
+}
+.srv-dash {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.srv-dash-gauges {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 10px;
+  align-items: stretch;
+}
+.srv-gauge-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+.srv-gauge-card.tone-warn { border-color: rgba(var(--warn-rgb), 0.45); }
+.srv-gauge-card.tone-bad { border-color: rgba(var(--danger-rgb), 0.5); }
+.srv-gauge-ring {
+  --pct: 0;
+  position: relative;
+  flex-shrink: 0;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--gauge-color, var(--green)) calc(var(--pct) * 1%),
+    rgba(var(--fg-rgb), 0.07) 0
+  );
+}
+.srv-gauge-card.tone-ok .srv-gauge-ring { --gauge-color: var(--green); }
+.srv-gauge-card.tone-warn .srv-gauge-ring { --gauge-color: var(--warn); }
+.srv-gauge-card.tone-bad .srv-gauge-ring { --gauge-color: var(--danger); }
+.srv-gauge-ring::after {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: var(--panel);
+}
+.srv-gauge-val {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  z-index: 1;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text);
+}
+.srv-gauge-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.srv-gauge-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+}
+.srv-gauge-detail {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.srv-dash-summary {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  min-width: 118px;
+  padding: 8px 10px;
+  background: var(--bg-alt);
+  border: 1px dashed var(--border);
+  border-radius: var(--r);
+}
+.srv-dash-summary-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.srv-dash-summary-k {
+  font-size: 10px;
+  color: var(--muted);
+}
+.srv-dash-summary-v {
+  font-size: 11px;
+  color: var(--text);
+}
+.srv-dash-summary-v.tone-warn { color: var(--warn); }
+.srv-dash-summary-v.tone-bad { color: var(--danger); }
+.srv-load-block {
+  padding: 10px 12px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.srv-load-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+.srv-load-hint {
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--muted);
+}
+.srv-load-row {
+  display: grid;
+  grid-template-columns: 42px 1fr 44px auto;
+  gap: 8px;
+  align-items: center;
+}
+.srv-load-label {
+  font-size: 10px;
+  color: var(--muted);
+}
+.srv-load-track {
+  position: relative;
+  height: 7px;
+  background: rgba(var(--fg-rgb), 0.07);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+.srv-load-fill {
+  height: 100%;
+  border-radius: var(--r-pill);
+  transition: width 0.25s ease-out;
+}
+.srv-load-fill.tone-ok { background: var(--green); }
+.srv-load-fill.tone-warn { background: var(--warn); }
+.srv-load-fill.tone-bad { background: var(--danger); }
+.srv-load-num {
+  font-size: 11px;
+  text-align: right;
+  color: var(--text);
+}
+.srv-load-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  background: rgba(var(--fg-rgb), 0.06);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.srv-load-tag.tone-ok { color: var(--green); background: rgba(var(--green-rgb), 0.12); }
+.srv-load-tag.tone-warn { color: var(--warn); background: rgba(var(--warn-rgb), 0.12); }
+.srv-load-tag.tone-bad { color: var(--danger); background: rgba(var(--danger-rgb), 0.12); }
+
+.ws-metric-cell {
+  position: relative;
+  min-width: 52px;
+}
+.ws-metric-num {
+  position: relative;
+  z-index: 1;
+}
+.ws-metric-bar {
+  position: absolute;
+  left: 0;
+  bottom: 3px;
+  height: 3px;
+  max-width: 100%;
+  border-radius: var(--r-pill);
+  background: rgba(var(--accent-rgb), 0.35);
+  pointer-events: none;
+}
+.ws-metric-bar.mem {
+  background: rgba(var(--green-rgb), 0.35);
+}
+
+@media (max-width: 720px) {
+  .srv-dash-gauges {
+    grid-template-columns: 1fr 1fr;
+  }
+  .srv-dash-summary {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .srv-dash-summary-row {
+    flex: 1 1 40%;
+  }
+}
 .ws-panel.fill {
   flex: 1;
   min-height: 0;
@@ -3526,28 +3761,54 @@ button.secondary:hover {
   min-height: 0;
   overflow: hidden;
 }
-.aux-workspace-body,
-.detached-tab-body {
+.aux-workspace-body {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
+/* Откреплённая вкладка: rail | (терминал | SFTP) — grid, не flex (надёжнее в aux-webview). */
+.detached-tab-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+.detached-tab-body.no-rail {
+  grid-template-columns: minmax(0, 1fr);
+}
+.detached-tab-slot {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.detached-tab-slot.with-sftp {
+  grid-template-columns: minmax(0, 1fr) 5px var(--sftp-w, 380px);
+}
+.detached-tab-slot > .pane-area,
+.detached-tab-slot > .ws-body {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.detached-tab-slot.with-sftp > .sftp-panel {
+  width: 100% !important;
+  min-width: 0;
+  min-height: 0;
+}
 .aux-workspace-body > .ws-panel {
   flex: 1;
   min-height: 0;
   min-width: 0;
   width: 100%;
-}
-.detached-tab-main {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-  overflow: hidden;
 }
 
 /* Уважение системной настройки «уменьшить движение». */

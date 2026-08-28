@@ -4034,6 +4034,7 @@ dependencies = [
  "aes-gcm",
  "async-trait",
  "base64 0.22.1",
+ "byteorder",
  "dirs 5.0.1",
  "drag",
  "dunce",
