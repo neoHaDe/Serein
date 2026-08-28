@@ -5,6 +5,7 @@ mod clipboard;
 mod crypto;
 mod dnd;
 mod docker;
+mod docker_compose;
 mod dpapi;
 mod importers;
 mod keygen;
@@ -370,7 +371,8 @@ async fn docker_list(state: State<'_, AppState>, id: String) -> Result<Value, St
 #[tauri::command]
 async fn docker_action(state: State<'_, AppState>, id: String, container_id: String, action: String) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let (code, _o, err) = ssh::exec(&s.handle, &docker::action_cmd(&container_id, &action), Some(s.cancel.subscribe())).await?;
+    let cmd = docker::action_cmd(&container_id, &action).ok_or_else(|| format!("Неизвестное действие: {action}"))?;
+    let (code, _o, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
     if code != 0 {
         Ok(json!({ "ok": false, "error": if err.trim().is_empty() { format!("Код {code}") } else { err.trim().to_string() } }))
     } else {
@@ -413,10 +415,158 @@ async fn docker_logs(
 }
 
 #[tauri::command]
+async fn docker_stats(state: State<'_, AppState>, id: String, container_id: String) -> Result<Value, String> {
+    let s = state.ssh(&id).ok_or("Сессия не подключена")?;
+    let (code, out, err) = ssh::exec(&s.handle, &docker::stats_cmd(&container_id), Some(s.cancel.subscribe())).await?;
+    Ok(docker::parse_stats(code, &out, &err))
+}
+
+#[tauri::command]
 fn docker_logs_cancel(state: State<'_, AppState>, id: String, container_id: Option<String>) {
     match container_id {
         Some(cid) if !cid.is_empty() => state.ops.cancel(&format!("{id}:docker-logs:{cid}")),
         _ => state.ops.cancel_prefix(&format!("{id}:docker-logs:")),
+    }
+}
+
+#[tauri::command]
+async fn docker_container_files(
+    state: State<'_, AppState>,
+    id: String,
+    container_id: String,
+    path: String,
+) -> Result<Value, String> {
+    let s = state.ssh(&id).ok_or("Сессия не подключена")?;
+    let cmd = docker::files_cmd(&container_id, &path).ok_or("Недопустимый путь")?;
+    let (code, out, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
+    Ok(docker::parse_files(code, &out, &err, &path))
+}
+
+async fn docker_exec(
+    handle: &ssh::SharedHandle,
+    cmd: &str,
+    cancel: Option<ssh::CancelRx>,
+    secs: u64,
+) -> Result<(i32, String, String), String> {
+    match tokio::time::timeout(std::time::Duration::from_secs(secs), ssh::exec(handle, cmd, cancel)).await {
+        Ok(r) => r,
+        Err(_) => Err(format!("Таймаут команды ({secs} с)")),
+    }
+}
+
+#[tauri::command]
+async fn docker_compose_list(state: State<'_, AppState>, id: String) -> Result<Value, String> {
+    let s = state.ssh(&id).ok_or("Сессия не подключена")?;
+    let cancel = Some(s.cancel.subscribe());
+    let primary = match docker_exec(&s.handle, docker_compose::LIST_CMD, cancel.clone(), 15).await {
+        Ok((code, out, err)) => docker_compose::parse_list(code, &out, &err),
+        Err(e) => json!({ "ok": false, "error": e }),
+    };
+    if primary["projects"].as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+        return Ok(primary);
+    }
+    let fallback = match docker_exec(&s.handle, docker_compose::LIST_PS_JSON_CMD, cancel, 15).await {
+        Ok((code, out, err)) => docker_compose::parse_list_from_ps_json(code, &out, &err),
+        Err(e) => json!({ "ok": false, "error": e }),
+    };
+    Ok(docker_compose::merge_projects(primary, fallback))
+}
+
+#[tauri::command]
+async fn docker_compose_ps(
+    state: State<'_, AppState>,
+    id: String,
+    compose_file: String,
+    project: String,
+) -> Result<Value, String> {
+    let s = state.ssh(&id).ok_or("Сессия не подключена")?;
+    let cmd = docker_compose::ps_cmd(&compose_file, &project).ok_or("Недопустимые параметры compose")?;
+    match docker_exec(&s.handle, &cmd, Some(s.cancel.subscribe()), 20).await {
+        Ok((code, out, err)) => Ok(docker_compose::parse_ps(code, &out, &err)),
+        Err(e) => Ok(json!({ "ok": false, "error": e })),
+    }
+}
+
+#[tauri::command]
+async fn docker_compose_action(
+    state: State<'_, AppState>,
+    id: String,
+    compose_file: String,
+    project: String,
+    action: String,
+    service: Option<String>,
+) -> Result<Value, String> {
+    let s = state.ssh(&id).ok_or("Сессия не подключена")?;
+    let svc = service.as_deref();
+    let cmd = docker_compose::action_cmd(&compose_file, &project, &action, svc)
+        .ok_or_else(|| format!("Неизвестное действие: {action}"))?;
+    let (code, _o, err) = docker_exec(&s.handle, &cmd, Some(s.cancel.subscribe()), 60).await?;
+    if code != 0 {
+        Ok(json!({ "ok": false, "error": if err.trim().is_empty() { format!("Код {code}") } else { err.trim().to_string() } }))
+    } else {
+        Ok(json!({ "ok": true }))
+    }
+}
+
+#[tauri::command]
+async fn docker_compose_read(state: State<'_, AppState>, id: String, compose_file: String) -> Result<Value, String> {
+    let s = state.ssh(&id).ok_or("Сессия не подключена")?;
+    let cmd = docker_compose::read_compose_cmd(&compose_file).ok_or("Недопустимый compose-файл")?;
+    let (code, out, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
+    Ok(docker_compose::parse_compose_text(code, &out, &err))
+}
+
+#[tauri::command]
+async fn docker_compose_logs(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    compose_file: String,
+    project: String,
+    service: String,
+) -> Result<Value, String> {
+    let s = state.ssh(&id).ok_or("Сессия не подключена")?;
+    let cmd = docker_compose::logs_cmd(&compose_file, &project, &service).ok_or("Недопустимые параметры")?;
+    let key = format!("{id}:compose-logs:{compose_file}:{service}");
+    let op = state.ops.begin(&key);
+    let cancel = ssh::race_cancel(s.cancel.subscribe(), op);
+    let app2 = app.clone();
+    let sid = id.clone();
+    let svc = service.clone();
+    let cf = compose_file.clone();
+    let result = ssh::exec_with(
+        &s.handle,
+        &cmd,
+        Some(cancel),
+        move |chunk| {
+            if chunk.is_empty() {
+                return;
+            }
+            let text = String::from_utf8_lossy(chunk);
+            let _ = app2.emit(
+                "docker-logs",
+                json!({ "sessionId": sid, "containerId": format!("compose:{cf}:{svc}"), "chunk": text.as_ref() }),
+            );
+        },
+    )
+    .await;
+    state.ops.finish(&key);
+    let (_c, out, _e) = result?;
+    Ok(json!({ "ok": true, "logs": out }))
+}
+
+#[tauri::command]
+fn docker_compose_logs_cancel(
+    state: State<'_, AppState>,
+    id: String,
+    compose_file: Option<String>,
+    service: Option<String>,
+) {
+    match (compose_file, service) {
+        (Some(cf), Some(svc)) if !cf.is_empty() && !svc.is_empty() => {
+            state.ops.cancel(&format!("{id}:compose-logs:{cf}:{svc}"))
+        }
+        _ => state.ops.cancel_prefix(&format!("{id}:compose-logs:")),
     }
 }
 
@@ -664,6 +814,11 @@ fn backup_import(password: String, path: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
+fn export_text_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn keygen_generate(params: Value) -> Result<Value, String> {
     keygen::generate(&params)
 }
@@ -838,7 +993,9 @@ pub fn run() {
             localfs_home, localfs_parent, localfs_list, localfs_copy_into,
             session_open_local, session_open_ssh, session_write, session_resize, session_close,
             session_ping, session_monitor, session_ki_respond,
-            docker_list, docker_action, docker_logs, docker_logs_cancel,
+            docker_list, docker_action, docker_logs, docker_stats, docker_logs_cancel, docker_container_files,
+            docker_compose_list, docker_compose_ps, docker_compose_action, docker_compose_read,
+            docker_compose_logs, docker_compose_logs_cancel,
             sftp_list, sftp_mkdir, sftp_remove, sftp_rename, sftp_chmod, sftp_preview, sftp_read_file, sftp_write_file,
             sftp_upload_paths, sftp_download_to, sftp_drag_out, sftp_name_conflicts, sftp_edit, sftp_edit_stop, sftp_cancel_transfer,
             sftp_pause_transfer, sftp_resume_transfer,
@@ -846,6 +1003,7 @@ pub fn run() {
             workspace_processes, workspace_kill, workspace_services, workspace_service_action, workspace_logs,
             vault_status, vault_unlock, vault_enable, vault_disable,
             backup_export, backup_import,
+            export_text_file,
             keygen_generate, keygen_save, keygen_install,
             servers_import_ssh_config, servers_import_putty,
             windows_raise_group, windows_restore_minimized, windows_count_minimized,

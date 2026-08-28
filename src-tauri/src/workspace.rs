@@ -6,9 +6,10 @@ pub const PS_CMD: &str = "ps -eo pid=,user=,pcpu=,pmem=,stat=,comm= --sort=-pcpu
 pub const SERVICES_CMD: &str =
     "systemctl list-units --type=service --all --no-legend --no-pager --plain 2>/dev/null | head -n 120";
 pub const LOGS_CMD: &str = concat!(
-    "if command -v journalctl >/dev/null 2>&1; then journalctl -n 200 --no-pager -o short-iso 2>/dev/null; ",
-    "elif [ -r /var/log/syslog ]; then tail -n 200 /var/log/syslog; ",
-    "elif [ -r /var/log/messages ]; then tail -n 200 /var/log/messages; ",
+    "export LANG=C.UTF-8 LC_ALL=C.UTF-8; ",
+    "if command -v journalctl >/dev/null 2>&1; then SYSTEMD_COLORS=0 journalctl -n 300 --no-pager -o short-iso 2>/dev/null; ",
+    "elif [ -r /var/log/syslog ]; then tail -n 300 /var/log/syslog; ",
+    "elif [ -r /var/log/messages ]; then tail -n 300 /var/log/messages; ",
     "else echo \"Нет journalctl и syslog\"; fi"
 );
 

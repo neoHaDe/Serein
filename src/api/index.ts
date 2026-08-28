@@ -32,7 +32,12 @@ import type {
   ServerMetrics,
   DockerListResult,
   DockerAction,
+  DockerStatsResult,
   DockerLogsChunk,
+  DockerContainerFilesResult,
+  DockerComposeListResult,
+  DockerComposePsResult,
+  DockerComposeAction,
   WorkspaceProcess,
   WorkspaceService
 } from '../shared/types'
@@ -182,11 +187,37 @@ export const api = {
     list: (id: string): Promise<DockerListResult> => invoke('docker_list', { id }),
     action: (id: string, containerId: string, action: DockerAction): Promise<{ ok: boolean; error?: string }> =>
       invoke('docker_action', { id, containerId, action }),
+    stats: (id: string, containerId: string): Promise<DockerStatsResult> =>
+      invoke('docker_stats', { id, containerId }),
     logs: (id: string, containerId: string): Promise<{ ok: boolean; logs?: string; error?: string }> =>
       invoke('docker_logs', { id, containerId }),
     cancelLogs: (id: string, containerId?: string): Promise<void> =>
       invoke('docker_logs_cancel', { id, containerId: containerId ?? null }),
-    onLogs: (cb: (p: DockerLogsChunk) => void) => sub<DockerLogsChunk>('docker-logs', cb)
+    onLogs: (cb: (p: DockerLogsChunk) => void) => sub<DockerLogsChunk>('docker-logs', cb),
+    files: (id: string, containerId: string, path: string): Promise<DockerContainerFilesResult> =>
+      invoke('docker_container_files', { id, containerId, path }),
+    composeList: (id: string): Promise<DockerComposeListResult> => invoke('docker_compose_list', { id }),
+    composePs: (id: string, composeFile: string, project: string): Promise<DockerComposePsResult> =>
+      invoke('docker_compose_ps', { id, composeFile, project }),
+    composeAction: (
+      id: string,
+      composeFile: string,
+      project: string,
+      action: DockerComposeAction,
+      service?: string
+    ): Promise<{ ok: boolean; error?: string }> =>
+      invoke('docker_compose_action', { id, composeFile, project, action, service: service ?? null }),
+    composeRead: (id: string, composeFile: string): Promise<{ ok: boolean; text?: string; error?: string }> =>
+      invoke('docker_compose_read', { id, composeFile }),
+    composeLogs: (
+      id: string,
+      composeFile: string,
+      project: string,
+      service: string
+    ): Promise<{ ok: boolean; logs?: string; error?: string }> =>
+      invoke('docker_compose_logs', { id, composeFile, project, service }),
+    cancelComposeLogs: (id: string, composeFile?: string, service?: string): Promise<void> =>
+      invoke('docker_compose_logs_cancel', { id, composeFile: composeFile ?? null, service: service ?? null })
   },
   vault: {
     status: (): Promise<{ enabled: boolean; locked: boolean }> => invoke('vault_status'),
@@ -249,6 +280,19 @@ export const api = {
       invoke('workspace_service_action', { sessionId, name, action }),
     logs: (sessionId: string): Promise<{ ok: boolean; error?: string; text?: string }> =>
       invoke('workspace_logs', { sessionId })
+  },
+  exportText: async (
+    content: string,
+    defaultName: string
+  ): Promise<{ saved: boolean; path?: string }> => {
+    const path = await saveDialog({
+      title: 'Сохранить отчёт',
+      defaultPath: defaultName,
+      filters: [{ name: 'Text', extensions: ['txt', 'log'] }]
+    })
+    if (!path) return { saved: false }
+    await invoke('export_text_file', { path, content })
+    return { saved: true, path }
   }
 }
 

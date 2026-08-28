@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type MutableRefObject, type ReactNode } from 'react'
 import { applyUiTheme } from '../themes'
 import { openAuxWindow, sanitizeWindowLabel } from '../auxWindows'
 import { useCtrlWheelZoom } from '../useCtrlWheelZoom'
@@ -8,6 +8,16 @@ import { AuxDrag, WindowSysButtons, markAuxWindow } from './WindowChrome'
 import { AuxReattachButton } from './AuxReattachButton'
 
 type LogKind = 'err' | 'warn' | 'info' | 'debug' | ''
+
+const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g
+
+export function stripAnsi(text: string): string {
+  return text.replace(ANSI_RE, '')
+}
+
+export function normalizeLogText(raw: string): string {
+  return stripAnsi(raw).replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+}
 
 function kindOfWord(w: string): LogKind {
   const u = w.replace(/^["']|["']$/g, '').toUpperCase()
@@ -22,7 +32,18 @@ function lineKind(line: string): LogKind {
   const m = line.match(
     /(?:^|[=\s/\[(])((?:ERROR|ERR|FATAL|CRITICAL|CRIT|PANIC|WARN(?:ING)?|INFO|NOTICE|DEBUG|TRACE))(?:\b|[\]\s)])/i
   )
-  return m ? kindOfWord(m[1]) : ''
+  if (m) return kindOfWord(m[1])
+  const low = line.toLowerCase()
+  if (
+    /\b(error|err|fatal|critical|crit|panic|fail(?:ed|ure)?|denied|refused|segfault|exception|alert|emerg)\b/.test(
+      low
+    ) ||
+    /отказано|ошибк|критич|авар/i.test(line)
+  ) {
+    return 'err'
+  }
+  if (/\b(warn(?:ing)?)\b/.test(low) || /предупреж/i.test(line)) return 'warn'
+  return ''
 }
 
 const LOG_TOKEN =
@@ -78,29 +99,79 @@ function highlightLine(line: string): ReactNode {
   return out
 }
 
-export function DockerLogView({ text, follow }: { text: string; follow: boolean }): JSX.Element {
+function isErrorLine(line: string): boolean {
+  return lineKind(line) === 'err'
+}
+
+export function buildErrorReport(text: string, meta?: { host?: string; title?: string }): string {
+  const errors = text.split('\n').filter((line) => line.trim() && isErrorLine(line))
+  const lines = text.split('\n')
+  const header = [
+    '# Serein — отчёт по ошибкам',
+    meta?.title ? `# ${meta.title}` : '',
+    meta?.host ? `# Хост: ${meta.host}` : '',
+    `# Сформирован: ${new Date().toISOString()}`,
+    `# Строк в источнике: ${lines.length}`,
+    `# Строк с ошибками: ${errors.length}`,
+    '',
+  ].filter(Boolean)
+  if (errors.length === 0) header.push('(ошибок не найдено в доступном фрагменте лога)', '')
+  return [...header, ...errors].join('\n')
+}
+
+export function LogView({
+  text,
+  follow,
+  fill,
+  zoom,
+  zoomRef,
+  anchorEnd
+}: {
+  text: string
+  follow?: boolean
+  fill?: boolean
+  zoom?: number
+  zoomRef?: (el: HTMLDivElement | null) => void
+  anchorEnd?: boolean
+}): JSX.Element {
   const scroller = useRef<HTMLDivElement>(null)
   const lines = useMemo(() => text.split('\n'), [text])
 
   useEffect(() => {
-    if (!follow) return
+    if (!follow && !anchorEnd) return
     const el = scroller.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [text, follow])
+  }, [text, follow, anchorEnd])
+
+  const setRef = (el: HTMLDivElement | null): void => {
+    ;(scroller as MutableRefObject<HTMLDivElement | null>).current = el
+    zoomRef?.(el)
+  }
 
   return (
-    <div className="docker-logs" ref={scroller}>
-      {lines.map((line, i) => {
-        const kind = lineKind(line)
-        return (
-          <div key={i} className={`docker-log-line${kind ? ` is-${kind}` : ''}`}>
-            {highlightLine(line)}
-          </div>
-        )
-      })}
+    <div
+      className={'docker-logs' + (fill ? ' fill' : '')}
+      ref={setRef}
+      style={zoom && zoom !== 1 ? { zoom } : undefined}
+      tabIndex={0}
+    >
+      {lines.length === 0 ? (
+        <div className="docker-log-line hint">(пусто)</div>
+      ) : (
+        lines.map((line, i) => {
+          const kind = lineKind(line)
+          return (
+            <div key={i} className={`docker-log-line${kind ? ` is-${kind}` : ''}`}>
+              {highlightLine(line)}
+            </div>
+          )
+        })
+      )}
     </div>
   )
 }
+
+export const DockerLogView = LogView
 
 export const LOGS_SIZE_KEY = 'serein.dockerLogs.size'
 

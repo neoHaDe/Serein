@@ -148,6 +148,11 @@ export default function App(): JSX.Element {
   useEffect(() => listenAuxGeoEvents(), [])
 
   useEffect(() => {
+    const t = window.setTimeout(() => window.dispatchEvent(new Event('resize')), 100)
+    return () => window.clearTimeout(t)
+  }, [activeKey, sftpWidth, tabs.length])
+
+  useEffect(() => {
     setAuxPersistEnabled(!!settings.restoreAuxOnStart)
     if (!persistSettingInit.current) {
       persistSettingInit.current = true

@@ -654,6 +654,10 @@ button {
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  min-height: 0;
+  min-width: 0;
 }
 .terminal-col {
   flex: 1;
@@ -669,6 +673,7 @@ button {
   min-width: 0;
   min-height: 0;
   display: flex;
+  flex-direction: column;
 }
 .pane,
 .pane-split {
@@ -915,6 +920,8 @@ button {
 .sftp-panel {
   width: 360px;
   flex-shrink: 0;
+  align-self: stretch;
+  min-height: 0;
   background: var(--bg-alt);
   border-left: 1px solid var(--border);
   display: flex;
@@ -2156,6 +2163,12 @@ button.secondary:hover {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+* {
+  scrollbar-color: var(--border) transparent;
+}
 
 /* ---------- Tunnel menu (popup) ---------- */
 .tunnel-menu {
@@ -2426,6 +2439,443 @@ button.secondary:hover {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.docker-table {
+  --docker-grid: minmax(140px, 1.5fr) 92px 72px minmax(120px, 1.3fr) minmax(96px, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+.docker-table .sftp-row {
+  grid-template-columns: var(--docker-grid);
+}
+.docker-row-head {
+  user-select: none;
+}
+.docker-th {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border-right: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.docker-th:last-child {
+  border-right: 0;
+}
+.docker-data-row {
+  cursor: pointer;
+  min-height: 30px;
+}
+.docker-data-row > span {
+  display: block;
+  min-width: 0;
+  padding: 0 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.docker-table .mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.docker-namecell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.docker-namecell .docker-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.docker-status {
+  color: var(--muted);
+  font-size: 11px;
+}
+.docker-state {
+  font-weight: 600;
+  text-transform: lowercase;
+}
+.docker-state.is-run {
+  color: var(--green);
+}
+.docker-state.is-warn {
+  color: var(--warn);
+}
+.docker-state.is-stop {
+  color: var(--danger);
+}
+.ws-panel .docker-table {
+  padding: 0;
+}
+.docker-row.is-clickable {
+  cursor: pointer;
+}
+.docker-detail {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.docker-detail-top {
+  flex-shrink: 0;
+}
+.docker-detail-logs {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  overflow: hidden;
+}
+.docker-detail-logs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.docker-detail-logs-head > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.docker-detail-logs-actions {
+  display: flex;
+  gap: 4px;
+}
+.docker-detail-logs-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-sm);
+  background: rgba(var(--fg-rgb), 0.03);
+  border: 1px solid var(--hairline);
+}
+.docker-detail-logs-scroll .docker-logs,
+.docker-logs.fill {
+  flex: 1 1 0;
+  min-height: 0;
+  margin: 0;
+  padding: 6px 8px;
+  background: transparent;
+  overflow: auto;
+  overflow-x: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.docker-logs.fill:focus {
+  outline: none;
+}
+.docker-logs.fill:focus-visible {
+  outline: 1px solid rgba(var(--accent-rgb), 0.45);
+  outline-offset: -1px;
+}
+.ws-panel.is-detail {
+  min-height: 0;
+  overflow: hidden;
+}
+.docker-detail-grid {
+  margin: 0;
+  display: grid;
+  gap: 8px 12px;
+}
+.docker-detail-row {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+.docker-detail-row dt {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.docker-detail-row dd {
+  margin: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.docker-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.docker-detail-actions .mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.docker-detail-id {
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+.docker-main-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.docker-main-tabs button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.docker-main-tabs button.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.docker-filter-row {
+  padding: 8px 10px 4px;
+}
+.docker-filter {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-alt);
+  color: var(--text);
+  font-size: 12px;
+}
+.docker-health,
+.docker-health-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  text-transform: lowercase;
+}
+.docker-health.is-ok,
+.docker-health-badge.is-ok { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }
+.docker-health.is-bad,
+.docker-health-badge.is-bad { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+.docker-health.is-warn,
+.docker-health-badge.is-warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.docker-detail-bottom {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.docker-detail-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.docker-detail-tabs button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.docker-detail-tabs button.active {
+  color: var(--text);
+  background: var(--bg-alt);
+  border-radius: 6px;
+}
+.docker-files {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.docker-files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.docker-files-crumbs button,
+.docker-crumb {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+}
+.docker-files-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+}
+.docker-files-sep {
+  color: var(--muted);
+  margin: 0 2px;
+}
+.docker-files-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.docker-files-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.docker-files-row:hover:not(:disabled) {
+  background: var(--bg-alt);
+}
+.docker-files-row:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+.docker-files-id {
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+}
+.docker-compose-wrap {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.docker-compose-list.fill,
+.docker-compose-detail.fill,
+.docker-compose-logs.fill {
+  flex: 1;
+  min-height: 0;
+}
+.docker-compose-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.docker-compose-project {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  gap: 2px 10px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-alt);
+  color: var(--text);
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.docker-compose-project:hover {
+  border-color: var(--accent);
+}
+.docker-compose-project-name {
+  font-weight: 600;
+  grid-column: 1;
+}
+.docker-compose-project-status {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+.docker-compose-project-file {
+  grid-column: 1;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+.docker-compose-detail,
+.docker-compose-logs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.docker-compose-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.docker-compose-title {
+  font-weight: 600;
+  flex: 1;
+  min-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.docker-compose-table {
+  --docker-grid: minmax(120px, 1.2fr) 72px minmax(120px, 1.3fr) minmax(96px, 1fr) auto;
+}
+.docker-th-actions {
+  width: 120px;
+}
+.docker-compose-svc-actions {
+  display: flex;
+  gap: 3px;
+  justify-content: flex-end;
+}
+.docker-compose-yaml {
+  width: min(720px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.docker-compose-yaml-text {
+  flex: 1;
+  min-height: 200px;
+  max-height: 60vh;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  background: var(--bg-alt);
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
 }
 .docker-image {
   display: none;
@@ -2906,6 +3356,20 @@ button.secondary:hover {
   font-family: var(--font-mono);
   font-size: 11px;
 }
+.ws-logs-wrap {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.ws-logs-wrap .docker-logs {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 8px 10px;
+  background: rgba(var(--fg-rgb), 0.03);
+  border-top: 1px solid var(--hairline);
+}
 .ws-logs {
   flex: 1;
   min-height: 0;
@@ -3029,20 +3493,37 @@ button.secondary:hover {
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.aux-workspace-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 .aux-workspace-body,
 .detached-tab-body {
   flex: 1;
   min-height: 0;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
+}
+.aux-workspace-body > .ws-panel {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
 }
 .detached-tab-main {
   flex: 1;
   min-width: 0;
   min-height: 0;
   display: flex;
+  flex-direction: row;
+  align-items: stretch;
   overflow: hidden;
 }
 

@@ -201,6 +201,20 @@ export interface DockerContainer {
   image: string
   state: string
   status: string
+  ports?: string
+  created?: string
+}
+export interface DockerContainerStats {
+  cpuPct: string
+  memUsage: string
+  memPct: string
+  netIo?: string
+  blockIo?: string
+}
+export interface DockerStatsResult {
+  ok: boolean
+  stats?: DockerContainerStats
+  error?: string
 }
 export interface DockerListResult {
   ok: boolean
@@ -214,6 +228,49 @@ export interface DockerLogsChunk {
   containerId: string
   chunk: string
 }
+
+export interface DockerContainerFileEntry {
+  name: string
+  kind: 'dir' | 'file' | 'link'
+}
+
+export interface DockerContainerFilesResult {
+  ok: boolean
+  path?: string
+  entries?: DockerContainerFileEntry[]
+  error?: string
+}
+
+export interface DockerComposeProject {
+  name: string
+  project: string
+  status: string
+  composeFile: string
+}
+
+export interface DockerComposeListResult {
+  ok: boolean
+  projects?: DockerComposeProject[]
+  error?: string
+}
+
+export interface DockerComposeService {
+  name: string
+  service: string
+  id: string
+  image: string
+  state: string
+  status: string
+  ports?: string
+}
+
+export interface DockerComposePsResult {
+  ok: boolean
+  services?: DockerComposeService[]
+  error?: string
+}
+
+export type DockerComposeAction = 'up' | 'down' | 'start' | 'stop' | 'restart'
 
 /** Снимок ресурсов удалённого сервера (для виджета мониторинга). */
 export interface ServerMetrics {
