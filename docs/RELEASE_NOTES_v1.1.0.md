@@ -56,6 +56,11 @@ SFTP — боковая панель из TabBar (не в рельсе). Спи�
 
 In-place с **1.0.0** — да, тот же dev.serein.app, профиль %APPDATA%\serein.
 
+### SHA-256
+
+- setup: CE0C1632B885841B7991DFBCB5B71989D538CBD0E8FA507F721C5BB91F6FE81A
+- portable: CAE1CFDBE1618F7AFC7D4C38906BBF24BFA047AD88A8A6C247E07D051D1BAE35
+
 ### Ограничения
 
 - Только Windows x64. Нет SSH-агента и agent-forwarding.
