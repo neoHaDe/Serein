@@ -5,6 +5,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
 import { useSettings } from '../SettingsContext'
 import { getTheme } from '../themes'
+import { shouldPreserveSession } from '../detachedSessions'
 
 interface Props {
   paneId: string
@@ -12,6 +13,8 @@ interface Props {
   instanceKey: string
   kind: 'ssh' | 'local'
   serverId?: string
+  /** Подключиться к уже открытой сессии (откреплённая вкладка). */
+  attachSessionId?: string
   active: boolean
   focused: boolean
   onReady: (paneId: string, sessionId: string) => void
@@ -154,9 +157,22 @@ function applyFit(entry: PaneTerm, notifyPty: boolean): boolean {
   return true
 }
 
-export function TerminalView({ paneId, instanceKey, kind, serverId, active, focused, onReady, onFail, onInput }: Props): JSX.Element {
+export function TerminalView({
+  paneId,
+  instanceKey,
+  kind,
+  serverId,
+  attachSessionId,
+  active,
+  focused,
+  onReady,
+  onFail,
+  onInput
+}: Props): JSX.Element {
   const mountRef = useRef<HTMLDivElement>(null)
   const entryRef = useRef<PaneTerm | null>(null)
+  const attachRef = useRef(attachSessionId)
+  attachRef.current = attachSessionId
 
   const { settings, update } = useSettings()
   const settingsRef = useRef(settings)
@@ -271,6 +287,15 @@ export function TerminalView({ paneId, instanceKey, kind, serverId, active, focu
     }
 
     const startSession = (e: PaneTerm): void => {
+      const attach = attachRef.current
+      if (attach) {
+        if (e.sessionStarted && e.sessionId === attach) return
+        e.sessionStarted = true
+        e.sessionId = attach
+        e.offData = bindWriter(attach, (data) => e.term.write(data))
+        onReady(paneId, attach)
+        return
+      }
       if (e.sessionStarted) return
       e.sessionStarted = true
       const cols = e.lastCols >= 20 ? e.term.cols : 80
@@ -332,7 +357,7 @@ export function TerminalView({ paneId, instanceKey, kind, serverId, active, focu
             cur.offData()
             cur.term.dispose()
             registry.delete(instanceKey)
-            if (sid) void window.api.session.close(sid)
+            if (sid && !shouldPreserveSession(sid)) void window.api.session.close(sid)
           }
         }, 120)
       }

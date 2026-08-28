@@ -5,8 +5,10 @@ import type { SftpEntry, LocalEntry, TransferItem, RemoteEditStatus } from '../.
 import { isImageFile, isTextFile } from '../editorLang'
 import { Icon } from './Icon'
 import { openAuxWindow, sanitizeWindowLabel } from '../auxWindows'
+import { reattachSftp } from '../reattach'
 import { useCtrlWheelZoom } from '../useCtrlWheelZoom'
 import { AuxDrag, WindowSysButtons } from './WindowChrome'
+import { AuxReattachButton } from './AuxReattachButton'
 import { useSettings } from '../SettingsContext'
 import {
   SFTP_COL_LABEL,
@@ -972,7 +974,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
   const detach = async (): Promise<void> => {
     await openAuxWindow({
       label: 'sftp-' + sanitizeWindowLabel(sessionId),
-      query: { sftp: '1', sessionId },
+      query: { sftp: '1', sessionId, serverId: serverId ?? '' },
       title: 'SFTP',
       width: Math.max(width, 480),
       height: 720,
@@ -1011,6 +1013,11 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
             <button className="mini" title="Открепить в отдельное окно" onClick={() => void detach()}>
               <Icon name="external" size={14} />
             </button>
+          )}
+          {detached && (
+            <AuxReattachButton
+              onClick={() => reattachSftp({ sessionId, serverId })}
+            />
           )}
           {detached ? (
             <WindowSysButtons />

@@ -80,6 +80,13 @@ export async function openAuxWindow(opts: {
 }): Promise<void> {
   const existing = await WebviewWindow.getByLabel(opts.label)
   if (existing) {
+    try {
+      if (await existing.isMinimized()) {
+        await invoke('windows_restore_minimized')
+      }
+    } catch {
+      /* */
+    }
     await invoke('windows_raise_group', { focused: opts.label }).catch(() => {})
     await existing.setFocus()
     return
@@ -105,8 +112,7 @@ export async function openAuxWindow(opts: {
     focus: true,
     decorations: false,
     shadow: false,
-    skipTaskbar: !auxInTaskbar,
-    parent: auxInTaskbar ? undefined : 'main'
+    skipTaskbar: !auxInTaskbar
   })
   await new Promise<void>((resolve, reject) => {
     const t = window.setTimeout(() => resolve(), 4000)

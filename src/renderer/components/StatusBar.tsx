@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ServerConfig } from '../../shared/types'
 import type { PaneLeaf } from '../paneTree'
 import { Icon } from './Icon'
+import { MinimizedWindowsHint } from './MinimizedWindowsHint'
 
 interface Props {
   leaf: PaneLeaf | undefined
@@ -54,6 +55,7 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
         <span className="sb-item"><Icon name="editor" size={13} /> Редактор</span>
         <span className="sb-item sb-muted">{editor.remotePath}</span>
         <span className="sb-spacer" />
+        <MinimizedWindowsHint />
         <span className="sb-item" style={{ color: editor.dirty ? '#e0af68' : '#9ece6a' }}>
           {editor.dirty ? '● Несохранено' : <><Icon name="check" size={13} /> Сохранено</>}
         </span>
@@ -65,6 +67,8 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
     return (
       <div className="statusbar">
         <span className="sb-muted">Нет активной панели</span>
+        <span className="sb-spacer" />
+        <MinimizedWindowsHint />
       </div>
     )
   }
@@ -91,6 +95,7 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
         </span>
       )}
       <span className="sb-spacer" />
+      <MinimizedWindowsHint />
       {broadcast && (
         <span className="sb-item sb-broadcast" title="Broadcast активен — ввод дублируется в панели текущей вкладки">
           <Icon name="broadcast" size={13} /> Broadcast{broadcastTargets ? ` → ${broadcastTargets}` : ''}

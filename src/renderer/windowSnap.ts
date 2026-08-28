@@ -133,10 +133,18 @@ async function setVisPos(me: Window, vis: R, x: number, y: number): Promise<void
 
 let lastRaise = 0
 let raiseBusy = false
+let suppressRestoreUntil = 0
+
+/** Подавить restore/raise на время minimize (фокус уходит на другое окно; контексты webview разные). */
+export async function notifyWindowMinimize(): Promise<void> {
+  const until = Date.now() + 1200
+  suppressRestoreUntil = until
+  await emit('serein-suppress-restore', { until })
+}
 
 function raiseGroup(origin: string): void {
   const now = Date.now()
-  if (raiseBusy || now - lastRaise < 400) return
+  if (raiseBusy || now - lastRaise < 400 || now < suppressRestoreUntil) return
   lastRaise = now
   raiseBusy = true
   void invoke('windows_raise_group', { focused: origin }).finally(() => {
@@ -153,6 +161,7 @@ export function useWindowSnap(): void {
     let stopListen: (() => void) | undefined
     let stopDetach: (() => void) | undefined
     let stopFocus: (() => void) | undefined
+    let stopSuppress: (() => void) | undefined
     let skipUntil = 0
     let last: { x: number; y: number; w: number; h: number } | null = null
     let settle: number | undefined
@@ -201,8 +210,24 @@ export function useWindowSnap(): void {
           })
         }
 
-        stopFocus = await me.onFocusChanged((e) => {
-          if (e.payload) raiseGroup(me.label)
+        stopSuppress = await listen<{ until: number }>('serein-suppress-restore', (e) => {
+          const until = e.payload?.until ?? 0
+          if (until > suppressRestoreUntil) suppressRestoreUntil = until
+        })
+
+        stopFocus = await me.onFocusChanged(async (e) => {
+          if (!e.payload) return
+          if (Date.now() < suppressRestoreUntil) return
+          try {
+            if (await me.isMinimized()) return
+          } catch {
+            /* */
+          }
+          // Одна кнопка на панели задач: клик по Serein разворачивает свёрнутые aux без своей иконки.
+          if (me.label === 'main') {
+            await invoke('windows_restore_minimized').catch(() => {})
+          }
+          raiseGroup(me.label)
         })
 
         stopMoved = await me.onMoved(() => {
@@ -335,6 +360,7 @@ export function useWindowSnap(): void {
       stopListen?.()
       stopDetach?.()
       stopFocus?.()
+      stopSuppress?.()
     }
   }, [])
 }

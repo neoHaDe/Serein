@@ -1,15 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { getCurrentWindow, Window } from '@tauri-apps/api/window'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Icon } from './Icon'
+import { notifyWindowMinimize } from '../windowSnap'
 
 async function minimizeApp(w: ReturnType<typeof getCurrentWindow>): Promise<void> {
-  if (w.label === 'main') {
-    await w.minimize()
-    return
-  }
-  const main = await Window.getByLabel('main')
-  if (main) await main.minimize()
-  else await w.minimize()
+  await notifyWindowMinimize()
+  await w.minimize()
 }
 
 export function WindowSysButtons(): JSX.Element {
@@ -66,12 +62,13 @@ export function markAuxWindow(): void {
   document.documentElement.classList.add('aux-win', 'frameless')
 }
 
-export function AppChrome({ title }: { title: string }): JSX.Element {
+export function AppChrome({ title, actions }: { title: string; actions?: ReactNode }): JSX.Element {
   return (
     <div className="app-chrome">
       <AuxDrag>
         <span className="app-chrome-title">{title}</span>
       </AuxDrag>
+      {actions ? <div className="app-chrome-actions">{actions}</div> : null}
       <WindowSysButtons />
     </div>
   )

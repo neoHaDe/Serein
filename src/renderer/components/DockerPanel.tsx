@@ -3,19 +3,70 @@ import type { DockerContainer, DockerAction } from '../../shared/types'
 import { Icon } from './Icon'
 import { DockerLogView, openDetachedLogsWindow, useLogsPanelResize } from './dockerLogs'
 import { useCtrlWheelZoom } from '../useCtrlWheelZoom'
+import { WsDetachButton } from './WsDetachButton'
+import { openDetachedWorkspace } from './workspaceWindow'
 
 interface Props {
   /** SSH-сессия, на которой выполняем docker-команды и shell. */
   sessionId: string
   serverId?: string
+  panelTitle?: string
   onClose: () => void
   /** В рельсе workspace — без попапа и backdrop. */
   docked?: boolean
+  fill?: boolean
   /** После «shell в контейнер» переключить вкладку на Terminal. */
   onGoTerminal?: () => void
+  /** После открепления панели в отдельное окно. */
+  onDetached?: () => void
 }
 
-export function DockerPanel({ sessionId, serverId, onClose, docked, onGoTerminal }: Props): JSX.Element {
+function DockerPropsModal({
+  container: c,
+  onClose
+}: {
+  container: DockerContainer
+  onClose: () => void
+}): JSX.Element {
+  const rows = [
+    { k: 'Имя', v: c.name },
+    { k: 'ID', v: c.id },
+    { k: 'Образ', v: c.image },
+    { k: 'State', v: c.state },
+    { k: 'Status', v: c.status }
+  ]
+  return (
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal sftp-props-modal" onClick={(e) => e.stopPropagation()}>
+        <h2>Свойства контейнера</h2>
+        <dl className="sftp-props">
+          {rows.map((r) => (
+            <div key={r.k} className="sftp-props-row">
+              <dt>{r.k}</dt>
+              <dd title={r.v}>{r.v || '—'}</dd>
+            </div>
+          ))}
+        </dl>
+        <div className="modal-actions">
+          <button className="primary" onClick={onClose}>
+            Закрыть
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export function DockerPanel({
+  sessionId,
+  serverId,
+  panelTitle,
+  onClose,
+  docked,
+  fill,
+  onGoTerminal,
+  onDetached
+}: Props): JSX.Element {
   const [containers, setContainers] = useState<DockerContainer[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -23,6 +74,8 @@ export function DockerPanel({ sessionId, serverId, onClose, docked, onGoTerminal
   const [logsFor, setLogsFor] = useState<DockerContainer | null>(null)
   const [logsText, setLogsText] = useState('')
   const [following, setFollowing] = useState(false)
+  const [ctx, setCtx] = useState<{ x: number; y: number; container: DockerContainer } | null>(null)
+  const [propsFor, setPropsFor] = useState<DockerContainer | null>(null)
   const logsForRef = useRef<string | null>(null)
   const skipCancelRef = useRef(false)
   const { size, onResizeDown } = useLogsPanelResize()
@@ -127,6 +180,12 @@ export function DockerPanel({ sessionId, serverId, onClose, docked, onGoTerminal
     if (!docked) onClose()
   }
 
+  const detachPanel = async (): Promise<void> => {
+    if (!panelTitle) return
+    await openDetachedWorkspace({ tool: 'docker', sessionId, serverId, title: panelTitle })
+    onDetached?.()
+  }
+
   const running = (s: string): boolean => s === 'running' || s.startsWith('Up')
 
   return (
@@ -135,7 +194,7 @@ export function DockerPanel({ sessionId, serverId, onClose, docked, onGoTerminal
       <div
         className={
           docked
-            ? `ws-panel${logsFor ? ' is-logs' : ''}`
+            ? `ws-panel${fill ? ' fill' : ''}${logsFor ? ' is-logs' : ''}`
             : `docker-panel${logsFor ? ' is-logs' : ''}`
         }
         ref={logsFor ? zoomRef : undefined}
@@ -166,7 +225,10 @@ export function DockerPanel({ sessionId, serverId, onClose, docked, onGoTerminal
               <button className="mini" onClick={stopLogs}><Icon name="back" size={14} /> назад</button>
             </>
           ) : (
-            <button className="mini" title="Обновить" onClick={() => void reload()}><Icon name="refresh" size={14} /></button>
+            <>
+              {docked && panelTitle && onDetached && !fill && <WsDetachButton onClick={detachPanel} />}
+              <button className="mini" title="Обновить" onClick={() => void reload()}><Icon name="refresh" size={14} /></button>
+            </>
           )}
         </div>
 
@@ -182,15 +244,21 @@ export function DockerPanel({ sessionId, serverId, onClose, docked, onGoTerminal
               </div>
             )}
             {containers.map((c) => (
-              <div key={c.id} className="docker-row">
+              <div
+                key={c.id}
+                className="docker-row"
+                title={c.status}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setCtx({ x: e.clientX, y: e.clientY, container: c })
+                }}
+              >
                 <span
                   className="docker-dot"
                   style={{ background: running(c.state) ? 'var(--green)' : 'var(--muted)' }}
-                  title={c.status}
                 />
                 <div className="docker-info">
                   <div className="docker-name">{c.name}</div>
-                  <div className="docker-image" title={c.image}>{c.image}</div>
                 </div>
                 <div className="docker-actions">
                   {running(c.state) ? (
@@ -220,6 +288,28 @@ export function DockerPanel({ sessionId, serverId, onClose, docked, onGoTerminal
           </>
         )}
       </div>
+      {ctx && (
+        <>
+          <div className="split-menu-backdrop" onClick={() => setCtx(null)} />
+          <div
+            className="sftp-ctx-menu"
+            style={{ left: ctx.x, top: ctx.y }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="sftp-ctx-item"
+              onClick={() => {
+                setPropsFor(ctx.container)
+                setCtx(null)
+              }}
+            >
+              Свойства
+            </button>
+          </div>
+        </>
+      )}
+      {propsFor && <DockerPropsModal container={propsFor} onClose={() => setPropsFor(null)} />}
     </>
   )
 }

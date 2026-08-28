@@ -46,6 +46,7 @@ export function PaneView(props: Props): JSX.Element {
           paneId={node.id}
           kind={node.kind}
           serverId={node.serverId}
+          attachSessionId={node.status === 'connected' && node.sessionId ? node.sessionId : undefined}
           active={props.tabActive}
           focused={props.tabActive && isActive}
           onReady={props.onReady}

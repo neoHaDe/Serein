@@ -3,7 +3,9 @@ import { applyUiTheme } from '../themes'
 import { openAuxWindow, sanitizeWindowLabel } from '../auxWindows'
 import { useCtrlWheelZoom } from '../useCtrlWheelZoom'
 import { useWindowSnap } from '../windowSnap'
+import { reattachWorkspace } from '../reattach'
 import { AuxDrag, WindowSysButtons, markAuxWindow } from './WindowChrome'
+import { AuxReattachButton } from './AuxReattachButton'
 
 type LogKind = 'err' | 'warn' | 'info' | 'debug' | ''
 
@@ -176,7 +178,9 @@ export async function openDetachedLogsWindow(opts: {
       dockerLogs: '1',
       sessionId: opts.sessionId,
       containerId: opts.containerId,
-      name: opts.name
+      name: opts.name,
+      serverId: opts.serverId ?? '',
+      title: opts.name
     },
     title: 'Логи · ' + opts.name,
     width: opts.width,
@@ -196,6 +200,8 @@ export function DockerLogsWindow(): JSX.Element {
   const sessionId = q.get('sessionId') ?? ''
   const containerId = q.get('containerId') ?? ''
   const name = q.get('name') ?? containerId
+  const serverId = q.get('serverId') ?? ''
+  const title = q.get('title') ?? name
   const [logsText, setLogsText] = useState(LOADING)
   const [following, setFollowing] = useState(true)
   const { zoom, ref, reset } = useCtrlWheelZoom('serein.logs.zoom')
@@ -267,6 +273,16 @@ export function DockerLogsWindow(): JSX.Element {
               Стоп
             </button>
           )}
+          <AuxReattachButton
+            onClick={() =>
+              reattachWorkspace({
+                sessionId,
+                serverId: serverId || undefined,
+                title,
+                tool: 'docker'
+              })
+            }
+          />
           <WindowSysButtons />
         </div>
       </div>

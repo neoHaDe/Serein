@@ -699,13 +699,75 @@ fn windows_raise_group(app: AppHandle, focused: String) {
     let _ = (app, focused);
 }
 
+/// Развернуть все свёрнутые окна приложения (для режима «одна кнопка на панели задач»).
+#[tauri::command]
+fn windows_restore_minimized(app: AppHandle) -> u32 {
+    #[cfg(windows)]
+    return windows_restore_minimized_impl(&app);
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        0
+    }
+}
+
+/// Сколько окон приложения сейчас свёрнуто.
+#[tauri::command]
+fn windows_count_minimized(app: AppHandle) -> u32 {
+    #[cfg(windows)]
+    return windows_count_minimized_impl(&app);
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        0
+    }
+}
+
+#[cfg(windows)]
+fn windows_count_minimized_impl(app: &AppHandle) -> u32 {
+    use std::ffi::c_void;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::IsIconic;
+
+    let mut n = 0u32;
+    for (_, w) in app.webview_windows() {
+        let Ok(h) = w.hwnd() else { continue };
+        let hwnd = HWND(h.0 as isize as *mut c_void);
+        unsafe {
+            if IsIconic(hwnd).as_bool() {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+#[cfg(windows)]
+fn windows_restore_minimized_impl(app: &AppHandle) -> u32 {
+    use std::ffi::c_void;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{IsIconic, ShowWindow, SW_RESTORE};
+
+    let mut n = 0u32;
+    for (_, w) in app.webview_windows() {
+        let Ok(h) = w.hwnd() else { continue };
+        let hwnd = HWND(h.0 as isize as *mut c_void);
+        unsafe {
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
 #[cfg(windows)]
 fn windows_raise_group_impl(app: &AppHandle, focused: &str) {
     use std::ffi::c_void;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        IsIconic, SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOP, SWP_NOACTIVATE,
-        SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
+        IsIconic, SetForegroundWindow, SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     };
 
     let mut others: Vec<HWND> = Vec::new();
@@ -714,20 +776,21 @@ fn windows_raise_group_impl(app: &AppHandle, focused: &str) {
     for (label, w) in app.webview_windows() {
         let Ok(h) = w.hwnd() else { continue };
         let hwnd = HWND(h.0 as isize as *mut c_void);
+        // Свернутые окна не трогаем — иначе minimize сразу отменяется raise_group.
+        unsafe {
+            if IsIconic(hwnd).as_bool() {
+                continue;
+            }
+        }
         if label == focused {
             focus_hwnd = Some(hwnd);
         } else {
             others.push(hwnd);
         }
-        unsafe {
-            if IsIconic(hwnd).as_bool() {
-                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-            }
-        }
     }
 
     unsafe {
-        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW;
+        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
         for hwnd in others {
             let _ = SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags);
         }
@@ -785,7 +848,8 @@ pub fn run() {
             backup_export, backup_import,
             keygen_generate, keygen_save, keygen_install,
             servers_import_ssh_config, servers_import_putty,
-            windows_raise_group, clipboard_write, clipboard_read
+            windows_raise_group, windows_restore_minimized, windows_count_minimized,
+            clipboard_write, clipboard_read
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

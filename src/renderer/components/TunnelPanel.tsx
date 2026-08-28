@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { ServerConfig, TunnelConfig, TunnelStatus } from '../../shared/types'
 import { Icon } from './Icon'
+import { WsDetachButton } from './WsDetachButton'
+import { openDetachedWorkspace } from './workspaceWindow'
 
 function tunnelDesc(t: TunnelConfig): string {
   if (t.type === 'local') return `127.0.0.1:${t.localPort} → ${t.remoteHost}:${t.remotePort}`
@@ -11,12 +13,24 @@ function tunnelDesc(t: TunnelConfig): string {
 interface Props {
   sessionId: string
   server: ServerConfig | undefined
+  panelTitle?: string
   onClose: () => void
   onEditServer: () => void
   docked?: boolean
+  fill?: boolean
+  onDetached?: () => void
 }
 
-export function TunnelPanel({ sessionId, server, onClose, onEditServer, docked }: Props): JSX.Element {
+export function TunnelPanel({
+  sessionId,
+  server,
+  panelTitle,
+  onClose,
+  onEditServer,
+  docked,
+  fill,
+  onDetached
+}: Props): JSX.Element {
   const [statuses, setStatuses] = useState<Map<string, TunnelStatus>>(new Map())
   const [opening, setOpening] = useState<Set<string>>(new Set())
 
@@ -48,20 +62,29 @@ export function TunnelPanel({ sessionId, server, onClose, onEditServer, docked }
     onEditServer()
   }
 
+  const detach = async (): Promise<void> => {
+    if (!panelTitle) return
+    await openDetachedWorkspace({ tool: 'tunnels', sessionId, serverId: server?.id, title: panelTitle })
+    onDetached?.()
+  }
+
   return (
     <>
       {!docked && <div className="split-menu-backdrop" onClick={onClose} />}
-      <div className={docked ? 'ws-panel' : 'tunnel-menu'}>
+      <div className={(docked ? 'ws-panel' : 'tunnel-menu') + (fill ? ' fill' : '')}>
         <div className={docked ? 'ws-head' : 'tunnel-menu-header'}>
           <span className={docked ? 'ws-head-title' : 'tunnel-menu-title'}>
             {docked && <Icon name="tunnel" size={15} />}
             Туннели
           </span>
-          {server && (
-            <button className="mini" title="Настроить туннели в форме сервера" onClick={edit}>
-              <Icon name="settings" size={14} />
-            </button>
-          )}
+          <div style={{ display: 'flex', gap: 6 }}>
+            {docked && panelTitle && onDetached && !fill && <WsDetachButton onClick={detach} />}
+            {server && (
+              <button className="mini" title="Настроить туннели в форме сервера" onClick={edit}>
+                <Icon name="settings" size={14} />
+              </button>
+            )}
+          </div>
         </div>
         {cfgs.length === 0 ? (
           <div className={docked ? 'ws-empty' : undefined} style={docked ? undefined : { padding: '10px 12px' }}>

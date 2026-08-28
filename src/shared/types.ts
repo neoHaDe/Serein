@@ -323,21 +323,23 @@ export type SerializedPane = SerializedLeaf | SerializedSplit
 /** Инструмент в рельсе workspace SSH-вкладки. */
 export const WORKSPACE_TOOLS = [
   'terminal',
-  'files',
   'docker',
   'logs',
-  'resources',
   'processes',
   'services',
   'tunnels'
 ] as const
 export type WorkspaceTool = (typeof WORKSPACE_TOOLS)[number]
 
-export function parseWorkspaceTool(v: unknown, sftpOpen?: boolean): WorkspaceTool {
-  if (typeof v === 'string' && (WORKSPACE_TOOLS as readonly string[]).includes(v)) {
-    return v as WorkspaceTool
+export function parseWorkspaceTool(v: unknown, _sftpOpen?: boolean): WorkspaceTool {
+  if (typeof v === 'string') {
+    if (v === 'resources') return 'processes'
+    if (v === 'files') return 'terminal'
+    if ((WORKSPACE_TOOLS as readonly string[]).includes(v)) {
+      return v as WorkspaceTool
+    }
   }
-  return sftpOpen ? 'files' : 'terminal'
+  return 'terminal'
 }
 
 export interface WorkspaceProcess {

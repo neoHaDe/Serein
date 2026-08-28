@@ -13,6 +13,7 @@ interface Props {
   onNewLocal: () => void
   onToggleSftp: (key: string) => void
   onSetWorkspace: (key: string, tool: WorkspaceTool) => void
+  onDetachTab: (key: string) => void
   onRename: (key: string, title: string) => void
   onReorder: (fromKey: string, toKey: string) => void
   onSplit: (tabKey: string, dir: 'row' | 'col', choice: SplitChoice) => void
@@ -136,6 +137,7 @@ export function TabBar({
   onNewLocal,
   onToggleSftp,
   onSetWorkspace,
+  onDetachTab,
   onRename,
   onReorder,
   onSplit,
@@ -154,11 +156,6 @@ export function TabBar({
   const [logging, setLogging] = useState(false)
 
   const activeSessionId = activeLeaf?.sessionId
-
-  const flipWorkspace = (tool: WorkspaceTool): void => {
-    if (!active) return
-    onSetWorkspace(active.key, active.workspace === tool ? 'terminal' : tool)
-  }
 
   useEffect(() => {
     if (activeSessionId) window.api.session.logStatus(activeSessionId).then(setLogging)
@@ -392,37 +389,34 @@ export function TabBar({
             <Icon name={logging ? 'log-on' : 'log'} />
           </button>
         )}
-        {active && activeLeaf?.kind === 'ssh' && activeLeaf.status === 'connected' && activeLeaf.sessionId && (
+        {active && activeLeaf?.sessionId && activeLeaf.status === 'connected' && (
           <>
             <span className="tool-sep" />
             <button
-              className={'tool-btn' + (active.workspace === 'resources' ? ' on' : '')}
-              title="Ресурсы сервера"
-              onClick={() => flipWorkspace('resources')}
+              className="tool-btn"
+              title="Открепить вкладку в отдельное окно"
+              onClick={() => onDetachTab(active.key)}
             >
-              <Icon name="monitor" />
+              <Icon name="external" />
             </button>
-            <button
-              className={'tool-btn' + (active.workspace === 'docker' ? ' on' : '')}
-              title="Docker-контейнеры"
-              onClick={() => flipWorkspace('docker')}
-            >
-              <Icon name="docker" />
-            </button>
-            <button
-              className={'tool-btn' + (active.workspace === 'tunnels' ? ' on' : '')}
-              title="Проброс портов (туннели)"
-              onClick={() => flipWorkspace('tunnels')}
-            >
-              <Icon name="tunnel" />
-            </button>
-            <button
-              className={'tool-btn' + (active.workspace === 'files' || active.sftpOpen ? ' on' : '')}
-              title="Файловый менеджер (SFTP)"
-              onClick={() => onToggleSftp(active.key)}
-            >
-              <Icon name="folder" />
-            </button>
+            {activeLeaf.kind === 'ssh' && (
+              <>
+                <button
+                  className={'tool-btn' + (active.workspace === 'tunnels' ? ' on' : '')}
+                  title="Проброс портов (туннели)"
+                  onClick={() => onSetWorkspace(active.key, active.workspace === 'tunnels' ? 'terminal' : 'tunnels')}
+                >
+                  <Icon name="tunnel" />
+                </button>
+                <button
+                  className={'tool-btn' + (active.sftpOpen ? ' on' : '')}
+                  title="Файловый менеджер (SFTP)"
+                  onClick={() => onToggleSftp(active.key)}
+                >
+                  <Icon name="folder" />
+                </button>
+              </>
+            )}
           </>
         )}
       </div>

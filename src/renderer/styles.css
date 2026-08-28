@@ -2098,6 +2098,19 @@ button.secondary:hover {
 .sb-spacer {
   flex: 1;
 }
+.sb-minimized-hint {
+  cursor: pointer;
+  border: none;
+  background: rgba(122, 162, 247, 0.12);
+  color: var(--accent);
+  border-radius: 4px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 11px;
+}
+.sb-minimized-hint:hover {
+  background: rgba(122, 162, 247, 0.22);
+}
 
 /* ---------- Меню импорта в сайдбаре ---------- */
 .sidebar-header-actions {
@@ -2389,8 +2402,9 @@ button.secondary:hover {
 .docker-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 10px;
+  gap: 8px;
+  padding: 5px 8px;
+  min-height: 32px;
   border-radius: var(--r-sm);
   transition: background 0.12s;
 }
@@ -2408,18 +2422,13 @@ button.secondary:hover {
   min-width: 0;
 }
 .docker-name {
-  font-size: 13px;
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .docker-image {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  display: none;
 }
 .docker-actions {
   display: flex;
@@ -2962,6 +2971,80 @@ button.secondary:hover {
 [data-density='compact'] .mon-body { padding: 11px; gap: 11px; }
 [data-density='compact'] .ws-rail { width: 132px; }
 [data-density='compact'] .ws-nav-item { padding: 5px 8px; font-size: 12px; }
+
+.ws-metrics {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px 8px;
+}
+.ws-metrics.compact {
+  padding: 8px 12px 6px;
+}
+.ws-metrics-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.ws-metrics-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.ws-metrics-err {
+  padding: 0 0 6px;
+  font-size: 12px;
+}
+.ws-metrics .mon-body.docked {
+  padding: 0;
+  gap: 8px;
+}
+.ws-panel.fill {
+  flex: 1;
+  min-height: 0;
+}
+.app-chrome-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+.aux-chrome-tool.on {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.15);
+}
+.aux-reattach-btn {
+  color: var(--muted);
+}
+.aux-reattach-btn:hover {
+  color: var(--text);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+.detached-tab-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 100%;
+}
+.aux-workspace-body,
+.detached-tab-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.detached-tab-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
 
 /* Уважение системной настройки «уменьшить движение». */
 @media (prefers-reduced-motion: reduce) {

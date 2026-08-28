@@ -1,8 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { WorkspaceService } from '../../shared/types'
 import { Icon } from './Icon'
+import { WsDetachButton } from './WsDetachButton'
+import { openDetachedWorkspace } from './workspaceWindow'
 
-export function ServicePanel({ sessionId }: { sessionId: string }): JSX.Element {
+export function ServicePanel({
+  sessionId,
+  panelTitle,
+  onDetached,
+  fill
+}: {
+  sessionId: string
+  panelTitle?: string
+  onDetached?: () => void
+  fill?: boolean
+}): JSX.Element {
   const [rows, setRows] = useState<WorkspaceService[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -45,13 +57,22 @@ export function ServicePanel({ sessionId }: { sessionId: string }): JSX.Element 
     else void reload()
   }
 
+  const detach = async (): Promise<void> => {
+    if (!panelTitle) return
+    await openDetachedWorkspace({ tool: 'services', sessionId, title: panelTitle })
+    onDetached?.()
+  }
+
   return (
-    <div className="ws-panel">
+    <div className={'ws-panel' + (fill ? ' fill' : '')}>
       <div className="ws-head">
         <span className="ws-head-title"><Icon name="settings" size={15} /> Сервисы</span>
-        <button className="mini" title="Обновить" onClick={() => void reload()}>
-          <Icon name="refresh" size={14} />
-        </button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {panelTitle && onDetached && <WsDetachButton onClick={detach} />}
+          <button className="mini" title="Обновить" onClick={() => void reload()}>
+            <Icon name="refresh" size={14} />
+          </button>
+        </div>
       </div>
       <div className="ws-toolbar">
         <input
