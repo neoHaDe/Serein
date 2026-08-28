@@ -10,7 +10,7 @@ Tabs and split panes, an SFTP file manager with an editor,
 port forwards, resource monitoring, a Docker panel, and a local terminal —
 in an installer of about **6 MB**.
 
-Free, open source, Apache 2.0. Windows x64, **v1.2.0**.
+Free, open source, Apache 2.0. Windows x64, **v1.2.1**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -113,7 +113,7 @@ A weak laptop will not magically match 33 MB.
 
 ## Quick start
 
-1. Install the setup exe or grab the portable `Serein_1.2.0_x64-portable.exe` from [Releases](../../releases/latest).
+1. Install the setup exe or grab the portable `Serein_1.2.1_x64-portable.exe` from [Releases](../../releases/latest).
 2. Import `~/.ssh/config` or add a host by hand.
 3. Connect. The local terminal works with no SSH at all.
 
@@ -129,7 +129,7 @@ Target: install → first session in under two minutes.
 | WebView2 | already on current Windows; nothing extra to install |
 | Privileges | admin is not required for daily use |
 | Build from source | Node **18.18+** (tested on 24.16), Rust **stable** `x86_64-pc-windows-msvc` (tested on 1.96.0), Tauri CLI **2.11.x** |
-| SSH agent | **not yet** — password, key file, or keyboard-interactive |
+| SSH agent | password, key file, **SSH agent**, or keyboard-interactive |
 
 Matrix and smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
 
@@ -139,11 +139,11 @@ Matrix and smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
 
 From [Releases](../../releases/latest):
 
-- **`Serein_1.2.0_x64-setup.exe`** — installer (Start menu, uninstall).
-- **`Serein_1.2.0_x64-portable.exe`** — a single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`.
+- **`Serein_1.2.1_x64-setup.exe`** — installer (Start menu, uninstall).
+- **`Serein_1.2.1_x64-portable.exe`** — a single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`.
 
 The build is **unsigned**. SmartScreen will complain. *More info → Run anyway*.
-Release notes: [RELEASE_NOTES_v1.2.0.md](docs/RELEASE_NOTES_v1.2.0.md).
+Release notes: [RELEASE_NOTES_v1.2.1.md](docs/RELEASE_NOTES_v1.2.1.md).
 
 The updater endpoint is wired (`nehade.xyz/updates/terminal/`). Do not rely on it
 while the installer is unsigned.
@@ -223,13 +223,13 @@ and `npm run tauri dev` output.
 
 ## Known limitations
 
-- No **SSH agent** and no **agent forwarding**.
+- **SSH agent** and **agent forwarding** (v1.2.1).
 - **Windows x64** only. No `.dmg` / `.AppImage`.
 - Installer is **unsigned**. SmartScreen will fight you.
 - Updater endpoint exists; do not rely on it while the installer is unsigned.
 - Not on the near-term list: cloud sync, mobile, plugins, Telnet/RDP/VNC, a generic LLM chat pane.
 
-Product plan: **SSH Agent** and session reliability → polish Server Workspace → Copilot. See [release notes 1.2.0](docs/RELEASE_NOTES_v1.2.0.md).
+Product plan: session reliability → polish Server Workspace → Copilot. See [release notes 1.2.1](docs/RELEASE_NOTES_v1.2.1.md).
 
 ---
 

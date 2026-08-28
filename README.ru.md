@@ -10,7 +10,7 @@
 проброс портов, мониторинг ресурсов, панель Docker и локальный терминал —
 в установщике на **≈ 6 МБ**.
 
-Бесплатно, открытый код, Apache 2.0. Windows x64, **v1.2.0**.
+Бесплатно, открытый код, Apache 2.0. Windows x64, **v1.2.1**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -113,7 +113,7 @@ Windows · без своего Chromium (системный WebView2) ·
 
 ## Быстрый старт
 
-1. Поставь установщик или скачай portable `Serein_1.2.0_x64-portable.exe` из [Releases](../../releases/latest).
+1. Поставь установщик или скачай portable `Serein_1.2.1_x64-portable.exe` из [Releases](../../releases/latest).
 2. Импортируй `~/.ssh/config` или добавь сервер вручную.
 3. Подключись. Локальный терминал работает и без SSH.
 
@@ -129,7 +129,7 @@ Windows · без своего Chromium (системный WebView2) ·
 | WebView2 | уже есть в актуальном Windows; отдельно ставить не нужно |
 | Права | администратор для повседневной работы не нужен |
 | Сборка из исходников | Node **18.18+** (проверено на 24.16), Rust **stable** `x86_64-pc-windows-msvc` (проверено на 1.96.0), Tauri CLI **2.11.x** |
-| SSH-агент | **пока нет** — пароль, файл ключа или keyboard-interactive |
+| SSH-агент | пароль, файл ключа, **SSH-агент** или keyboard-interactive |
 
 Матрица и smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
 
@@ -139,11 +139,11 @@ Windows · без своего Chromium (системный WebView2) ·
 
 С [Releases](../../releases/latest):
 
-- **`Serein_1.2.0_x64-setup.exe`** — установщик (меню Пуск, удаление).
-- **`Serein_1.2.0_x64-portable.exe`** — один файл, без установки. Положи и запусти. Настройки всё равно в `%APPDATA%\serein`.
+- **`Serein_1.2.1_x64-setup.exe`** — установщик (меню Пуск, удаление).
+- **`Serein_1.2.1_x64-portable.exe`** — один файл, без установки. Положи и запусти. Настройки всё равно в `%APPDATA%\serein`.
 
 Сборка **не подписана** — SmartScreen ругнётся. *Подробнее → Выполнить в любом случае*.
-Что нового — [release notes](docs/RELEASE_NOTES_v1.2.0.md) и описание выпуска на GitHub.
+Что нового — [release notes](docs/RELEASE_NOTES_v1.2.1.md) и описание выпуска на GitHub.
 
 Автообновление в конфиге заведено (`nehade.xyz/updates/terminal/`), на неподписанном
 установщике на него не рассчитывай.
@@ -222,13 +222,13 @@ npm run smoke
 
 ## Известные ограничения
 
-- Нет **SSH-агента** и **agent-forwarding**.
+- **SSH-агент** и **agent forwarding** (v1.2.1).
 - Сборки только под **Windows x64**. `.dmg` / `.AppImage` нет.
 - Установщик **без цифровой подписи**. SmartScreen будет спорить.
 - Автообновление в конфиге есть, под неподписанный установщик пока не рассчитывай.
 - Не цель ближайших релизов: облачный sync, мобилка, плагины, Telnet/RDP/VNC, «просто чат с LLM».
 
-Дорожная карта: **SSH Agent** и надёжность сессии → polish Server Workspace → Copilot. Подробнее — [release notes 1.2.0](docs/RELEASE_NOTES_v1.2.0.md).
+Дорожная карта: надёжность сессии → polish Server Workspace → Copilot. Подробнее — [release notes 1.2.1](docs/RELEASE_NOTES_v1.2.1.md).
 
 ---
 
