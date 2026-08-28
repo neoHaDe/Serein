@@ -1,4 +1,4 @@
-//! Podklyuchenie k lokalnomu SSH-agentu (OpenSSH Authentication Agent / ssh-agent).
+//! Подключение к локальному SSH-агенту (OpenSSH Authentication Agent / ssh-agent).
 
 use byteorder::{BigEndian, ByteOrder};
 use russh_keys::agent::client::AgentClient;
@@ -9,7 +9,7 @@ const WIN_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
 const MAX_AGENT_REPLY: usize = 256 * 1024;
 
 pub fn agent_unavailable_hint() -> &'static str {
-    "SSH-agent nedostupen. Na Windows: sluzhba OpenSSH Authentication Agent + ssh-add. Na Linux/macOS: eval \"$(ssh-agent)\" i ssh-add."
+    "SSH-агент недоступен. На Windows: служба «OpenSSH Authentication Agent» + ssh-add. На Linux/macOS: eval \"$(ssh-agent)\" и ssh-add."
 }
 
 fn agent_err(e: impl std::fmt::Display) -> String {
@@ -46,7 +46,7 @@ pub async fn connect_agent(
 
 pub async fn agent_roundtrip(payload: &[u8]) -> Result<Vec<u8>, String> {
     if payload.len() < 4 {
-        return Err("Nekorrektnoe soobshchenie SSH-agenta".into());
+        return Err("Некорректное сообщение SSH-агента".into());
     }
     let mut stream = connect_agent_stream().await?;
     stream.write_all(payload).await.map_err(|e| agent_err(e))?;
@@ -59,7 +59,7 @@ pub async fn agent_roundtrip(payload: &[u8]) -> Result<Vec<u8>, String> {
     })?;
     let len = BigEndian::read_u32(&len_buf) as usize;
     if len > MAX_AGENT_REPLY {
-        return Err("Slishkom bolshoy otvet SSH-agenta".into());
+        return Err("Слишком большой ответ SSH-агента".into());
     }
     let mut body = vec![0u8; len];
     stream.read_exact(&mut body).await.map_err(|e| agent_err(e))?;
@@ -76,7 +76,7 @@ pub async fn authenticate_with_agent(
     let mut agent = connect_agent().await?;
     let keys = agent.request_identities().await.map_err(|e| agent_err(e))?;
     if keys.is_empty() {
-        return Err("V SSH-agente net klyuchey. Dobavte klyuch: ssh-add.".into());
+        return Err("В SSH-агенте нет ключей. Добавьте ключ: ssh-add.".into());
     }
     for key in keys {
         let (agent_back, ok) = handle.authenticate_future(user, key, agent).await;
@@ -84,7 +84,7 @@ pub async fn authenticate_with_agent(
         match ok {
             Ok(true) => return Ok(true),
             Ok(false) => continue,
-            Err(e) => return Err(format!("Oshibka SSH-agenta: {e}")),
+            Err(e) => return Err(format!("Ошибка SSH-агента: {e}")),
         }
     }
     Ok(false)
