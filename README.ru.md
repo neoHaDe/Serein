@@ -10,7 +10,7 @@
 проброс портов, мониторинг ресурсов, панель Docker и локальный терминал —
 в установщике на **≈ 6 МБ**.
 
-Бесплатно, открытый код, Apache 2.0. Windows x64, **v1.1.0**.
+Бесплатно, открытый код, Apache 2.0. Windows x64, **v1.2.0**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -43,7 +43,7 @@ Windows · без своего Chromium (системный WebView2) ·
 | SSH-движок | чистый Rust [`russh`](https://github.com/Eugeny/russh) | libssh2 / нативный |
 | Рантайм | системный WebView2 | полный Chromium |
 
-Цифры — живой `tauri dev` (RAM) и NSIS 1.1.0 (~6 МБ сжатый). На слабом ноутбуке те же 33 МБ не обещаем.
+Цифры — живой `tauri dev` (RAM) и NSIS 1.2.0 (~6 МБ сжатый). На слабом ноутбуке те же 33 МБ не обещаем.
 
 ---
 
@@ -88,8 +88,11 @@ Windows · без своего Chromium (системный WebView2) ·
 ### Туннели и эксплуатация
 - Проброс портов: **локальный `-L`**, **обратный `-R`**, **динамический SOCKS5 `-D`** (открытие туннеля можно прервать)
 - **Мониторинг ресурсов** — CPU / RAM / диск / load (опрос `/proc` + `df`)
-- **Панель Docker** — список, старт/стоп/рестарт/удаление, shell в контейнер
+- **Docker-workspace (v1.2.0)** — контейнеры с живыми `docker stats`, портами и health; файлы внутри контейнера; старт/стоп/рестарт/удаление, shell
+- **Docker Compose (v1.2.0)** — проекты и сервисы, up/down/start/stop/restart, логи и shell по сервису, чтение compose YAML
 - **Логи Docker** — цвет уровней, follow (`-f`) со стопом, широкая панель; **открепить** на второй монитор
+- **Логи хоста (v1.2.0)** — `journalctl` с подсветкой, фильтром и выгрузкой отчёта об ошибках в `.txt`
+- **Логирование сессии (v1.2.0)** — запись вывода терминала в `%APPDATA%\serein\logs`, без ANSI
 
 ### Окна
 - Откреплённые вкладки, SFTP, логи и панели workspace — **отдельные окна ОС**, без рамки Windows
@@ -110,7 +113,7 @@ Windows · без своего Chromium (системный WebView2) ·
 
 ## Быстрый старт
 
-1. Поставь установщик или скачай portable `Serein_1.1.0_x64-portable.exe` из [Releases](../../releases/latest).
+1. Поставь установщик или скачай portable `Serein_1.2.0_x64-portable.exe` из [Releases](../../releases/latest).
 2. Импортируй `~/.ssh/config` или добавь сервер вручную.
 3. Подключись. Локальный терминал работает и без SSH.
 
@@ -136,11 +139,11 @@ Windows · без своего Chromium (системный WebView2) ·
 
 С [Releases](../../releases/latest):
 
-- **`Serein_1.1.0_x64-setup.exe`** — установщик (меню Пуск, удаление).
-- **`Serein_1.1.0_x64-portable.exe`** — один файл, без установки. Положи и запусти. Настройки всё равно в `%APPDATA%\serein`.
+- **`Serein_1.2.0_x64-setup.exe`** — установщик (меню Пуск, удаление).
+- **`Serein_1.2.0_x64-portable.exe`** — один файл, без установки. Положи и запусти. Настройки всё равно в `%APPDATA%\serein`.
 
 Сборка **не подписана** — SmartScreen ругнётся. *Подробнее → Выполнить в любом случае*.
-Проверяй SHA-256 из [release notes](docs/RELEASE_NOTES_v1.1.0.md) или описания выпуска на GitHub.
+Что нового — [release notes](docs/RELEASE_NOTES_v1.2.0.md) и описание выпуска на GitHub.
 
 Автообновление в конфиге заведено (`nehade.xyz/updates/terminal/`), на неподписанном
 установщике на него не рассчитывай.
@@ -225,7 +228,7 @@ npm run smoke
 - Автообновление в конфиге есть, под неподписанный установщик пока не рассчитывай.
 - Не цель ближайших релизов: облачный sync, мобилка, плагины, Telnet/RDP/VNC, «просто чат с LLM».
 
-Дорожная карта: **SSH Agent** и надёжность сессии → polish Server Workspace → Copilot. Подробнее — [release notes 1.1.0](docs/RELEASE_NOTES_v1.1.0.md).
+Дорожная карта: **SSH Agent** и надёжность сессии → polish Server Workspace → Copilot. Подробнее — [release notes 1.2.0](docs/RELEASE_NOTES_v1.2.0.md).
 
 ---
 
