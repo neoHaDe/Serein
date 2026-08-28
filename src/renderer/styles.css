@@ -894,6 +894,29 @@ button {
 .empty-state button:active {
   transform: translateY(0);
 }
+/* Первый запуск: три равнозначных способа завести первый сервер. */
+.welcome-actions {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+.welcome-hint {
+  font-size: 12px;
+  opacity: 0.75;
+}
+/* Второстепенное действие рядом с акцентными — тот же размер, но без заливки. */
+.empty-state button.ghost {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+.empty-state button.ghost:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
 @keyframes heroIn {
   from {
     opacity: 0;
@@ -1130,7 +1153,7 @@ html.aux-win #root {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  color: var(--fg);
+  color: var(--text);
   padding: 4px 8px;
   font: inherit;
   font-size: 12px;

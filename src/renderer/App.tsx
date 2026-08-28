@@ -1068,7 +1068,27 @@ export default function App(): JSX.Element {
         />
 
         <div className="terminals">
-          {tabs.length === 0 && (
+          {tabs.length === 0 && servers.length === 0 && (
+            <div className="empty-state">
+              <h1>Serein</h1>
+              <p>
+                Серверов пока нет. Быстрее всего — забрать те, что уже
+                <br />
+                настроены на этой машине.
+              </p>
+              <div className="welcome-actions">
+                <button onClick={() => void importServers('ssh')}>Импорт из ~/.ssh/config</button>
+                <button onClick={() => void importServers('putty')}>Импорт сессий PuTTY</button>
+                <button onClick={() => setEditing(null)}>Добавить сервер вручную</button>
+              </div>
+              <p className="welcome-hint">Локальный терминал работает и без настройки.</p>
+              <button className="ghost" onClick={openLocalTab}>
+                Открыть локальный терминал
+              </button>
+            </div>
+          )}
+
+          {tabs.length === 0 && servers.length > 0 && (
             <div className="empty-state">
               <h1>Serein</h1>
               <p>Выберите сервер слева для подключения по SSH<br />или откройте локальный терминал.</p>
