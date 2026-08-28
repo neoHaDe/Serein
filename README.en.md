@@ -50,13 +50,20 @@ A weak laptop will not magically match 33 MB.
 
 ## Features
 
+### Server Workspace (v1.1.0)
+- **Server workspace rail** on SSH tabs: Terminal, Docker, Logs, Processes, Services, Tunnels
+- **Processes** — `ps` table plus CPU/RAM/disk metrics; **Docker** — compact rows, properties via right-click
+- **SFTP** — side panel from TabBar; server list collapses on connect
+- **↗ Detach** a tab or workspace panel; **← reattach** to main (SSH session stays alive)
+
 ### Terminal and UX
 - **Multiple SSH tabs** and **split panes** (tree with drag-resize, pick a server per pane)
 - **Local terminal** with a sensible shell (PowerShell → cmd, or a custom / WSL shell)
 - Search (`Ctrl+F`), zoom, **17 UI themes**, **compact mode**
 - **Custom window chrome** (no Windows caption): minimize / maximize / close
 - **Broadcast input** (current tab only), tab restore, tab drag
-- Keyboard pane navigation, remappable shortcuts, **command palette** (`Ctrl+Shift+P`)
+- **Ctrl+Shift+C / Ctrl+Shift+V** — copy/paste in the terminal (not WebView2 DevTools)
+- SSH output batching; 4 MiB buffer with warning when overloaded
 
 ### Connections
 - Sidebar with groups and search, **live connection status**
@@ -66,9 +73,14 @@ A weak laptop will not magically match 33 MB.
 - **Reconnect on drop** — manual or auto (up to 5 attempts, backoff)
 - Import from **`~/.ssh/config`** and **PuTTY** sessions
 
+- Keyboard pane navigation, remappable shortcuts, **command palette** (`Ctrl+Shift+P`)
+
 ### Files (SFTP)
 - Browse with **clickable breadcrumbs**, **inline rename**, drag & drop into the window
-- **Recursive transfers** with progress and **per-file cancel** (✕)
+- **Parallel transfers** (pool of 4, up to 8 in settings), **transfer manager**: speed, ETA, pause, retry
+- **Explorer-like columns** (name, type, mode, size, date), sort, resize, Ctrl/Shift selection
+- **Drag-and-drop with Windows Explorer** — server to desktop/Downloads; PC to open SFTP folder
+- chmod, hidden files, symlink follow, image preview; actions in the right-click menu
 - Dual-pane (local ↔ remote); **detach SFTP** into its own OS window
 - **Ctrl+wheel** (and Ctrl+/−/0) zooms text in SFTP and logs
 - **Built-in editor** (CodeMirror 6) — atomic save back to the server
@@ -81,11 +93,13 @@ A weak laptop will not magically match 33 MB.
 - **Docker logs** — coloured levels, follow (`-f`) with stop, wide panel; **detach** to a second monitor
 
 ### App windows
-- Detached logs and SFTP are real OS windows, without the Windows caption
+- Detached tabs, SFTP, logs, and workspace panels — **separate OS windows**, no Windows caption
 - **Magnet**: windows snap flush and to guides (edges / center)
 - The main window drags a docked group; drag an extra window to undock it
+- Aux windows **minimize independently**; restore minimized aux via taskbar click or the main status bar
 - Focusing any Serein window raises **all** of them; by default **one taskbar button**
   (settings can restore a button per window)
+- Remembers detached window geometry after restart
 
 ### Security and storage
 - Secrets via **DPAPI** plus an optional **master password**
@@ -127,7 +141,7 @@ From [Releases](../../releases/latest):
 - **`Serein_1.1.0_x64-portable.exe`** — a single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`.
 
 The build is **unsigned**. SmartScreen will complain. *More info → Run anyway*.
-If the release notes publish a SHA-256, check that instead of clicking through blindly.
+If the release notes publish a SHA-256, check [RELEASE_NOTES_v1.1.0.md](docs/RELEASE_NOTES_v1.1.0.md).
 
 The updater endpoint is wired (`nehade.xyz/updates/terminal/`). Do not rely on it
 while the installer is unsigned.
@@ -208,13 +222,12 @@ and `npm run tauri dev` output.
 ## Known limitations
 
 - No **SSH agent** and no **agent forwarding**.
-- No drag-out of files onto the desktop.
-- No transfer-queue UI (pause / retry / several files in parallel). Cancelling the current file works.
 - **Windows x64** only. No `.dmg` / `.AppImage`.
 - Installer is **unsigned**. SmartScreen will fight you.
+- Updater endpoint exists; do not rely on it while the installer is unsigned.
 - Not on the near-term list: cloud sync, mobile, plugins, Telnet/RDP/VNC, a generic LLM chat pane.
 
-Product plan: a reliable SSH core, then Server Workspace, then Copilot. Do not skip the first layer.
+Product plan: **SSH Agent** and session reliability → polish Server Workspace → Copilot. See [release notes 1.1.0](docs/RELEASE_NOTES_v1.1.0.md).
 
 ---
 

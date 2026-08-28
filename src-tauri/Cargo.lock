@@ -4029,7 +4029,7 @@ dependencies = [
 
 [[package]]
 name = "serein"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "aes-gcm",
  "async-trait",

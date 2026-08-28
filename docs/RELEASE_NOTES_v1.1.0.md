@@ -13,48 +13,29 @@
 - Отмена ✕ сразу рвёт канал, без зависшей строки «активна».
 
 **Проводник**
-- Колонки как в Explorer: имя, тип, права, размер, дата; ресайз, сортировка, галочки колонок.
-- ПКМ: открыть, редакторы, скачать, удалить, свойства. Ctrl/Shift-выделение, Delete, Ctrl+A, F2.
-- chmod, скрытые файлы, фильтр, symlink follow, превью картинок во вкладке.
-- Drag-and-drop с Проводником: с сервера на рабочий стол / в Загрузки; с ПК — upload в открытую папку.
-- Свой модал «Заменить?» вместо window.confirm (WebView2 его не показывал).
+- Колонки как в Explorer: имя, тип, права, размер, дата; ресайз, сортировка, Ctrl/Shift-выделение.
+- Drag-and-drop с Проводником; chmod, скрытые файлы, symlink follow, превью картинок.
 
 ### Server Workspace
 
-У SSH-вкладки — рельса инструментов сервера (не попапы):
-
-- **Terminal** — сплит-панели как раньше.
-- **Docker** — компактный список; образ и статус в «Свойства» по ПКМ.
-- **Logs** — journalctl.
-- **Processes** — ps + метрики CPU/RAM/диск сверху (бывший Resources).
-- **Services** — systemctl.
-- **Tunnels** — проброс портов.
-
-SFTP — боковая панель из TabBar (не в рельсе). Список серверов при подключении сворачивается.
+- Рельса: Terminal, Docker, Logs, Processes (+ метрики), Services, Tunnels.
+- SFTP — боковая панель из TabBar.
 
 ### Окна и открепление
 
-- Вкладку SSH/локальную — ↗ в TabBar; панель workspace — ↗ в шапке. SSH-сессия не рвётся.
-- Кнопка «←» возвращает вкладку/панель/SFTP в главное окно.
-- Aux-окна независимы от main: сворачиваются сами, main их не тянет.
-- Одна кнопка на панели задач (по умолчанию): клик по Serein или кнопка в статус-баре main разворачивает свёрнутые aux.
-- Магнит окон: группа не отваливается при резком перетаскивании main.
-- Запоминание расположения откреплённых панелей после перезапуска.
+- ↗ вкладку или панель workspace; ← вернуть в main (SSH-сессия не рвётся).
+- Aux сворачиваются независимо; свёрнутые — клик по Serein или кнопка в статус-баре.
 
 ### Терминал
 
-- Копирование: Win32 clipboard, правый клик не сбрасывает выделение; OSC 52.
-- Ctrl+Shift+C копирует, Ctrl+Shift+V вставляет (не DevTools WebView2).
-- Батчинг вывода (~16 мс / 48 КиБ); при перегрузке буфер 4 МиБ с жёлтой пометкой.
+- Ctrl+Shift+C/V, батчинг вывода, Win32 clipboard.
 
 ### Установка
 
-1. **Serein_1.1.0_x64-setup.exe** — установщик NSIS (RU+EN, Tokyo Night).
-2. **Serein_1.1.0_x64-portable.exe** — один exe, без установки. Профиль в %APPDATA%\serein.
+1. **Serein_1.1.0_x64-setup.exe** — установщик NSIS (RU+EN).
+2. **Serein_1.1.0_x64-portable.exe** — один exe. Профиль в %APPDATA%\serein.
 
-Сборка **не подписана**. SmartScreen: *Подробнее → Выполнить в любом случае*.
-
-In-place с **1.0.0** — да, тот же dev.serein.app, профиль %APPDATA%\serein.
+In-place с **1.0.0** — да.
 
 ### SHA-256
 
@@ -63,14 +44,7 @@ In-place с **1.0.0** — да, тот же dev.serein.app, профиль %APPD
 
 ### Ограничения
 
-- Только Windows x64. Нет SSH-агента и agent-forwarding.
-- Автообновление через updater не настраивали под 1.1.0 — ставьте вручную.
-
-### Под капотом
-
-Tauri 2 · React 18 + TypeScript · russh / russh-sftp / portable-pty.
-
-Коммиты: 9818b45, b992346, 1216088.
+- Windows x64. Нет SSH-агента. Updater под 1.1.0 не настраивали.
 
 ---
-Полный список — в [README](https://github.com/neoHaDe/Serein/blob/master/README.md). English: [README.en.md](https://github.com/neoHaDe/Serein/blob/master/README.en.md).
+[README](https://github.com/neoHaDe/Serein/blob/master/README.md) · [README.en.md](https://github.com/neoHaDe/Serein/blob/master/README.en.md)
