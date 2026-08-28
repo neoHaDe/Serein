@@ -223,13 +223,13 @@ and `npm run tauri dev` output.
 
 ## Known limitations
 
-- **SSH agent** and **agent forwarding** (v1.2.1).
+- No **Serial/COM**, **Telnet**, or **raw TCP** connections yet — SSH only.
 - **Windows x64** only. No `.dmg` / `.AppImage`.
 - Installer is **unsigned**. SmartScreen will fight you.
 - Updater endpoint exists; do not rely on it while the installer is unsigned.
-- Not on the near-term list: cloud sync, mobile, plugins, Telnet/RDP/VNC, a generic LLM chat pane.
+- Not on the near-term list: cloud sync, mobile, plugins, RDP/VNC, a generic LLM chat pane.
 
-Product plan: session reliability → polish Server Workspace → Copilot. See [release notes 1.2.1](docs/RELEASE_NOTES_v1.2.1.md).
+Product plan: reliability and SSH compatibility hardening → Serial/Telnet → multi-host and automation → RDP/VNC. See [release notes 1.2.1](docs/RELEASE_NOTES_v1.2.1.md).
 
 ---
 

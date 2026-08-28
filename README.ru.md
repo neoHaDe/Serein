@@ -222,13 +222,13 @@ npm run smoke
 
 ## Известные ограничения
 
-- **SSH-агент** и **agent forwarding** (v1.2.1).
+- Нет **Serial/COM**, **Telnet** и raw TCP — только SSH.
 - Сборки только под **Windows x64**. `.dmg` / `.AppImage` нет.
 - Установщик **без цифровой подписи**. SmartScreen будет спорить.
 - Автообновление в конфиге есть, под неподписанный установщик пока не рассчитывай.
-- Не цель ближайших релизов: облачный sync, мобилка, плагины, Telnet/RDP/VNC, «просто чат с LLM».
+- Не цель ближайших релизов: облачный sync, мобилка, плагины, RDP/VNC, «просто чат с LLM».
 
-Дорожная карта: надёжность сессии → polish Server Workspace → Copilot. Подробнее — [release notes 1.2.1](docs/RELEASE_NOTES_v1.2.1.md).
+Дорожная карта: надёжность и совместимость SSH → Serial/Telnet → multi-host и automation → RDP/VNC. Подробнее — [release notes 1.2.1](docs/RELEASE_NOTES_v1.2.1.md).
 
 ---
 
