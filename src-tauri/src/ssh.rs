@@ -247,7 +247,9 @@ async fn authenticate(
                 .await
                 .map_err(|e| e.to_string())
         }
-        "agent" => ssh_agent::authenticate_with_agent(handle, &user).await,
+        "agent" => {
+            ssh_agent::authenticate_with_agent(handle, &user, field(server, "agentKey")).await
+        }
         _ => {
             // password (+ фолбэк на keyboard-interactive/2FA для целевого сервера).
             let pass = field(server, "password").unwrap_or("");

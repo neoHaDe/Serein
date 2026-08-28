@@ -7,6 +7,7 @@ import { listen } from '@tauri-apps/api/event'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import type {
   ServerConfig,
+  AgentIdentitiesResult,
   OpenSshPayload,
   OpenLocalPayload,
   ResizePayload,
@@ -65,6 +66,10 @@ export const api = {
     remove: (id: string): Promise<void> => invoke('servers_delete', { id }),
     importSshConfig: (): Promise<{ imported: number }> => invoke('servers_import_ssh_config'),
     importPutty: (): Promise<{ imported: number }> => invoke('servers_import_putty')
+  },
+  agent: {
+    /** Ключи локального SSH-агента. `ok: false` — агент не запущен, не ошибка вызова. */
+    identities: (): Promise<AgentIdentitiesResult> => invoke('ssh_agent_identities')
   },
   session: {
     openSsh: (p: OpenSshPayload): Promise<string> => invoke('session_open_ssh', { p }),

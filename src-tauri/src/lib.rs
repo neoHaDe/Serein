@@ -280,6 +280,19 @@ async fn session_ping(state: State<'_, AppState>, id: String) -> Result<Option<u
     }
 }
 
+/// Ключи локального SSH-агента — для выбора в настройках сервера.
+#[tauri::command]
+async fn ssh_agent_identities() -> Result<Value, String> {
+    match ssh_agent::list_identities().await {
+        Ok(keys) => Ok(json!({
+            "ok": true,
+            "keys": keys.iter().map(|k| k.to_json()).collect::<Vec<_>>(),
+        })),
+        // Отсутствие агента — обычное состояние, а не сбой: форма покажет подсказку.
+        Err(e) => Ok(json!({ "ok": false, "error": e })),
+    }
+}
+
 #[tauri::command]
 fn session_log_status(id: String) -> bool {
     term_out::log_active(&id)
@@ -1011,7 +1024,7 @@ pub fn run() {
             localfs_home, localfs_parent, localfs_list, localfs_copy_into,
             session_open_local, session_open_ssh, session_write, session_resize, session_close,
             session_ping, session_monitor, session_ki_respond,
-            session_log_status, session_log_toggle,
+            session_log_status, session_log_toggle, ssh_agent_identities,
             docker_list, docker_action, docker_logs, docker_stats, docker_logs_cancel, docker_container_files,
             docker_compose_list, docker_compose_ps, docker_compose_action, docker_compose_read,
             docker_compose_logs, docker_compose_logs_cancel,

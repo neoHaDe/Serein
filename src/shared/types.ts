@@ -80,6 +80,24 @@ export interface ServerConfig {
   executeOnConnect?: string
   /** Пробрасывать SSH-агент на сервер (agent forwarding). */
   agentForward?: boolean
+  /**
+   * Отпечаток ключа из агента (`SHA256:…`), которым подключаться.
+   * Пусто — перебирать все ключи агента подряд.
+   */
+  agentKey?: string
+}
+
+/** Ключ, загруженный в локальный SSH-агент. */
+export interface AgentIdentity {
+  algo: string
+  comment: string
+  fingerprint: string
+}
+
+export interface AgentIdentitiesResult {
+  ok: boolean
+  keys?: AgentIdentity[]
+  error?: string
 }
 
 export type SessionKind = 'ssh' | 'local'

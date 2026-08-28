@@ -830,6 +830,31 @@ button {
   width: auto !important;
   margin: 0 !important;
 }
+
+/* Выбор ключа SSH-агента: заголовок поля с кнопкой обновления справа. */
+.agent-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.agent-hint {
+  margin-top: -4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.agent-hint.error {
+  color: var(--danger);
+}
+.agent-hint code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 4px;
+  margin: 0 3px;
+  border-radius: var(--r-sm);
+  background: rgba(var(--fg-rgb), 0.08);
+}
 .modal input[type='range'] {
   padding: 0;
   accent-color: var(--accent);

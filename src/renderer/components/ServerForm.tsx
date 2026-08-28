@@ -1,5 +1,11 @@
-import { useState } from 'react'
-import type { AuthType, ServerConfig, TunnelConfig, TunnelType } from '../../shared/types'
+import { useEffect, useState } from 'react'
+import type {
+  AgentIdentity,
+  AuthType,
+  ServerConfig,
+  TunnelConfig,
+  TunnelType
+} from '../../shared/types'
 
 interface Props {
   initial: ServerConfig | null // null = создание нового
@@ -118,9 +124,32 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
   const [addingTunnel, setAddingTunnel] = useState(false)
   const [executeOnConnect, setExecuteOnConnect] = useState(initial?.executeOnConnect ?? '')
   const [agentForward, setAgentForward] = useState(initial?.agentForward ?? false)
+  const [agentKey, setAgentKey] = useState(initial?.agentKey ?? '')
+  const [agentKeys, setAgentKeys] = useState<AgentIdentity[]>([])
+  const [agentError, setAgentError] = useState('')
+  const [agentLoading, setAgentLoading] = useState(false)
 
   // Кандидаты в jump-хосты: любой сервер, кроме редактируемого (защита от прямого self-ref).
   const jumpCandidates = servers.filter((s) => s.id !== initial?.id)
+
+  const loadAgentKeys = async (): Promise<void> => {
+    setAgentLoading(true)
+    try {
+      const r = await window.api.agent.identities()
+      setAgentKeys(r.keys ?? [])
+      setAgentError(r.ok ? '' : r.error ?? 'SSH-агент недоступен')
+    } catch (e) {
+      setAgentKeys([])
+      setAgentError((e as Error).message)
+    } finally {
+      setAgentLoading(false)
+    }
+  }
+
+  // Список тянем только когда он реально нужен — при выборе аутентификации через агент.
+  useEffect(() => {
+    if (authType === 'agent') void loadAgentKeys()
+  }, [authType])
 
   const submit = (): void => {
     if (!name.trim() || !host.trim() || !username.trim()) {
@@ -140,6 +169,7 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
       tunnels: tunnels.length ? tunnels : undefined,
       executeOnConnect: executeOnConnect.trim() || undefined,
       agentForward: agentForward || undefined,
+      agentKey: authType === 'agent' && agentKey ? agentKey : undefined,
       privateKeyPath: authType === 'key' ? privateKeyPath || undefined : undefined,
       // Пустое поле секрета => undefined => существующее значение не трогаем.
       password: authType === 'password' && password ? password : undefined,
@@ -251,14 +281,56 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
         </label>
 
         {authType === 'agent' && (
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={agentForward}
-              onChange={(e) => setAgentForward(e.target.checked)}
-            />
-            Пробрасывать SSH-агент на сервер (agent forwarding)
-          </label>
+          <>
+            <label>
+              <span className="agent-label">
+                Ключ из агента
+                <button
+                  type="button"
+                  className="mini"
+                  disabled={agentLoading}
+                  onClick={() => void loadAgentKeys()}
+                >
+                  {agentLoading ? 'Читаю…' : 'Обновить'}
+                </button>
+              </span>
+              <select value={agentKey} onChange={(e) => setAgentKey(e.target.value)}>
+                <option value="">— Любой ключ из агента —</option>
+                {agentKeys.map((k) => (
+                  <option key={k.fingerprint} value={k.fingerprint}>
+                    {k.comment || k.algo} · {k.algo} · {k.fingerprint.slice(0, 24)}…
+                  </option>
+                ))}
+                {/* Ключ мог быть выбран раньше, а сейчас не загружен в агент —
+                    не теряем настройку сервера молча. */}
+                {agentKey && !agentKeys.some((k) => k.fingerprint === agentKey) && (
+                  <option value={agentKey}>{agentKey.slice(0, 24)}… (сейчас не в агенте)</option>
+                )}
+              </select>
+            </label>
+
+            {agentError && <div className="agent-hint error">{agentError}</div>}
+            {!agentError && !agentLoading && agentKeys.length === 0 && (
+              <div className="agent-hint">
+                В агенте нет ключей. Добавьте: <code>ssh-add путь\к\ключу</code>
+              </div>
+            )}
+            {!agentError && agentKeys.length > 0 && !agentKey && (
+              <div className="agent-hint">
+                Будут перебираться все ключи подряд. Если на сервере ограничен
+                <code>MaxAuthTries</code>, выберите конкретный ключ.
+              </div>
+            )}
+
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={agentForward}
+                onChange={(e) => setAgentForward(e.target.checked)}
+              />
+              Пробрасывать SSH-агент на сервер (agent forwarding)
+            </label>
+          </>
         )}
 
         <div className="tunnel-section">
