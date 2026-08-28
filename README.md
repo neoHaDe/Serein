@@ -1,195 +1,196 @@
 <div align="center">
 
-<img src="src-tauri/icons/128x128.png" width="96" alt="Иконка Serein" />
+<img src="src-tauri/icons/128x128.png" width="96" alt="Serein icon" />
 
 # Serein
 
-**Десктоп-клиент SSH / SFTP «всё в одном окне».**
+**Desktop SSH / SFTP client — everything in one window.**
 
-Вкладки и сплит-панели, файловый менеджер SFTP со встроенным редактором,
-проброс портов, мониторинг ресурсов, панель Docker и локальный терминал —
-в установщике на **≈ 6 МБ**.
+Tabs and split panes, an SFTP file manager with an editor,
+port forwards, resource monitoring, a Docker panel, and a local terminal —
+in an installer of about **6 MB**.
 
-Бесплатно, открытый код, Apache 2.0. Windows x64, **v1.1.0**.
+Free, open source, Apache 2.0. Windows x64, **v1.1.0**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![CI](https://github.com/neoHaDe/Serein/actions/workflows/ci.yml/badge.svg)](https://github.com/neoHaDe/Serein/actions/workflows/ci.yml)
-[![Лицензия: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](#-лицензия)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](#license)
 
-Windows · без своего Chromium (системный WebView2) ·
-[English version](README.en.md)
+Windows · no bundled Chromium (system WebView2) ·
+[Russian version](README.ru.md)
 
-### → [Скачать последний выпуск](../../releases/latest)
+### → [Download the latest release](../../releases/latest)
 
-<img src="docs/screenshot.png" width="820" alt="Скриншот Serein" />
+<img src="docs/screenshot.png" width="820" alt="Serein screenshot" />
 
 </div>
 
 ---
 
-## ✨ Почему Serein
+## Why Serein
 
-Интерфейс в системном WebView, SSH / SFTP / шифрование / PTY — в одном Rust-бинарнике.
-Не тащим Chromium. Не пытаемся обогнать Tabby списком галочек: цель — **рабочее место
-по серверу** (терминал, файлы, Docker, логи, ресурсы, туннели), а не «ещё один SSH-клиент».
+The UI runs in the system WebView. SSH, SFTP, crypto, and the PTY live in one Rust binary.
+No Chromium tax. We are not racing Tabby on feature count. The point is a **server workspace**
+(terminal, files, Docker, logs, resources, tunnels), not "yet another SSH client".
 
-| | **Serein (Tauri)** | Типичный Electron-клиент |
+| | **Serein (Tauri)** | Typical Electron client |
 | --- | :---: | :---: |
-| Размер установщика | **≈ 6 МБ** | ≈ 85 МБ |
-| Память в простое | **≈ 33 МБ** | 150–250 МБ |
-| SSH-движок | чистый Rust [`russh`](https://github.com/Eugeny/russh) | libssh2 / нативный |
-| Рантайм | системный WebView2 | полный Chromium |
+| Installer size | **≈ 6 MB** | ≈ 85 MB |
+| Idle RAM | **≈ 33 MB** | 150–250 MB |
+| SSH engine | pure Rust [`russh`](https://github.com/Eugeny/russh) | libssh2 / native |
+| Runtime | system WebView2 | full Chromium |
 
-Цифры — живой `tauri dev` (RAM) и NSIS 1.1.0 (~6 МБ сжатый). На слабом ноутбуке те же 33 МБ не обещаем.
+Numbers come from a live `tauri dev` session (RAM) and the 1.1.0 NSIS build (~6 MB packed).
+A weak laptop will not magically match 33 MB.
 
 ---
 
-## 🚀 Возможности
+## Features
 
 ### Server Workspace (v1.1.0)
-- У SSH-вкладки — **рельса инструментов сервера**: Terminal, Docker, Logs, Processes, Services, Tunnels
-- **Processes** — таблица `ps` + метрики CPU/RAM/диск сверху; **Docker** — компактный список, свойства по ПКМ
-- **SFTP** — боковая панель из TabBar; список серверов при подключении сворачивается
-- **↗ Открепить** вкладку или панель workspace в отдельное окно; **← вернуть** в главное окно (SSH-сессия не рвётся)
+- **Server workspace rail** on SSH tabs: Terminal, Docker, Logs, Processes, Services, Tunnels
+- **Processes** — `ps` table plus CPU/RAM/disk metrics; **Docker** — compact rows, properties via right-click
+- **SFTP** — side panel from TabBar; server list collapses on connect
+- **Detach** a tab or workspace panel; **reattach** to main (SSH session stays alive)
 
-### Терминал и UX
-- **Несколько SSH-вкладок** + **сплит-панели** (дерево с перетаскиванием границ, выбор сервера на панель)
-- **Локальный терминал** с умным выбором shell (PowerShell → cmd, либо свой / WSL)
-- Поиск (`Ctrl+F`), зум, **17 тем на весь интерфейс**, **компактный режим**
-- **Своя рамка окна** (без хрома Windows): свернуть / развернуть / закрыть
-- **Broadcast-ввод** (в пределах текущей вкладки), восстановление вкладок, перетаскивание вкладок
-- **Ctrl+Shift+C / Ctrl+Shift+V** — копирование и вставка в терминале (не DevTools WebView2)
-- Батчинг вывода SSH; при перегрузке — буфер 4 МиБ с пометкой
+### Terminal and UX
+- **Multiple SSH tabs** and **split panes** (tree with drag-resize, pick a server per pane)
+- **Local terminal** with a sensible shell (PowerShell → cmd, or a custom / WSL shell)
+- Search (`Ctrl+F`), zoom, **17 UI themes**, **compact mode**
+- **Custom window chrome** (no Windows caption): minimize / maximize / close
+- **Broadcast input** (current tab only), tab restore, tab drag
+- **Ctrl+Shift+C / Ctrl+Shift+V** — copy/paste in the terminal (not WebView2 DevTools)
+- SSH output batching; 4 MiB buffer with warning when overloaded
+- Keyboard pane navigation, remappable shortcuts, **command palette** (`Ctrl+Shift+P`)
 
-### Подключения
-- Сайдбар с группами и поиском, **живой статус подключения**
-- Аутентификация: **пароль · ключ · keyboard-interactive 2FA**
-- **ProxyJump / бастион** — цепочки (рекурсивно, через `direct-tcpip`)
-- **TOFU-проверка known-hosts** на каждом хопе
-- **Переподключение при обрыве** — вручную или авто (до 5 попыток, бэкофф)
-- Импорт из **`~/.ssh/config`** и сессий **PuTTY**
+### Connections
+- Sidebar with groups and search, **live connection status**
+- Auth: **password · key · keyboard-interactive 2FA**
+- **ProxyJump / bastion** chains (recursive, `direct-tcpip`)
+- **TOFU known-hosts** on every hop
+- **Reconnect on drop** — manual or auto (up to 5 attempts, backoff)
+- Import from **`~/.ssh/config`** and **PuTTY** sessions
 
-- Навигация по панелям с клавиатуры, настраиваемые хоткеи, **командная палитра** (`Ctrl+Shift+P`)
+### Files (SFTP)
+- Browse with **clickable breadcrumbs**, **inline rename**, drag & drop into the window
+- **Parallel transfers** (pool of 4, up to 8 in settings), **transfer manager**: speed, ETA, pause, retry
+- **Explorer-like columns** (name, type, mode, size, date), sort, resize, Ctrl/Shift selection
+- **Drag-and-drop with Windows Explorer** — server to desktop/Downloads; PC to open SFTP folder
+- chmod, hidden files, symlink follow, image preview; actions in the right-click menu
+- Dual-pane (local ↔ remote); **detach SFTP** into its own OS window
+- **Ctrl+wheel** (and Ctrl+/−/0) zooms text in SFTP and logs
+- **Built-in editor** (CodeMirror 6) — atomic save back to the server
+- **External editor** — OS default app, re-upload on save
 
-### Файлы (SFTP)
-- Просмотр с **кликабельными хлебными крошками**, **инлайн-переименование**, drag & drop внутрь окна
-- **Параллельные передачи** (пул 4, до 8 в настройках), **менеджер передач**: скорость, ETA, пауза, повтор
-- **Колонки как в Explorer** (имя, тип, права, размер, дата), сортировка, ресайз, Ctrl/Shift-выделение
-- **Drag-and-drop с Проводником** — с сервера на рабочий стол / в Загрузки; с ПК — upload в открытую папку
-- chmod, скрытые файлы, symlink follow, превью картинок; действия в меню по ПКМ
-- Двухпанельный режим (локально ↔ сервер); **SFTP можно открепить** в отдельное окно
-- **Ctrl+колёсико** (и Ctrl+/−/0) меняет масштаб текста в SFTP и логах
-- **Встроенный редактор** (CodeMirror 6) — атомарное сохранение прямо на сервер
-- **Внешний редактор** — открывает файл в редакторе ОС и сам заливает при сохранении
+### Tunnels and ops
+- Forwards: **local `-L`**, **remote `-R`**, **dynamic SOCKS5 `-D`** (tunnel create can be cancelled)
+- **Resource monitor** — CPU / RAM / disk / load (`/proc` + `df`)
+- **Docker panel** — list, start/stop/restart/remove, shell into a container
+- **Docker logs** — coloured levels, follow (`-f`) with stop, wide panel; **detach** to a second monitor
 
-### Туннели и эксплуатация
-- Проброс портов: **локальный `-L`**, **обратный `-R`**, **динамический SOCKS5 `-D`** (открытие туннеля можно прервать)
-- **Мониторинг ресурсов** — CPU / RAM / диск / load (опрос `/proc` + `df`)
-- **Панель Docker** — список, старт/стоп/рестарт/удаление, shell в контейнер
-- **Логи Docker** — цвет уровней, follow (`-f`) со стопом, широкая панель; **открепить** на второй монитор
+### App windows
+- Detached tabs, SFTP, logs, and workspace panels — **separate OS windows**, no Windows caption
+- **Magnet**: windows snap flush and to guides (edges / center)
+- The main window drags a docked group; drag an extra window to undock it
+- Aux windows **minimize independently**; restore minimized aux via taskbar click or the main status bar
+- Focusing any Serein window raises **all** of them; by default **one taskbar button**
+  (settings can restore a button per window)
+- Remembers detached window geometry after restart
 
-### Окна
-- Откреплённые вкладки, SFTP, логи и панели workspace — **отдельные окна ОС**, без рамки Windows
-- **Магнит**: окна стыкуются вплотную и по направляющим (края / центр)
-- Группу тащит главное окно; доп. окно отцепляется, если потянуть за него
-- Aux сворачиваются **независимо** от main; свёрнутые aux вернуть — клик по Serein на панели задач или кнопка в статус-баре
-- Клик по любому окну поднимает **все** окна Serein; по умолчанию **одна кнопка** на панели задач
-  (в настройках можно вернуть отдельные кнопки)
-- Запоминание расположения откреплённых окон после перезапуска
-
-### Безопасность и хранение
-- Секреты шифруются через **DPAPI** + опциональный **мастер-пароль**
-  (scrypt → AES-256-GCM); в UI пароли и ключи не отдаются
-- Зашифрованный **бэкап `.tbk`** серверов, настроек и сниппетов
-- **Генерация SSH-ключей** (ed25519 / RSA) + `ssh-copy-id`
-
----
-
-## Быстрый старт
-
-1. Поставь установщик или скачай portable `Serein_1.1.0_x64-portable.exe` из [Releases](../../releases/latest).
-2. Импортируй `~/.ssh/config` или добавь сервер вручную.
-3. Подключись. Локальный терминал работает и без SSH.
-
-Цель: установка → первое соединение меньше чем за две минуты.
+### Security and storage
+- Secrets via **DPAPI** plus an optional **master password**
+  (scrypt → AES-256-GCM); the UI never gets passwords or keys
+- Encrypted **`.tbk` backup** of servers, settings, and snippets
+- **SSH keygen** (ed25519 / RSA) + `ssh-copy-id`
 
 ---
 
-## Что нужно
+## Quick start
 
-| Требование | Ответ |
+1. Install the setup exe or grab the portable `Serein_1.1.0_x64-portable.exe` from [Releases](../../releases/latest).
+2. Import `~/.ssh/config` or add a host by hand.
+3. Connect. The local terminal works with no SSH at all.
+
+Target: install → first session in under two minutes.
+
+---
+
+## Requirements
+
+| Need | Answer |
 | --- | --- |
-| Система | Windows 10 x64 **22H2+** или Windows 11 x64. macOS и Linux пока не собираются |
-| WebView2 | уже есть в актуальном Windows; отдельно ставить не нужно |
-| Права | администратор для повседневной работы не нужен |
-| Сборка из исходников | Node **18.18+** (проверено на 24.16), Rust **stable** `x86_64-pc-windows-msvc` (проверено на 1.96.0), Tauri CLI **2.11.x** |
-| SSH-агент | **пока нет** — пароль, файл ключа или keyboard-interactive |
+| OS | Windows 10 x64 **22H2+** or Windows 11 x64. No macOS or Linux builds yet |
+| WebView2 | already on current Windows; nothing extra to install |
+| Privileges | admin is not required for daily use |
+| Build from source | Node **18.18+** (tested on 24.16), Rust **stable** `x86_64-pc-windows-msvc` (tested on 1.96.0), Tauri CLI **2.11.x** |
+| SSH agent | **not yet** — password, key file, or keyboard-interactive |
 
-Матрица и smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
-
----
-
-## 📦 Установка
-
-С [Releases](../../releases/latest):
-
-- **`Serein_1.1.0_x64-setup.exe`** — установщик (меню Пуск, удаление).
-- **`Serein_1.1.0_x64-portable.exe`** — один файл, без установки. Положи и запусти. Настройки всё равно в `%APPDATA%\serein`.
-
-Сборка **не подписана** — SmartScreen ругнётся. *Подробнее → Выполнить в любом случае*.
-Проверяй SHA-256 из [release notes](docs/RELEASE_NOTES_v1.1.0.md) или описания выпуска на GitHub.
-
-Автообновление в конфиге заведено (`nehade.xyz/updates/terminal/`), на неподписанном
-установщике на него не рассчитывай.
+Matrix and smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
 
 ---
 
-## 🛠 Стек
+## Install
 
-| Слой | Технологии |
+From [Releases](../../releases/latest):
+
+- **`Serein_1.1.0_x64-setup.exe`** — installer (Start menu, uninstall).
+- **`Serein_1.1.0_x64-portable.exe`** — a single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`.
+
+The build is **unsigned**. SmartScreen will complain. *More info → Run anyway*.
+SHA-256 checksums: [RELEASE_NOTES_v1.1.0.md](docs/RELEASE_NOTES_v1.1.0.md).
+
+The updater endpoint is wired (`nehade.xyz/updates/terminal/`). Do not rely on it
+while the installer is unsigned.
+
+---
+
+## Stack
+
+| Layer | Tech |
 | --- | --- |
-| Оболочка | **[Tauri 2](https://tauri.app)** (Rust, системный WebView2) |
-| Фронтенд | **React 18** · **TypeScript 5** · **Vite** |
-| Терминал | [`@xterm/xterm`](https://xtermjs.org) |
-| Редактор | [CodeMirror 6](https://codemirror.net) |
+| Shell | **[Tauri 2](https://tauri.app)** (Rust, system WebView2) |
+| Frontend | **React 18** · **TypeScript 5** · **Vite** |
+| Terminal | [`@xterm/xterm`](https://xtermjs.org) |
+| Editor | [CodeMirror 6](https://codemirror.net) |
 | SSH / SFTP | [`russh`](https://github.com/Eugeny/russh) · [`russh-sftp`](https://github.com/AspectUnk/russh-sftp) |
-| Локальный PTY | [`portable-pty`](https://crates.io/crates/portable-pty) |
-| Криптография | `aes-gcm` · `scrypt` · `ssh-key` · Windows DPAPI |
+| Local PTY | [`portable-pty`](https://crates.io/crates/portable-pty) |
+| Crypto | `aes-gcm` · `scrypt` · `ssh-key` · Windows DPAPI |
 
 ---
 
-## 🏗 Архитектура
+## Architecture
 
 ```
 ┌─────────────────────────── WebView (React) ───────────────────────────┐
 │  App · TabBar · Sidebar · SftpPanel · Monitor · Docker · CodeEditor    │
-│  └── src/api  ──  мост window.api  (invoke / listen)                   │
+│  └── src/api  ──  window.api bridge  (invoke / listen)                 │
 └───────────────────────────────┬───────────────────────────────────────┘
-                     команды и события Tauri
+                     Tauri commands and events
 ┌───────────────────────────────┴───────────────────────────────────────┐
-│  Rust-бэкенд (src-tauri/src)                                           │
+│  Rust backend (src-tauri/src)                                          │
 │  ssh · sftp · tunnels · monitor · docker · pty · store · vault ·       │
 │  crypto · dpapi · keygen · importers · knownhosts · remoteedit         │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-- React говорит с Rust через тонкий мост `window.api` (invoke / listen).
-- Одно SSH-соединение мультиплексирует **shell + SFTP + exec + туннели**; handle берётся
-  коротким async-локом, каналы не ждут друг друга.
-- Секреты расшифровываются **только в Rust**, в момент подключения. Вне Windows DPAPI нет:
-  там запасной `plain:` (эта сборка — Windows).
+- React talks to Rust through a thin `window.api` bridge (`invoke` / `listen`).
+- One SSH connection multiplexes **shell + SFTP + exec + tunnels**. The handle is locked
+  only briefly, so opening channels does not stall the others.
+- Secrets decrypt **only in Rust**, at connect time. Outside Windows there is no DPAPI:
+  a `plain:` fallback exists (this build is Windows).
 
 ---
 
-## 👩‍💻 Сборка из исходников
+## Build from source
 
-Нужны [Rust](https://rustup.rs) (stable) и [Node.js](https://nodejs.org) 18+.
-В неинтерактивном PowerShell `cargo` часто не в PATH — добавь `$env:USERPROFILE\.cargo\bin`.
+You need [Rust](https://rustup.rs) (stable) and [Node.js](https://nodejs.org) 18+.
+In non-interactive PowerShell, `cargo` is often off PATH — prepend `$env:USERPROFILE\.cargo\bin`.
 
-Dev-сервер слушает **`127.0.0.1:1420`**, не `localhost` (IPv4/IPv6 иначе вечно «Waiting for frontend»).
+The dev server binds **`127.0.0.1:1420`**, not `localhost` (IPv4 vs IPv6 otherwise sits on
+"Waiting for frontend" forever).
 
 ```bash
 npm install
@@ -197,38 +198,38 @@ npm run tauri dev
 npm run tauri build
 ```
 
-Установщик: `src-tauri/target/release/bundle/nsis/`.
+Installer output: `src-tauri/target/release/bundle/nsis/`.
 
 ```bash
 npm run smoke
 ```
 
-(`tsc --noEmit` + `cargo check`. Сценарий целиком — `docs/PHASE0.md`.)
+(`tsc --noEmit` + `cargo check`. Full protocol: `docs/PHASE0.md`.)
 
 ---
 
-## Данные и диагностика
+## Data and diagnostics
 
-Профили, секреты, known_hosts, vault — в `%APPDATA%\serein\`
+Profiles, secrets, known_hosts, vault live in `%APPDATA%\serein\`
 (`servers.json`, `secrets.json`, `vault.json`, `known_hosts.json`, …).
 
-Секреты в UI-слой не едут. Логи отдельным файлом пока не пишем: смотри окно приложения
-и вывод `npm run tauri dev`.
+Secrets never go to the UI. There is no dedicated log file yet: use the app window
+and `npm run tauri dev` output.
 
 ---
 
-## Известные ограничения
+## Known limitations
 
-- Нет **SSH-агента** и **agent-forwarding**.
-- Сборки только под **Windows x64**. `.dmg` / `.AppImage` нет.
-- Установщик **без цифровой подписи**. SmartScreen будет спорить.
-- Автообновление в конфиге есть, под неподписанный установщик пока не рассчитывай.
-- Не цель ближайших релизов: облачный sync, мобилка, плагины, Telnet/RDP/VNC, «просто чат с LLM».
+- No **SSH agent** and no **agent forwarding**.
+- **Windows x64** only. No `.dmg` / `.AppImage`.
+- Installer is **unsigned**. SmartScreen will fight you.
+- Updater endpoint exists; do not rely on it while the installer is unsigned.
+- Not on the near-term list: cloud sync, mobile, plugins, Telnet/RDP/VNC, a generic LLM chat pane.
 
-Дорожная карта: **SSH Agent** и надёжность сессии → polish Server Workspace → Copilot. Подробнее — [release notes 1.1.0](docs/RELEASE_NOTES_v1.1.0.md).
+Product plan: **SSH Agent** and session reliability → polish Server Workspace → Copilot. See [release notes 1.1.0](docs/RELEASE_NOTES_v1.1.0.md).
 
 ---
 
-## 📄 Лицензия
+## License
 
 [Apache License 2.0](LICENSE) © 2026 HaDe
