@@ -7,10 +7,15 @@ import { useCtrlWheelZoom } from '../useCtrlWheelZoom'
 interface Props {
   /** SSH-сессия, на которой выполняем docker-команды и shell. */
   sessionId: string
+  serverId?: string
   onClose: () => void
+  /** В рельсе workspace — без попапа и backdrop. */
+  docked?: boolean
+  /** После «shell в контейнер» переключить вкладку на Terminal. */
+  onGoTerminal?: () => void
 }
 
-export function DockerPanel({ sessionId, onClose }: Props): JSX.Element {
+export function DockerPanel({ sessionId, serverId, onClose, docked, onGoTerminal }: Props): JSX.Element {
   const [containers, setContainers] = useState<DockerContainer[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -98,6 +103,7 @@ export function DockerPanel({ sessionId, onClose }: Props): JSX.Element {
     try {
       await openDetachedLogsWindow({
         sessionId,
+        serverId,
         containerId: logsFor.id,
         name: logsFor.name,
         width: size.w,
@@ -111,27 +117,33 @@ export function DockerPanel({ sessionId, onClose }: Props): JSX.Element {
     }
     setFollowing(false)
     setLogsFor(null)
-    onClose()
+    if (!docked) onClose()
   }
 
   const openShell = (c: DockerContainer): void => {
     // Запускаем интерактивную оболочку контейнера прямо в активном терминале.
     window.api.session.write(sessionId, `docker exec -it ${c.id} sh\n`)
-    onClose()
+    onGoTerminal?.()
+    if (!docked) onClose()
   }
 
   const running = (s: string): boolean => s === 'running' || s.startsWith('Up')
 
   return (
     <>
-      <div className="split-menu-backdrop" onClick={onClose} />
+      {!docked && <div className="split-menu-backdrop" onClick={onClose} />}
       <div
-        className={`docker-panel${logsFor ? ' is-logs' : ''}`}
+        className={
+          docked
+            ? `ws-panel${logsFor ? ' is-logs' : ''}`
+            : `docker-panel${logsFor ? ' is-logs' : ''}`
+        }
         ref={logsFor ? zoomRef : undefined}
-        style={logsFor ? { width: size.w, height: size.h, zoom } : undefined}
+        style={logsFor && !docked ? { width: size.w, height: size.h, zoom } : undefined}
       >
-        <div className="tunnel-menu-header">
-          <span className="tunnel-menu-title" title={logsFor ? logsFor.name : undefined}>
+        <div className={docked ? 'ws-head' : 'tunnel-menu-header'}>
+          <span className={docked ? 'ws-head-title' : 'tunnel-menu-title'} title={logsFor ? logsFor.name : undefined}>
+            {docked && <Icon name={logsFor ? 'logs' : 'docker'} size={15} />}
             {logsFor ? `Логи: ${logsFor.name}` : 'Docker'}
           </span>
           {logsFor ? (
@@ -165,7 +177,9 @@ export function DockerPanel({ sessionId, onClose }: Props): JSX.Element {
             {loading && <div className="hint" style={{ padding: '10px 12px' }}>Загрузка…</div>}
             {error && <div className="sftp-error" onClick={() => setError(null)}>{error}</div>}
             {!loading && !error && containers.length === 0 && (
-              <div className="hint" style={{ padding: '10px 12px' }}>Контейнеров нет.</div>
+              <div className={docked ? 'ws-empty' : 'hint'} style={docked ? undefined : { padding: '10px 12px' }}>
+                Контейнеров нет.
+              </div>
             )}
             {containers.map((c) => (
               <div key={c.id} className="docker-row">
@@ -198,7 +212,7 @@ export function DockerPanel({ sessionId, onClose }: Props): JSX.Element {
             ))}
           </div>
         )}
-        {logsFor && (
+        {logsFor && !docked && (
           <>
             <div className="docker-resize e" onMouseDown={onResizeDown('e')} />
             <div className="docker-resize s" onMouseDown={onResizeDown('s')} />

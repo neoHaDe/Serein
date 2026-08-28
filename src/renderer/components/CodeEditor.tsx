@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { EditorView, keymap } from '@codemirror/view'
 import { basicSetup } from 'codemirror'
 import { oneDark } from '@codemirror/theme-one-dark'
-import { languageFor } from '../editorLang'
+import { languageFor, isImageFile } from '../editorLang'
 import { useSettings } from '../SettingsContext'
 
 interface Props {
@@ -13,7 +13,7 @@ interface Props {
   onDirtyChange: (dirty: boolean) => void
 }
 
-type Phase = 'loading' | 'ready' | 'binary' | 'toolarge' | 'error'
+type Phase = 'loading' | 'ready' | 'binary' | 'image' | 'toolarge' | 'error'
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
 export function CodeEditor({ sessionId, remotePath, fileName, active, onDirtyChange }: Props): JSX.Element {
@@ -24,12 +24,36 @@ export function CodeEditor({ sessionId, remotePath, fileName, active, onDirtyCha
   const [phase, setPhase] = useState<Phase>('loading')
   const [saveState, setSaveState] = useState<SaveState>('idle')
   const [msg, setMsg] = useState<string>()
+  const [imageUrl, setImageUrl] = useState<string | null>(null)
   const { settings } = useSettings()
 
   // Загрузка файла и создание редактора.
   useEffect(() => {
     let cancelled = false
     setPhase('loading')
+    setImageUrl(null)
+    onDirtyChange(false)
+    if (isImageFile(fileName)) {
+      void window.api.sftp
+        .preview(sessionId, remotePath)
+        .then((res) => {
+          if (cancelled) return
+          if (res.kind === 'tooLarge') {
+            setPhase('toolarge')
+            return
+          }
+          const ext = (fileName.split('.').pop() || 'png').toLowerCase()
+          const mime =
+            ext === 'svg' ? 'image/svg+xml' : ext === 'jpg' ? 'image/jpeg' : ext === 'ico' ? 'image/x-icon' : 'image/' + ext
+          setImageUrl('data:' + mime + ';base64,' + (res.base64 ?? ''))
+          setPhase('image')
+        })
+        .catch((e) => {
+          if (cancelled) return
+          setPhase('error')
+          setMsg((e as Error).message)
+        })
+    } else
     window.api.sftp
       .readFile(sessionId, remotePath)
       .then((res) => {
@@ -137,15 +161,22 @@ export function CodeEditor({ sessionId, remotePath, fileName, active, onDirtyCha
                 ? `⚠ ${msg ?? 'Ошибка'}`
                 : ''}
         </span>
+        {phase !== 'image' && (
         <button className="secondary ce-save" onClick={() => saveRef.current()} disabled={phase !== 'ready'}>
-          💾 Сохранить (Ctrl+S)
+          Сохранить (Ctrl+S)
         </button>
+        )}
       </div>
 
       {phase === 'loading' && <div className="ce-msg">Загрузка файла…</div>}
       {phase === 'binary' && <div className="ce-msg">Это бинарный файл — откройте его скачиванием.</div>}
-      {phase === 'toolarge' && <div className="ce-msg">Файл слишком большой для встроенного редактора (&gt; 5 МБ).</div>}
+      {phase === 'toolarge' && <div className="ce-msg">Файл слишком большой для встроенного просмотра.</div>}
       {phase === 'error' && <div className="ce-msg error">Ошибка: {msg}</div>}
+      {phase === 'image' && imageUrl && (
+        <div className="ce-preview">
+          <img src={imageUrl} alt={fileName} />
+        </div>
+      )}
       <div className="ce-host" ref={hostRef} style={{ display: phase === 'ready' ? 'block' : 'none' }} />
     </div>
   )

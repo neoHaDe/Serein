@@ -41,12 +41,14 @@ sha2 = "0.10"
 rand = "0.8"
 ssh-key = { version = "0.6", features = ["ed25519", "rsa", "encryption", "std", "getrandom"] }
 open = "5"
+dunce = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_DataExchange", "Win32_System_Memory"] }
 winreg = "0.52"
 webview2-com = "0.38"
 windows-core = "0.61"
+drag = "2.1"
 
 # Иначе AES/SSH в `tauri dev` ~10 МБ/с. Свои крейты остаются без оптимизации.
 [profile.dev.package."*"]

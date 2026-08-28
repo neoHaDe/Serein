@@ -132,6 +132,10 @@ export interface SftpEntry {
   /** unix mtime в миллисекундах */
   mtime: number
   mode: number
+  /** Цель symlink, если type==='link'. */
+  target?: string | null
+  /** Куда ведёт ссылка после follow. */
+  linkType?: 'file' | 'dir' | 'broken' | null
 }
 
 export interface SftpListResult {
@@ -239,6 +243,12 @@ export interface RemoteFileContent {
   binary?: boolean
 }
 
+export interface SftpPreview {
+  kind: 'bytes' | 'tooLarge'
+  size: number
+  base64?: string
+}
+
 /** Результат сохранения файла встроенным редактором. */
 export interface WriteFileResult {
   ok: boolean
@@ -281,6 +291,18 @@ export interface AppSettings {
   auxInTaskbar?: boolean
   /** Параллельных SFTP-файлов (1–8, по умолчанию 4). */
   sftpConcurrency?: number
+  /** Показывать скрытые файлы (имя начинается с точки) в SFTP. */
+  sftpShowHidden?: boolean
+  /** Сохранять расположение доп. панелей (SFTP / откреплённые окна) после перезапуска. */
+  restoreAuxOnStart?: boolean
+  /** Какие колонки SFTP-проводника показывать. Имя всегда включено. */
+  sftpColOn?: Partial<Record<'name' | 'ext' | 'mode' | 'size' | 'mtime', boolean>>
+  /** Ширины колонок SFTP-проводника в пикселях. */
+  sftpColWidths?: Partial<Record<'name' | 'ext' | 'mode' | 'size' | 'mtime', number>>
+  /** Колонка сортировки списка. */
+  sftpSortCol?: 'name' | 'ext' | 'mode' | 'size' | 'mtime'
+  /** Направление сортировки. */
+  sftpSortDir?: 'asc' | 'desc'
 }
 
 // ---- Сохранение раскладки вкладок (для восстановления при запуске) ----
@@ -298,9 +320,64 @@ export interface SerializedSplit {
   children: [SerializedPane, SerializedPane]
 }
 export type SerializedPane = SerializedLeaf | SerializedSplit
+/** Инструмент в рельсе workspace SSH-вкладки. */
+export const WORKSPACE_TOOLS = [
+  'terminal',
+  'files',
+  'docker',
+  'logs',
+  'resources',
+  'processes',
+  'services',
+  'tunnels'
+] as const
+export type WorkspaceTool = (typeof WORKSPACE_TOOLS)[number]
+
+export function parseWorkspaceTool(v: unknown, sftpOpen?: boolean): WorkspaceTool {
+  if (typeof v === 'string' && (WORKSPACE_TOOLS as readonly string[]).includes(v)) {
+    return v as WorkspaceTool
+  }
+  return sftpOpen ? 'files' : 'terminal'
+}
+
+export interface WorkspaceProcess {
+  pid: number
+  user: string
+  cpu: number
+  mem: number
+  stat: string
+  cmd: string
+}
+
+export interface WorkspaceService {
+  name: string
+  unit: string
+  load: string
+  active: string
+  sub: string
+  desc: string
+}
+
 export interface SerializedTab {
   title: string
   root: SerializedPane
+  sftpOpen?: boolean
+  workspace?: WorkspaceTool
+}
+
+/** Откреплённое доп. окно (SFTP / логи Docker). Координаты — физические inner. */
+export interface SavedAuxWindow {
+  kind: 'sftp' | 'dockerLogs'
+  serverId: string
+  containerId?: string
+  name?: string
+  x: number
+  y: number
+  w: number
+  h: number
+}
+export interface AuxLayout {
+  windows: SavedAuxWindow[]
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -316,5 +393,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   localShell: 'auto',
   density: 'comfortable',
   auxInTaskbar: false,
-  sftpConcurrency: 4
+  sftpConcurrency: 4,
+  restoreAuxOnStart: false,
+  sftpShowHidden: false,
+  sftpColOn: { name: true, ext: true, mode: true, size: true, mtime: true },
+  sftpColWidths: { name: 200, ext: 64, mode: 52, size: 84, mtime: 136 },
+  sftpSortCol: 'name',
+  sftpSortDir: 'asc'
 }

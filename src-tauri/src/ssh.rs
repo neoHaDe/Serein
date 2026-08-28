@@ -354,18 +354,17 @@ pub async fn connect_chain(
     let id2 = id.clone();
     let user_closed = Arc::new(AtomicBool::new(false));
     let user_closed2 = user_closed.clone();
+    let out = crate::term_out::TermOut::spawn(app2.clone(), id2.clone());
     tokio::spawn(async move {
         loop {
             tokio::select! {
                 msg = channel.wait() => {
                     match msg {
                         Some(ChannelMsg::Data { ref data }) => {
-                            let s = String::from_utf8_lossy(&data[..]).to_string();
-                            let _ = app2.emit("session-data", json!({ "id": id2, "data": s }));
+                            out.push(&data[..]);
                         }
                         Some(ChannelMsg::ExtendedData { ref data, .. }) => {
-                            let s = String::from_utf8_lossy(&data[..]).to_string();
-                            let _ = app2.emit("session-data", json!({ "id": id2, "data": s }));
+                            out.push(&data[..]);
                         }
                         Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
                         _ => {}
@@ -380,6 +379,8 @@ pub async fn connect_chain(
                 }
             }
         }
+        out.close();
+        out.join().await;
         let _ = channel.close().await;
         let is_drop = !user_closed2.load(Ordering::Relaxed);
         let _ = app2.emit(

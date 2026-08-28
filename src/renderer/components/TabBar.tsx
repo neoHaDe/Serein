@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Tab, SplitChoice } from '../App'
-import type { ServerConfig, Snippet, TunnelConfig, TunnelStatus } from '../../shared/types'
+import type { ServerConfig, Snippet, WorkspaceTool } from '../../shared/types'
 import { findLeaf } from '../paneTree'
-import { MonitorPanel } from './MonitorPanel'
-import { DockerPanel } from './DockerPanel'
 import { Icon } from './Icon'
 
 interface Props {
@@ -14,12 +12,12 @@ interface Props {
   onClose: (key: string) => void
   onNewLocal: () => void
   onToggleSftp: (key: string) => void
+  onSetWorkspace: (key: string, tool: WorkspaceTool) => void
   onRename: (key: string, title: string) => void
   onReorder: (fromKey: string, toKey: string) => void
   onSplit: (tabKey: string, dir: 'row' | 'col', choice: SplitChoice) => void
   broadcast: boolean
   onToggleBroadcast: () => void
-  onEditServer: (server: ServerConfig) => void
 }
 
 function SnippetMenu({
@@ -121,146 +119,6 @@ function SnippetMenu({
   )
 }
 
-function tunnelDesc(t: TunnelConfig): string {
-  if (t.type === 'local') return `127.0.0.1:${t.localPort} → ${t.remoteHost}:${t.remotePort}`
-  if (t.type === 'remote') return `сервер:${t.remotePort} → :${t.localPort}`
-  return `SOCKS5 :${t.localPort}`
-}
-
-function TunnelMenu({
-  sessionId,
-  server,
-  onClose,
-  onEditServer
-}: {
-  sessionId: string
-  server: ServerConfig | undefined
-  onClose: () => void
-  onEditServer: () => void
-}): JSX.Element {
-  const [statuses, setStatuses] = useState<Map<string, TunnelStatus>>(new Map())
-  const [opening, setOpening] = useState<Set<string>>(new Set())
-
-  useEffect(() => {
-    window.api.tunnel.listStatus(sessionId).then((list) => {
-      setStatuses(new Map(list.map((s) => [s.tunnelId, s])))
-    })
-    return window.api.tunnel.onStatus((s) => {
-      if (s.sessionId !== sessionId) return
-      if (s.active || s.error) {
-        setOpening((prev) => {
-          if (!prev.has(s.tunnelId)) return prev
-          const next = new Set(prev)
-          next.delete(s.tunnelId)
-          return next
-        })
-      }
-      setStatuses((prev) => {
-        const next = new Map(prev)
-        next.set(s.tunnelId, s)
-        return next
-      })
-    })
-  }, [sessionId])
-
-  const cfgs = server?.tunnels ?? []
-
-  return (
-    <>
-      <div className="split-menu-backdrop" onClick={onClose} />
-      <div className="tunnel-menu">
-        <div className="tunnel-menu-header">
-          <span className="tunnel-menu-title">Туннели</span>
-          {server && (
-            <button
-              className="mini"
-              title="Настроить туннели в форме сервера"
-              onClick={() => {
-                onClose()
-                onEditServer()
-              }}
-            >
-              <Icon name="settings" size={14} />
-            </button>
-          )}
-        </div>
-        {cfgs.length === 0 ? (
-          <div className="hint" style={{ padding: '10px 12px' }}>
-            Туннели не настроены.
-            {server && (
-              <>
-                {' '}
-                <button
-                  className="mini"
-                  onClick={() => {
-                    onClose()
-                    onEditServer()
-                  }}
-                >
-                  Ред. сервер
-                </button>
-              </>
-            )}
-          </div>
-        ) : (
-          <div className="tunnel-list">
-            {cfgs.map((t) => {
-              const st = statuses.get(t.id)
-              const active = st?.active ?? false
-              const error = st?.error
-              const isOpening = opening.has(t.id)
-              return (
-                <div key={t.id} className="tunnel-row">
-                  <span
-                    className="tunnel-dot"
-                    style={{
-                      background: active ? 'var(--green)' : error ? 'var(--danger)' : isOpening ? 'var(--yellow, #e0af68)' : 'var(--muted)'
-                    }}
-                    title={error ?? (active ? 'Активен' : isOpening ? 'Открывается…' : 'Неактивен')}
-                  />
-                  <span className="tunnel-type-badge">
-                    {t.type === 'local' ? 'L' : t.type === 'remote' ? 'R' : 'D'}
-                  </span>
-                  <span className="tunnel-desc" title={error}>
-                    {tunnelDesc(t)}
-                  </span>
-                  <button
-                    className="mini"
-                    onClick={async () => {
-                      if (active || isOpening) {
-                        setOpening((prev) => {
-                          const next = new Set(prev)
-                          next.delete(t.id)
-                          return next
-                        })
-                        await window.api.tunnel.close(sessionId, t.id)
-                      } else {
-                        setOpening((prev) => new Set(prev).add(t.id))
-                        try {
-                          await window.api.tunnel.open(sessionId, t.id)
-                        } catch {
-                          /* отмена или ошибка — статус придёт событием */
-                        }
-                        setOpening((prev) => {
-                          const next = new Set(prev)
-                          next.delete(t.id)
-                          return next
-                        })
-                      }
-                    }}
-                  >
-                    {active ? 'Стоп' : isOpening ? 'Отмена' : 'Старт'}
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
-    </>
-  )
-}
-
 const statusColor: Record<string, string> = {
   connecting: '#e0af68',
   connected: '#9ece6a',
@@ -277,12 +135,12 @@ export function TabBar({
   onClose,
   onNewLocal,
   onToggleSftp,
+  onSetWorkspace,
   onRename,
   onReorder,
   onSplit,
   broadcast,
-  onToggleBroadcast,
-  onEditServer
+  onToggleBroadcast
 }: Props): JSX.Element {
   const active = tabs.find((t) => t.key === activeKey)
   const activeLeaf = active ? findLeaf(active.root, active.activePaneId) : undefined
@@ -292,14 +150,15 @@ export function TabBar({
   const [dragOverKey, setDragOverKey] = useState<string | null>(null)
   const [splitDir, setSplitDir] = useState<'row' | 'col' | null>(null)
   const [splitFilter, setSplitFilter] = useState('')
-  const [tunnelOpen, setTunnelOpen] = useState(false)
   const [snippetOpen, setSnippetOpen] = useState(false)
-  const [monitorOpen, setMonitorOpen] = useState(false)
-  const [dockerOpen, setDockerOpen] = useState(false)
   const [logging, setLogging] = useState(false)
 
-  const activeServer = servers.find((s) => s.id === activeLeaf?.serverId)
   const activeSessionId = activeLeaf?.sessionId
+
+  const flipWorkspace = (tool: WorkspaceTool): void => {
+    if (!active) return
+    onSetWorkspace(active.key, active.workspace === tool ? 'terminal' : tool)
+  }
 
   useEffect(() => {
     if (activeSessionId) window.api.session.logStatus(activeSessionId).then(setLogging)
@@ -512,7 +371,7 @@ export function TabBar({
             <button
               className={'tool-btn' + (snippetOpen ? ' on' : '')}
               title="Сниппеты — быстрая вставка команд"
-              onClick={() => { setSnippetOpen((v) => !v); setTunnelOpen(false) }}
+              onClick={() => setSnippetOpen((v) => !v)}
             >
               <Icon name="snippets" />
             </button>
@@ -536,49 +395,29 @@ export function TabBar({
         {active && activeLeaf?.kind === 'ssh' && activeLeaf.status === 'connected' && activeLeaf.sessionId && (
           <>
             <span className="tool-sep" />
-            <div className="split-control">
-              <button
-                className={'tool-btn' + (monitorOpen ? ' on' : '')}
-                title="Мониторинг ресурсов сервера"
-                onClick={() => setMonitorOpen((v) => !v)}
-              >
-                <Icon name="monitor" />
-              </button>
-              {monitorOpen && (
-                <MonitorPanel sessionId={activeLeaf.sessionId} onClose={() => setMonitorOpen(false)} />
-              )}
-            </div>
-            <div className="split-control">
-              <button
-                className={'tool-btn' + (dockerOpen ? ' on' : '')}
-                title="Docker-контейнеры"
-                onClick={() => setDockerOpen((v) => !v)}
-              >
-                <Icon name="docker" />
-              </button>
-              {dockerOpen && (
-                <DockerPanel sessionId={activeLeaf.sessionId} onClose={() => setDockerOpen(false)} />
-              )}
-            </div>
-            <div className="split-control">
-              <button
-                className={'tool-btn' + (tunnelOpen ? ' on' : '')}
-                title="Проброс портов (туннели)"
-                onClick={() => setTunnelOpen((v) => !v)}
-              >
-                <Icon name="tunnel" />
-              </button>
-              {tunnelOpen && (
-                <TunnelMenu
-                  sessionId={activeLeaf.sessionId}
-                  server={activeServer}
-                  onClose={() => setTunnelOpen(false)}
-                  onEditServer={() => activeServer && onEditServer(activeServer)}
-                />
-              )}
-            </div>
             <button
-              className={'tool-btn' + (active.sftpOpen ? ' on' : '')}
+              className={'tool-btn' + (active.workspace === 'resources' ? ' on' : '')}
+              title="Ресурсы сервера"
+              onClick={() => flipWorkspace('resources')}
+            >
+              <Icon name="monitor" />
+            </button>
+            <button
+              className={'tool-btn' + (active.workspace === 'docker' ? ' on' : '')}
+              title="Docker-контейнеры"
+              onClick={() => flipWorkspace('docker')}
+            >
+              <Icon name="docker" />
+            </button>
+            <button
+              className={'tool-btn' + (active.workspace === 'tunnels' ? ' on' : '')}
+              title="Проброс портов (туннели)"
+              onClick={() => flipWorkspace('tunnels')}
+            >
+              <Icon name="tunnel" />
+            </button>
+            <button
+              className={'tool-btn' + (active.workspace === 'files' || active.sftpOpen ? ' on' : '')}
               title="Файловый менеджер (SFTP)"
               onClick={() => onToggleSftp(active.key)}
             >

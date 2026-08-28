@@ -81,18 +81,18 @@ pub fn open_local(
     // Поток-читатель вывода PTY.
     let app2 = app.clone();
     let id2 = id.clone();
+    let out = crate::term_out::TermOut::spawn(app2.clone(), id2.clone());
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
-                Ok(n) => {
-                    let s = String::from_utf8_lossy(&buf[..n]).to_string();
-                    let _ = app2.emit("session-data", json!({ "id": id2, "data": s }));
-                }
+                Ok(n) => out.push(&buf[..n]),
                 Err(_) => break,
             }
         }
+        out.close();
+        out.join_blocking();
         let _ = app2.emit(
             "session-exit",
             json!({ "id": id2, "code": null, "signal": null, "error": null }),

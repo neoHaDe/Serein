@@ -99,8 +99,27 @@ function dataBusStart(): void {
 
 function bindWriter(id: string, write: (data: string) => void): () => void {
   dataBusStart()
-  dataWriters.set(id, write)
+  let buf = ''
+  let raf = 0
+  const flush = (): void => {
+    raf = 0
+    if (!buf) return
+    const s = buf
+    buf = ''
+    write(s)
+  }
+  dataWriters.set(id, (data) => {
+    buf += data
+    if (buf.length >= 64 * 1024) {
+      if (raf) cancelAnimationFrame(raf)
+      flush()
+      return
+    }
+    if (!raf) raf = requestAnimationFrame(flush)
+  })
   return () => {
+    if (raf) cancelAnimationFrame(raf)
+    flush()
     dataWriters.delete(id)
   }
 }

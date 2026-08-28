@@ -1,6 +1,7 @@
 //! SFTP через russh-sftp: просмотр, правка (атомарно), рекурсивные передачи (порт sftp.ts).
 
 use crate::ssh::{ClientHandler, SharedHandle};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use futures::stream::{self, FuturesUnordered, StreamExt};
 use russh::client;
 use russh_sftp::client::rawsession::Limits;
@@ -364,6 +365,10 @@ pub async fn list(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, pa
     let mut entries: Vec<Value> = Vec::new();
     let rd = sftp.read_dir(&abs).await.map_err(|e| e.to_string())?;
     for entry in rd {
+        let name = entry.file_name();
+        if name == "." || name == ".." {
+            continue;
+        }
         let ft = entry.file_type();
         let kind = if ft.is_dir() {
             "dir"
@@ -373,12 +378,26 @@ pub async fn list(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, pa
             "file"
         };
         let meta = entry.metadata();
+        let full = join_remote(&abs, &name);
+        let (target, link_type) = if kind == "link" {
+            let t = sftp.read_link(&full).await.ok();
+            let lt = match sftp.metadata(&full).await {
+                Ok(m) if m.file_type().is_dir() => Some("dir"),
+                Ok(_) => Some("file"),
+                Err(_) => Some("broken"),
+            };
+            (t, lt)
+        } else {
+            (None, None)
+        };
         entries.push(json!({
-            "name": entry.file_name(),
+            "name": name,
             "type": kind,
             "size": meta.size.unwrap_or(0),
             "mtime": meta.mtime.unwrap_or(0) as u64 * 1000,
             "mode": meta.permissions.unwrap_or(0),
+            "target": target,
+            "linkType": link_type,
         }));
     }
     entries.sort_by(|a, b| {
@@ -423,6 +442,35 @@ pub async fn remove(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, 
 pub async fn rename(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, from: &str, to: &str) -> Result<(), String> {
     let sftp = open(handle).await?;
     sftp.rename(from, to).await.map_err(|e| e.to_string())
+}
+
+pub async fn chmod(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, path: &str, mode: u32) -> Result<(), String> {
+    let sftp = open(handle).await?;
+    let meta = sftp.symlink_metadata(path).await.map_err(|e| e.to_string())?;
+    let old = meta.permissions.unwrap_or(0);
+    let mut attrs = FileAttributes::empty();
+    attrs.permissions = Some((old & !0o777) | (mode & 0o777));
+    sftp.set_metadata(path, attrs).await.map_err(|e| e.to_string())
+}
+
+const MAX_PREVIEW: u64 = 8 * 1024 * 1024;
+
+pub async fn preview(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str) -> Result<Value, String> {
+    let sftp = open(handle).await?;
+    let meta = sftp.metadata(remote).await.map_err(|e| e.to_string())?;
+    let size = meta.size.unwrap_or(0);
+    if size > MAX_PREVIEW {
+        return Ok(json!({ "kind": "tooLarge", "size": size }));
+    }
+    let mut file = sftp.open(remote).await.map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).await.map_err(|e| e.to_string())?;
+    file.shutdown().await.ok();
+    Ok(json!({
+        "kind": "bytes",
+        "size": size,
+        "base64": STANDARD.encode(&buf)
+    }))
 }
 
 pub async fn read_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str) -> Result<Value, String> {
@@ -1069,4 +1117,26 @@ fn collect_remote<'a>(
         }
         Ok(())
     })
+}
+
+/// Имена из names, которые уже есть в remote_dir (для вопроса про замену).
+pub async fn name_conflicts(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    remote_dir: &str,
+    names: &[String],
+) -> Result<Vec<String>, String> {
+    let sftp = open(handle).await?;
+    let mut out = Vec::new();
+    for raw in names {
+        let norm = raw.replace('\\', "/");
+        let name = norm.rsplit('/').next().unwrap_or(norm.as_str());
+        if name.is_empty() || name == "." || name == ".." {
+            continue;
+        }
+        let p = join_remote(remote_dir, name);
+        if sftp.metadata(&p).await.is_ok() {
+            out.push(name.to_string());
+        }
+    }
+    Ok(out)
 }

@@ -41,12 +41,20 @@ export type IconName =
   | 'arrow-up'
   | 'chevron-up'
   | 'chevron-down'
+  | 'chevron-left'
+  | 'chevron-right'
   | 'bolt'
   | 'check'
   | 'up-dir'
   | 'win-min'
   | 'win-max'
   | 'win-restore'
+  | 'link'
+  | 'eye'
+  | 'eye-off'
+  | 'search'
+  | 'list'
+  | 'copy'
 
 interface Props {
   name: IconName
@@ -236,6 +244,8 @@ const PATHS: Record<IconName, JSX.Element> = {
   'arrow-up': <path d="M12 19V5M6 11l6-6 6 6" />,
   'chevron-up': <path d="M6 15l6-6 6 6" />,
   'chevron-down': <path d="M6 9l6 6 6-6" />,
+  'chevron-left': <path d="M15 6l-6 6 6 6" />,
+  'chevron-right': <path d="M9 6l6 6-6 6" />,
   bolt: <path d="M13 2L4 14h7l-1 8 9-12h-7z" />,
   check: <path d="M5 12l5 5L20 7" />,
   'up-dir': (
@@ -250,6 +260,44 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M8 8h10v10" />
       <rect x="6" y="10" width="10" height="10" rx="1" />
+    </>
+  ),
+  link: (
+    <>
+      <path d="M10 13a5 5 0 0 0 7.07 0l1.41-1.41a5 5 0 0 0-7.07-7.07L10 5.93" />
+      <path d="M14 11a5 5 0 0 0-7.07 0L5.52 12.41a5 5 0 1 0 7.07 7.07L14 18.07" />
+    </>
+  ),
+  eye: (
+    <>
+      <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" />
+      <circle cx="12" cy="12" r="3" />
+    </>
+  ),
+  'eye-off': (
+    <>
+      <path d="M3 3l18 18" />
+      <path d="M10.6 10.6a3 3 0 0 0 4.24 4.24" />
+      <path d="M9.9 5.1A10.5 10.5 0 0 1 12 5c6 0 10 7 10 7a18 18 0 0 1-3.2 3.6" />
+      <path d="M6.1 6.1A18 18 0 0 0 2 12s4 7 10 7a10 10 0 0 0 4.3-1" />
+    </>
+  ),
+  search: (
+    <>
+      <circle cx="11" cy="11" r="6" />
+      <path d="M16 16l5 5" />
+    </>
+  ),
+  list: (
+    <>
+      <path d="M8 6h13M8 12h13M8 18h13" />
+      <path d="M3 6h.01M3 12h.01M3 18h.01" />
+    </>
+  ),
+  copy: (
+    <>
+      <rect x="8" y="8" width="12" height="12" rx="1.5" />
+      <path d="M4 16V5a1 1 0 0 1 1-1h11" />
     </>
   )
 }

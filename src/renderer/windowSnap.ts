@@ -121,6 +121,11 @@ async function listVis(except?: string): Promise<R[]> {
   return out
 }
 
+function emitAuxGeo(label: string, g: { x: number; y: number; w: number; h: number }): void {
+  if (label === 'main') return
+  void emit('serein-aux-geo', { label, ...g })
+}
+
 async function setVisPos(me: Window, vis: R, x: number, y: number): Promise<void> {
   const p = vis.toOuter(x, y)
   await me.setPosition(new PhysicalPosition(Math.round(p.x), Math.round(p.y)))
@@ -144,12 +149,18 @@ function raiseGroup(origin: string): void {
 export function useWindowSnap(): void {
   useEffect(() => {
     let stopMoved: (() => void) | undefined
+    let stopResized: (() => void) | undefined
     let stopListen: (() => void) | undefined
+    let stopDetach: (() => void) | undefined
     let stopFocus: (() => void) | undefined
     let skipUntil = 0
     let last: { x: number; y: number; w: number; h: number } | null = null
     let settle: number | undefined
     let chain = Promise.resolve()
+    const sticky = new Set<string>()
+    const offset = new Map<string, { dx: number; dy: number }>()
+    let pendDx = 0
+    let pendDy = 0
 
     void (async () => {
       try {
@@ -160,16 +171,35 @@ export function useWindowSnap(): void {
           if (!p || p.origin === me.label) return
           if (!p.members.includes(me.label)) return
           if (p.dx === 0 && p.dy === 0) return
+          skipUntil = Date.now() + 400
+          pendDx += p.dx
+          pendDy += p.dy
           chain = chain.then(async () => {
+            const dx = pendDx
+            const dy = pendDy
+            pendDx = 0
+            pendDy = 0
+            if (dx === 0 && dy === 0) return
             try {
-              skipUntil = Date.now() + 120
+              skipUntil = Date.now() + 400
               const v = await visOf(me)
-              await setVisPos(me, v, v.x + p.dx, v.y + p.dy)
+              await setVisPos(me, v, v.x + dx, v.y + dy)
+              last = { x: v.x + dx, y: v.y + dy, w: v.w, h: v.h }
+              emitAuxGeo(me.label, last)
             } catch {
               /* */
             }
           })
         })
+
+        if (me.label === 'main') {
+          stopDetach = await listen<{ label: string }>('serein-dock-detach', (e) => {
+            const id = e.payload?.label
+            if (!id) return
+            sticky.delete(id)
+            offset.delete(id)
+          })
+        }
 
         stopFocus = await me.onFocusChanged((e) => {
           if (e.payload) raiseGroup(me.label)
@@ -187,12 +217,27 @@ export function useWindowSnap(): void {
               last = { x: v.x, y: v.y, w: v.w, h: v.h }
               const dx = prev ? v.x - prev.x : 0
               const dy = prev ? v.y - prev.y : 0
+
+              if (me.label !== 'main' && prev && (dx !== 0 || dy !== 0)) {
+                void emit('serein-dock-detach', { label: me.label })
+              }
+
               if (me.label === 'main' && prev && (dx !== 0 || dy !== 0)) {
-                const others = await listVis(me.label)
-                const seed: R = { ...v, x: prev.x, y: prev.y, w: prev.w, h: prev.h }
-                const members = [...flood(seed, others)].filter((l) => l !== me.label)
+                let members = [...sticky]
+                if (!members.length) {
+                  const others = await listVis(me.label)
+                  const seed: R = { ...v, x: prev.x, y: prev.y, w: prev.w, h: prev.h }
+                  members = [...flood(seed, others)].filter((l) => l !== me.label)
+                  sticky.clear()
+                  offset.clear()
+                  for (const o of others) {
+                    if (!members.includes(o.label)) continue
+                    sticky.add(o.label)
+                    offset.set(o.label, { dx: o.x - prev.x, dy: o.y - prev.y })
+                  }
+                }
                 if (members.length) {
-                  await emit('serein-dock-move', { origin: me.label, dx, dy, members } satisfies GroupMove)
+                  void emit('serein-dock-move', { origin: me.label, dx, dy, members } satisfies GroupMove)
                 }
               }
               if (settle !== undefined) window.clearTimeout(settle)
@@ -201,21 +246,53 @@ export function useWindowSnap(): void {
                   try {
                     const cur = await visOf(me)
                     const others = await listVis(me.label)
+                    if (me.label === 'main' && sticky.size) {
+                      for (const id of [...sticky]) {
+                        const o = others.find((r) => r.label === id)
+                        if (!o) {
+                          sticky.delete(id)
+                          offset.delete(id)
+                          continue
+                        }
+                        const off = offset.get(id)
+                        if (!off) continue
+                        const cdx = cur.x + off.dx - o.x
+                        const cdy = cur.y + off.dy - o.y
+                        if (Math.abs(cdx) > 2 || Math.abs(cdy) > 2) {
+                          await emit('serein-dock-move', {
+                            origin: me.label,
+                            dx: cdx,
+                            dy: cdy,
+                            members: [id]
+                          } satisfies GroupMove)
+                        }
+                      }
+                    }
                     const grouped = flood(cur, others)
+                    if (me.label === 'main') {
+                      for (const id of sticky) grouped.add(id)
+                    }
                     const outsiders = others.filter((o) => !grouped.has(o.label))
                     const n = snapFlush(cur, outsiders)
                     if (!n) {
                       last = { x: cur.x, y: cur.y, w: cur.w, h: cur.h }
+                      emitAuxGeo(me.label, last)
                       return
                     }
                     const sdx = n.x - cur.x
                     const sdy = n.y - cur.y
-                    skipUntil = Date.now() + 120
+                    skipUntil = Date.now() + 400
                     await setVisPos(me, cur, n.x, n.y)
                     last = { x: n.x, y: n.y, w: cur.w, h: cur.h }
+                    emitAuxGeo(me.label, last)
                     if (me.label === 'main') {
                       const followers = [...grouped].filter((l) => l !== me.label)
                       if (followers.length) {
+                        for (const id of followers) {
+                          sticky.add(id)
+                          const o = others.find((r) => r.label === id)
+                          if (o) offset.set(id, { dx: o.x - cur.x, dy: o.y - cur.y })
+                        }
                         await emit('serein-dock-move', {
                           origin: me.label,
                           dx: sdx,
@@ -228,7 +305,19 @@ export function useWindowSnap(): void {
                     /* */
                   }
                 })
-              }, 160)
+              }, 220)
+            } catch {
+              /* */
+            }
+          })
+        })
+
+        stopResized = await me.onResized(() => {
+          chain = chain.then(async () => {
+            try {
+              const v = await visOf(me)
+              last = { x: v.x, y: v.y, w: v.w, h: v.h }
+              emitAuxGeo(me.label, last)
             } catch {
               /* */
             }
@@ -242,7 +331,9 @@ export function useWindowSnap(): void {
     return () => {
       if (settle !== undefined) window.clearTimeout(settle)
       stopMoved?.()
+      stopResized?.()
       stopListen?.()
+      stopDetach?.()
       stopFocus?.()
     }
   }, [])

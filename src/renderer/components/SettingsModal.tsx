@@ -179,6 +179,18 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
         <label className="checkbox-row">
           <input
             type="checkbox"
+            checked={!!settings.restoreAuxOnStart}
+            onChange={(e) => update({ restoreAuxOnStart: e.target.checked })}
+          />
+          Сохранять расположение доп. панелей после перезапуска
+        </label>
+        <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
+          SFTP в главном окне и откреплённые окна (SFTP, логи) откроются как были: примагниченные — рядом, остальные — на прежних местах.
+        </div>
+
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
             checked={settings.density === 'compact'}
             onChange={(e) => update({ density: e.target.checked ? 'compact' : 'comfortable' })}
           />
@@ -209,6 +221,48 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
         </label>
         <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
           Одновременно копируемых файлов. Больше — быстрее папки, тяжелее канал SSH.
+        </div>
+
+        <div className="settings-section">
+          <div className="settings-section-title">SFTP-проводник</div>
+          <div className="settings-row-desc" style={{ marginBottom: 10 }}>
+            Как в проводнике Windows: колонки, сортировка по заголовку, ширина тянется за край. Имя нельзя выключить.
+          </div>
+          {(['name', 'ext', 'mode', 'size', 'mtime'] as const).map((id) => {
+            const label =
+              id === 'name'
+                ? 'Имя'
+                : id === 'ext'
+                  ? 'Тип (расширение)'
+                  : id === 'mode'
+                    ? 'Права'
+                    : id === 'size'
+                      ? 'Размер'
+                      : 'Дата изменения'
+            const on = id === 'name' ? true : settings.sftpColOn?.[id] !== false
+            return (
+              <label key={id} className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={on}
+                  disabled={id === 'name'}
+                  onChange={(e) =>
+                    update({
+                      sftpColOn: {
+                        name: true,
+                        ext: settings.sftpColOn?.ext !== false,
+                        mode: settings.sftpColOn?.mode !== false,
+                        size: settings.sftpColOn?.size !== false,
+                        mtime: settings.sftpColOn?.mtime !== false,
+                        [id]: e.target.checked,
+                      },
+                    })
+                  }
+                />
+                {label}
+              </label>
+            )
+          })}
         </div>
 
         <label>

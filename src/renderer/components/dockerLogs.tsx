@@ -162,25 +162,32 @@ export function logsWindowLabel(sessionId: string, containerId: string): string 
 
 export async function openDetachedLogsWindow(opts: {
   sessionId: string
+  serverId?: string
   containerId: string
   name: string
   width: number
   height: number
+  x?: number
+  y?: number
 }): Promise<void> {
   await openAuxWindow({
     label: logsWindowLabel(opts.sessionId, opts.containerId),
     query: {
-      dockerLogs: "1",
+      dockerLogs: '1',
       sessionId: opts.sessionId,
       containerId: opts.containerId,
       name: opts.name
     },
-    title: "Логи · " + opts.name,
+    title: 'Логи · ' + opts.name,
     width: opts.width,
-    height: opts.height
+    height: opts.height,
+    x: opts.x,
+    y: opts.y,
+    persist: opts.serverId
+      ? { kind: 'dockerLogs', serverId: opts.serverId, containerId: opts.containerId, name: opts.name }
+      : undefined
   })
 }
-
 const LOADING = 'Загрузка логов…'
 
 /** Отдельное OS-окно логов (второй монитор, свой размер). */

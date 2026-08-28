@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import type { KIPrompt, ServerConfig } from '../shared/types'
+import type { KIPrompt, SavedAuxWindow, SerializedPane, SerializedTab, ServerConfig, WorkspaceTool } from '../shared/types'
+import { parseWorkspaceTool } from '../shared/types'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { PaneView } from './components/PaneView'
@@ -12,10 +13,27 @@ import { KeyGenModal } from './components/KeyGenModal'
 import { StatusBar } from './components/StatusBar'
 import { CodeEditor } from './components/CodeEditor'
 import { CommandPalette, type PaletteItem } from './components/CommandPalette'
+import { WorkspaceRail } from './components/WorkspaceRail'
+import { DockerPanel } from './components/DockerPanel'
+import { MonitorPanel } from './components/MonitorPanel'
+import { TunnelPanel } from './components/TunnelPanel'
+import { ProcessPanel } from './components/ProcessPanel'
+import { ServicePanel } from './components/ServicePanel'
+import { HostLogsPanel } from './components/HostLogsPanel'
 import { useSettings } from './SettingsContext'
 import { bindingLookup, comboFromEvent } from './keybindings'
 import { applyUiTheme } from './themes'
 import { useWindowSnap } from './windowSnap'
+import { openAuxWindow, sanitizeWindowLabel } from './auxWindows'
+import {
+  auxWindowKey,
+  flushAuxPersist,
+  listenAuxGeoEvents,
+  markAuxPersistReady,
+  seedAuxLive,
+  setAuxPersistEnabled
+} from './auxLayout'
+import { openDetachedLogsWindow } from './components/dockerLogs'
 import {
   type PaneNode,
   type PaneLeaf,
@@ -40,6 +58,7 @@ export interface Tab {
   root: PaneNode
   activePaneId: string
   sftpOpen: boolean
+  workspace: WorkspaceTool
   /** Для kind==='editor': какой файл и на какой сессии редактируется. */
   editor?: { sessionId: string; remotePath: string }
   editorDirty?: boolean
@@ -50,6 +69,35 @@ export type SplitChoice = { kind: 'local' } | { kind: 'ssh'; serverId: string; t
 
 function uid(): string {
   return crypto.randomUUID()
+}
+
+function serializedHasServer(node: SerializedPane, serverId: string): boolean {
+  if (node.t === 'leaf') return node.serverId === serverId
+  return serializedHasServer(node.children[0], serverId) || serializedHasServer(node.children[1], serverId)
+}
+
+function tabFromSaved(st: SerializedTab, restoreWorkspace: boolean): Tab {
+  const root = deserializePane(st.root)
+  const raw = restoreWorkspace ? parseWorkspaceTool(st.workspace, st.sftpOpen) : 'terminal'
+  const sftpOpen = restoreWorkspace && (raw === 'files' || !!st.sftpOpen)
+  const workspace = raw === 'files' ? 'terminal' : raw
+  return {
+    key: uid(),
+    title: st.title,
+    kind: 'terminal',
+    root,
+    activePaneId: firstLeaf(root).id,
+    sftpOpen,
+    workspace
+  }
+}
+
+/** SSH-лист для рельсы: активная панель, иначе первый подключённый SSH. */
+function sshLeafForTools(tab: Tab): PaneLeaf | undefined {
+  const active = findLeaf(tab.root, tab.activePaneId)
+  if (active?.kind === 'ssh') return active
+  const leaves = allLeaves(tab.root).filter((l) => l.kind === 'ssh')
+  return leaves.find((l) => l.status === 'connected') ?? leaves[0]
 }
 
 const RECONNECT_MAX = 5
@@ -63,8 +111,8 @@ export default function App(): JSX.Element {
   const [showKeyGen, setShowKeyGen] = useState(false)
   const [broadcast, setBroadcast] = useState(false)
   const [sftpWidth, setSftpWidth] = useState(380)
-  const [sftpClosing, setSftpClosing] = useState<Record<string, boolean>>({})
   const [sidebarWidth, setSidebarWidth] = useState(270)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [kiRequest, setKiRequest] = useState<{ id: string; prompts: KIPrompt[] } | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const { settings, update } = useSettings()
@@ -76,10 +124,25 @@ export default function App(): JSX.Element {
   activeKeyRef.current = activeKey
   const settingsRef = useRef(settings)
   settingsRef.current = settings
+  const pendingAuxRef = useRef<SavedAuxWindow[]>([])
+  const openedAuxRef = useRef(new Set<string>())
+  const persistSettingInit = useRef(false)
+  const layoutReadyRef = useRef(false)
   const broadcastRef = useRef(broadcast)
   broadcastRef.current = broadcast
   const reconnectAttempts = useRef(new Map<string, number>())
   const reconnectTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+
+  useEffect(() => listenAuxGeoEvents(), [])
+
+  useEffect(() => {
+    setAuxPersistEnabled(!!settings.restoreAuxOnStart)
+    if (!persistSettingInit.current) {
+      persistSettingInit.current = true
+      return
+    }
+    if (settings.restoreAuxOnStart) flushAuxPersist()
+  }, [settings.restoreAuxOnStart])
 
   useEffect(() => {
     const timers = reconnectTimers.current
@@ -294,14 +357,15 @@ export default function App(): JSX.Element {
   const openServerTab = useCallback((server: ServerConfig) => {
     const leaf = makeLeaf('ssh', server.name, server.id)
     const key = uid()
-    setTabs((prev) => [...prev, { key, title: server.name, kind: 'terminal', root: leaf, activePaneId: leaf.id, sftpOpen: false }])
+    setTabs((prev) => [...prev, { key, title: server.name, kind: 'terminal', root: leaf, activePaneId: leaf.id, sftpOpen: false, workspace: 'terminal' }])
     setActiveKey(key)
+    setSidebarCollapsed(true)
   }, [])
 
   const openLocalTab = useCallback(() => {
     const leaf = makeLeaf('local', 'Локальный терминал')
     const key = uid()
-    setTabs((prev) => [...prev, { key, title: 'Локальный терминал', kind: 'terminal', root: leaf, activePaneId: leaf.id, sftpOpen: false }])
+    setTabs((prev) => [...prev, { key, title: 'Локальный терминал', kind: 'terminal', root: leaf, activePaneId: leaf.id, sftpOpen: false, workspace: 'terminal' }])
     setActiveKey(key)
   }, [])
 
@@ -319,7 +383,7 @@ export default function App(): JSX.Element {
     const key = uid()
     setTabs((prev) => [
       ...prev,
-      { key, title: fileName, kind: 'editor', root: leaf, activePaneId: leaf.id, sftpOpen: false, editor: { sessionId, remotePath } }
+      { key, title: fileName, kind: 'editor', root: leaf, activePaneId: leaf.id, sftpOpen: false, workspace: 'terminal', editor: { sessionId, remotePath } }
     ])
     setActiveKey(key)
   }, [])
@@ -386,15 +450,70 @@ export default function App(): JSX.Element {
     setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, root: updateSplitSizes(t.root, splitId, sizes) } : t)))
   }, [])
 
-  const handleReady = useCallback((paneId: string, sessionId: string) => {
-    const timer = reconnectTimers.current.get(paneId)
-    if (timer) {
-      clearTimeout(timer)
-      reconnectTimers.current.delete(paneId)
+  const openSavedAux = useCallback(async (w: SavedAuxWindow, sessionId: string) => {
+    try {
+      if (w.kind === 'sftp') {
+        await openAuxWindow({
+          label: 'sftp-' + sanitizeWindowLabel(sessionId),
+          query: { sftp: '1', sessionId },
+          title: 'SFTP',
+          width: Math.max(w.w || 480, 420),
+          height: Math.max(w.h || 720, 280),
+          x: w.x,
+          y: w.y,
+          persist: { kind: 'sftp', serverId: w.serverId }
+        })
+      } else if (w.containerId) {
+        await openDetachedLogsWindow({
+          sessionId,
+          serverId: w.serverId,
+          containerId: w.containerId,
+          name: w.name ?? w.containerId,
+          width: Math.max(w.w || 800, 420),
+          height: Math.max(w.h || 560, 280),
+          x: w.x,
+          y: w.y
+        })
+      }
+    } catch {
+      openedAuxRef.current.delete(auxWindowKey(w))
     }
-    reconnectAttempts.current.delete(paneId)
-    setTabs((prev) => prev.map((t) => ({ ...t, root: updateLeaf(t.root, paneId, { sessionId }) })))
   }, [])
+
+  const tryRestoreAuxFor = useCallback(
+    (serverId: string, sessionId: string) => {
+      for (const w of pendingAuxRef.current) {
+        if (w.serverId !== serverId) continue
+        const k = auxWindowKey(w)
+        if (openedAuxRef.current.has(k)) continue
+        openedAuxRef.current.add(k)
+        void openSavedAux(w, sessionId)
+      }
+    },
+    [openSavedAux]
+  )
+
+  const handleReady = useCallback(
+    (paneId: string, sessionId: string) => {
+      const timer = reconnectTimers.current.get(paneId)
+      if (timer) {
+        clearTimeout(timer)
+        reconnectTimers.current.delete(paneId)
+      }
+      reconnectAttempts.current.delete(paneId)
+      let serverId: string | undefined
+      for (const tab of tabsRef.current) {
+        const leaf = findLeaf(tab.root, paneId)
+        if (leaf?.serverId) {
+          serverId = leaf.serverId
+          break
+        }
+      }
+      setTabs((prev) => prev.map((t) => ({ ...t, root: updateLeaf(t.root, paneId, { sessionId }) })))
+      if (serverId) tryRestoreAuxFor(serverId, sessionId)
+    },
+    [tryRestoreAuxFor]
+  )
 
   // Broadcast ограничен панелями ТЕКУЩЕЙ вкладки (а не всеми вкладками) —
   // чтобы случайно не отправить команду в прод-сессию из другой вкладки.
@@ -472,42 +591,27 @@ export default function App(): JSX.Element {
     })
   }, [])
 
-  const toggleSftp = useCallback((key: string) => {
-    const tab = tabsRef.current.find((t) => t.key === key)
-    if (tab?.sftpOpen) {
-      setSftpClosing((s) => ({ ...s, [key]: true }))
-      setTimeout(() => {
-        setSftpClosing((s) => {
-          const n = { ...s }
-          delete n[key]
-          return n
-        })
-        setTabs((prev) => prev.map((t) => (t.key === key ? { ...t, sftpOpen: false } : t)))
-      }, 200)
-    } else {
-      setTabs((prev) => prev.map((t) => (t.key === key ? { ...t, sftpOpen: true } : t)))
-    }
+  const setWorkspace = useCallback((key: string, tool: WorkspaceTool) => {
+    setTabs((prev) =>
+      prev.map((t) => {
+        if (t.key !== key) return t
+        if (tool === 'files') return { ...t, workspace: 'terminal', sftpOpen: true }
+        return { ...t, workspace: tool }
+      })
+    )
   }, [])
 
-  const startSftpResize = useCallback(
-    (e: ReactMouseEvent) => {
-      e.preventDefault()
-      const onMove = (ev: MouseEvent): void => setSftpWidth(Math.max(260, Math.min(820, window.innerWidth - ev.clientX)))
-      const onUp = (): void => {
-        document.removeEventListener('mousemove', onMove)
-        document.removeEventListener('mouseup', onUp)
-        document.body.style.cursor = ''
-        setSftpWidth((w) => {
-          update({ sftpWidth: w })
-          return w
-        })
-      }
-      document.body.style.cursor = 'col-resize'
-      document.addEventListener('mousemove', onMove)
-      document.addEventListener('mouseup', onUp)
-    },
-    [update]
-  )
+  const toggleSftp = useCallback((key: string) => {
+    const tab = tabsRef.current.find((t) => t.key === key)
+    const open = !!tab?.sftpOpen && (tab.workspace === 'terminal' || tab.workspace === 'files')
+    setTabs((prev) =>
+      prev.map((t) => {
+        if (t.key !== key) return t
+        if (open) return { ...t, sftpOpen: false, workspace: t.workspace === 'files' ? 'terminal' : t.workspace }
+        return { ...t, sftpOpen: true, workspace: 'terminal' }
+      })
+    )
+  }, [])
 
   const startSidebarResize = useCallback(
     (e: ReactMouseEvent) => {
@@ -529,36 +633,111 @@ export default function App(): JSX.Element {
     [update]
   )
 
-  // Запуск: восстановление вкладок (если включено) или локальный терминал.
+  const startSftpResize = useCallback(
+    (e: ReactMouseEvent) => {
+      e.preventDefault()
+      const onMove = (ev: MouseEvent): void => setSftpWidth(Math.max(260, Math.min(820, window.innerWidth - ev.clientX)))
+      const onUp = (): void => {
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+        document.body.style.cursor = ''
+        setSftpWidth((w) => {
+          update({ sftpWidth: w })
+          return w
+        })
+      }
+      document.body.style.cursor = 'col-resize'
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+    },
+    [update]
+  )
+
+  // Запуск: вкладки, доп. панели, локальный терминал.
   const startedOnceRef = useRef(false)
   useEffect(() => {
     if (startedOnceRef.current) return
     startedOnceRef.current = true
     void (async () => {
       const s = await window.api.settings.get()
-      if (s.restoreTabsOnStart) {
-        const saved = await window.api.layout.get()
-        if (saved.length) {
-          const restored: Tab[] = saved.map((st) => {
-            const root = deserializePane(st.root)
-            return { key: uid(), title: st.title, kind: 'terminal', root, activePaneId: firstLeaf(root).id, sftpOpen: false }
-          })
-          setTabs(restored)
-          setActiveKey(restored[restored.length - 1].key)
-          return
+      const saved = await window.api.layout.get()
+      const serverList = await window.api.servers.list()
+      setServers(serverList)
+      setAuxPersistEnabled(!!s.restoreAuxOnStart)
+      let auxWindows: SavedAuxWindow[] = []
+      if (s.restoreAuxOnStart) {
+        try {
+          const aux = await window.api.auxLayout.get()
+          auxWindows = Array.isArray(aux?.windows) ? aux.windows : []
+        } catch {
+          auxWindows = []
+        }
+        seedAuxLive(auxWindows)
+        pendingAuxRef.current = auxWindows
+      }
+      markAuxPersistReady()
+
+      const restoreSftp = !!s.restoreAuxOnStart
+      let restored: Tab[] = []
+      if (s.restoreTabsOnStart && saved.length) {
+        restored = saved.map((st) => tabFromSaved(st, true))
+      } else if (restoreSftp) {
+        const used = new Set<string>()
+        for (const st of saved) {
+          if (!st.sftpOpen && st.workspace !== 'files') continue
+          restored.push(tabFromSaved(st, true))
+          for (const l of allLeaves(deserializePane(st.root))) {
+            if (l.serverId) used.add(l.serverId)
+          }
+        }
+        for (const w of auxWindows) {
+          if (!w.serverId || used.has(w.serverId)) continue
+          const st = saved.find((x) => serializedHasServer(x.root, w.serverId))
+          if (st) restored.push(tabFromSaved(st, false))
+          else {
+            const srv = serverList.find((x) => x.id === w.serverId)
+            if (srv) {
+              const leaf = makeLeaf('ssh', srv.name, srv.id)
+              restored.push({
+                key: uid(),
+                title: srv.name,
+                kind: 'terminal',
+                root: leaf,
+                activePaneId: leaf.id,
+                sftpOpen: false,
+                workspace: 'terminal'
+              })
+            }
+          }
+          used.add(w.serverId)
         }
       }
+      if (restored.length) {
+        setTabs(restored)
+        setActiveKey(restored[restored.length - 1].key)
+        if (restored.some((t) => allLeaves(t.root).some((l) => l.kind === 'ssh'))) {
+          setSidebarCollapsed(true)
+        }
+        layoutReadyRef.current = true
+        return
+      }
       if (s.openLocalOnStart) openLocalTab()
+      layoutReadyRef.current = true
     })()
   }, [openLocalTab])
 
   // Сохранение раскладки терминальных вкладок (с дебаунсом) для восстановления.
   useEffect(() => {
-    if (!startedOnceRef.current) return
+    if (!layoutReadyRef.current) return
     const id = setTimeout(() => {
       const payload = tabs
         .filter((t) => t.kind === 'terminal')
-        .map((t) => ({ title: t.title, root: serializePane(t.root) }))
+        .map((t) => ({
+          title: t.title,
+          root: serializePane(t.root),
+          sftpOpen: t.sftpOpen,
+          workspace: t.workspace
+        }))
       void window.api.layout.set(payload)
     }, 600)
     return () => clearTimeout(id)
@@ -669,6 +848,32 @@ export default function App(): JSX.Element {
     items.push({ id: 'act:settings', label: 'Настройки', icon: '⚙', group: 'Действие', run: () => setShowSettings(true) })
     items.push({ id: 'act:keygen', label: 'Генерация ключей', icon: '🔑', group: 'Действие', run: () => setShowKeyGen(true) })
     items.push({ id: 'act:newserver', label: 'Добавить сервер', icon: '➕', group: 'Действие', run: () => setEditing(null) })
+    const activeTab = tabs.find((t) => t.key === activeKey)
+    if (activeTab?.kind === 'terminal') {
+      const sshLeaf = sshLeafForTools(activeTab)
+      if (sshLeaf) {
+        const tools: { id: WorkspaceTool; label: string }[] = [
+          { id: 'terminal', label: 'Terminal' },
+          { id: 'files', label: 'Files (SFTP)' },
+          { id: 'docker', label: 'Docker' },
+          { id: 'logs', label: 'Logs' },
+          { id: 'resources', label: 'Resources' },
+          { id: 'processes', label: 'Processes' },
+          { id: 'services', label: 'Services' },
+          { id: 'tunnels', label: 'Tunnels' }
+        ]
+        for (const x of tools) {
+          items.push({
+            id: 'ws:' + x.id,
+            label: x.label,
+            hint: 'инструмент сервера',
+            icon: '▣',
+            group: 'Рабочее место',
+            run: () => setWorkspace(activeTab.key, x.id)
+          })
+        }
+      }
+    }
     for (const t of tabs) {
       items.push({
         id: 'tab:' + t.key,
@@ -680,7 +885,7 @@ export default function App(): JSX.Element {
       })
     }
     return items
-  }, [servers, tabs, openServerTab, openLocalTab])
+  }, [servers, tabs, activeKey, openServerTab, openLocalTab, setWorkspace])
 
   return (
     <div className="app">
@@ -695,10 +900,12 @@ export default function App(): JSX.Element {
         onOpenKeyGen={() => setShowKeyGen(true)}
         onImport={importServers}
         width={sidebarWidth}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
         statuses={serverStatuses}
       />
 
-      <div className="sidebar-resizer" onMouseDown={startSidebarResize} />
+      {!sidebarCollapsed && <div className="sidebar-resizer" onMouseDown={startSidebarResize} />}
 
       <div className="workspace">
         <TabBar
@@ -709,12 +916,12 @@ export default function App(): JSX.Element {
           onClose={closeTab}
           onNewLocal={openLocalTab}
           onToggleSftp={toggleSftp}
+          onSetWorkspace={setWorkspace}
           onRename={renameTab}
           onReorder={reorderTabs}
           onSplit={splitPane}
           broadcast={broadcast}
           onToggleBroadcast={() => setBroadcast((b) => !b)}
-          onEditServer={(s) => setEditing(s)}
         />
 
         <div className="terminals">
@@ -741,16 +948,34 @@ export default function App(): JSX.Element {
                 </div>
               )
             }
-            const leaf = findLeaf(tab.root, tab.activePaneId)
-            // SFTP доступен только по реально установленному соединению, иначе клиента ещё/уже нет.
-            const sftpSession = leaf && leaf.kind === 'ssh' && leaf.status === 'connected' ? leaf.sessionId : undefined
+            const sshLeaf = sshLeafForTools(tab)
+            const showRail = !!sshLeaf
+            const tool = showRail ? (tab.workspace === 'files' ? 'terminal' : tab.workspace) : 'terminal'
+            const sessionId =
+              sshLeaf && sshLeaf.status === 'connected' ? sshLeaf.sessionId : undefined
+            const goTerminal = (): void => setWorkspace(tab.key, 'terminal')
+            const railTool: WorkspaceTool = tab.sftpOpen && tool === 'terminal' ? 'files' : tool
             return (
               <div
                 key={tab.key}
                 className="terminal-slot"
                 style={{ display: isActive ? 'flex' : 'none' }}
               >
-                <div className="pane-area">
+                {showRail && sshLeaf && (
+                  <WorkspaceRail
+                    title={tab.title}
+                    leaf={sshLeaf}
+                    server={servers.find((s) => s.id === sshLeaf.serverId)}
+                    tool={railTool}
+                    onSelect={(t) => (t === 'files' ? toggleSftp(tab.key) : setWorkspace(tab.key, t))}
+                    onReconnect={() => reconnectPaneManual(tab.key, sshLeaf.id)}
+                    onEditServer={() => {
+                      const srv = servers.find((s) => s.id === sshLeaf.serverId)
+                      if (srv) setEditing(srv)
+                    }}
+                  />
+                )}
+                <div className="pane-area" style={{ display: tool === 'terminal' ? 'flex' : 'none' }}>
                   <PaneView
                     node={tab.root}
                     activePaneId={tab.activePaneId}
@@ -766,17 +991,52 @@ export default function App(): JSX.Element {
                     onResizeSplit={(sid, sizes) => resizeSplit(tab.key, sid, sizes)}
                   />
                 </div>
-                {tab.sftpOpen && sftpSession && (
+                {tool === 'terminal' && tab.sftpOpen && sessionId && (
                   <>
                     <div className="sftp-resizer" onMouseDown={startSftpResize} />
                     <SftpPanel
-                      sessionId={sftpSession}
+                      sessionId={sessionId}
+                      serverId={sshLeaf?.serverId}
                       width={sftpWidth}
-                      closing={!!sftpClosing[tab.key]}
+                      closing={false}
                       onClose={() => toggleSftp(tab.key)}
-                      onOpenInEditor={(rp) => openEditorTab(sftpSession, rp)}
+                      onOpenInEditor={(rp) => openEditorTab(sessionId, rp)}
                     />
                   </>
+                )}
+                {showRail && tool !== 'terminal' && (
+                  <div className="ws-body">
+                    {!sessionId && (
+                      <div className="ws-waiting">Нет активного SSH-соединения</div>
+                    )}
+                    {sessionId && tool === 'docker' && (
+                      <DockerPanel
+                        sessionId={sessionId}
+                        serverId={sshLeaf?.serverId}
+                        docked
+                        onClose={goTerminal}
+                        onGoTerminal={goTerminal}
+                      />
+                    )}
+                    {sessionId && tool === 'logs' && <HostLogsPanel sessionId={sessionId} />}
+                    {sessionId && tool === 'resources' && (
+                      <MonitorPanel sessionId={sessionId} docked onClose={goTerminal} />
+                    )}
+                    {sessionId && tool === 'processes' && <ProcessPanel sessionId={sessionId} />}
+                    {sessionId && tool === 'services' && <ServicePanel sessionId={sessionId} />}
+                    {sessionId && tool === 'tunnels' && (
+                      <TunnelPanel
+                        sessionId={sessionId}
+                        server={servers.find((s) => s.id === sshLeaf?.serverId)}
+                        docked
+                        onClose={goTerminal}
+                        onEditServer={() => {
+                          const srv = servers.find((s) => s.id === sshLeaf?.serverId)
+                          if (srv) setEditing(srv)
+                        }}
+                      />
+                    )}
+                  </div>
                 )}
               </div>
             )

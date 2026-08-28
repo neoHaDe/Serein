@@ -3,6 +3,7 @@
 mod backup;
 mod clipboard;
 mod crypto;
+mod dnd;
 mod docker;
 mod dpapi;
 mod importers;
@@ -15,9 +16,11 @@ mod remoteedit;
 pub mod sftp;
 pub mod ssh;
 pub mod store;
+mod term_out;
 mod tunnels;
 mod vault;
 mod vaultkey;
+mod workspace;
 
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -137,6 +140,14 @@ fn layout_set(tabs: Value) -> Result<(), String> {
     store::layout_set(tabs)
 }
 #[tauri::command]
+fn aux_layout_get() -> Value {
+    store::aux_layout_get()
+}
+#[tauri::command]
+fn aux_layout_set(layout: Value) -> Result<(), String> {
+    store::aux_layout_set(layout)
+}
+#[tauri::command]
 fn localfs_home() -> String {
     localfs::home()
 }
@@ -147,6 +158,10 @@ fn localfs_parent(path: String) -> String {
 #[tauri::command]
 fn localfs_list(path: String) -> Result<Value, String> {
     localfs::list(&path)
+}
+#[tauri::command]
+fn localfs_copy_into(paths: Vec<String>, dest_dir: String) -> Result<u32, String> {
+    localfs::copy_into(&paths, &dest_dir)
 }
 
 // ---------------- Сессии ----------------
@@ -271,6 +286,73 @@ async fn session_monitor(state: State<'_, AppState>, id: String) -> Result<Value
 }
 
 #[tauri::command]
+async fn workspace_processes(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let (code, out, err) = ssh::exec(&s.handle, workspace::PS_CMD, Some(s.cancel.subscribe())).await?;
+    if code != 0 && out.trim().is_empty() {
+        let error = if err.trim().is_empty() {
+            "ps недоступен".to_string()
+        } else {
+            err.trim().to_string()
+        };
+        return Ok(json!({ "ok": false, "error": error }));
+    }
+    Ok(workspace::parse_ps(&out))
+}
+
+#[tauri::command]
+async fn workspace_kill(state: State<'_, AppState>, session_id: String, pid: u32) -> Result<Value, String> {
+    let cmd = workspace::kill_cmd(pid)?;
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let (code, _out, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
+    if code != 0 {
+        let error = if err.trim().is_empty() {
+            format!("kill завершился с кодом {code}")
+        } else {
+            err.trim().to_string()
+        };
+        return Ok(json!({ "ok": false, "error": error }));
+    }
+    Ok(json!({ "ok": true }))
+}
+
+#[tauri::command]
+async fn workspace_services(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let (code, out, err) = ssh::exec(&s.handle, workspace::SERVICES_CMD, Some(s.cancel.subscribe())).await?;
+    Ok(workspace::parse_services(code, &out, &err))
+}
+
+#[tauri::command]
+async fn workspace_service_action(
+    state: State<'_, AppState>,
+    session_id: String,
+    name: String,
+    action: String,
+) -> Result<Value, String> {
+    let cmd = workspace::service_cmd(&name, &action)?;
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let (code, _out, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
+    if code != 0 {
+        let error = if err.trim().is_empty() {
+            format!("systemctl {action} код {code}")
+        } else {
+            err.trim().to_string()
+        };
+        return Ok(json!({ "ok": false, "error": error }));
+    }
+    Ok(json!({ "ok": true }))
+}
+
+#[tauri::command]
+async fn workspace_logs(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let (_code, out, err) = ssh::exec(&s.handle, workspace::LOGS_CMD, Some(s.cancel.subscribe())).await?;
+    let text = if out.trim().is_empty() { err } else { out };
+    Ok(json!({ "ok": true, "text": text }))
+}
+
+#[tauri::command]
 fn session_ki_respond(state: State<'_, AppState>, id: String, answers: Vec<String>) {
     if let Some(tx) = state.ki.lock().unwrap().remove(&id) {
         let _ = tx.send(answers);
@@ -361,6 +443,16 @@ async fn sftp_rename(state: State<'_, AppState>, session_id: String, from: Strin
     sftp::rename(&s.handle, &from, &to).await
 }
 #[tauri::command]
+async fn sftp_chmod(state: State<'_, AppState>, session_id: String, path: String, mode: u32) -> Result<(), String> {
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    sftp::chmod(&s.handle, &path, mode).await
+}
+#[tauri::command]
+async fn sftp_preview(state: State<'_, AppState>, session_id: String, remote_path: String) -> Result<Value, String> {
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    sftp::preview(&s.handle, &remote_path).await
+}
+#[tauri::command]
 async fn sftp_read_file(state: State<'_, AppState>, session_id: String, remote_path: String) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     sftp::read_file(&s.handle, &remote_path).await
@@ -369,6 +461,16 @@ async fn sftp_read_file(state: State<'_, AppState>, session_id: String, remote_p
 async fn sftp_write_file(state: State<'_, AppState>, session_id: String, remote_path: String, content: String, mode: u32, base_mtime: u64, eol: String) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     sftp::write_file(&s.handle, &remote_path, &content, mode, base_mtime, &eol).await
+}
+#[tauri::command]
+async fn sftp_name_conflicts(
+    state: State<'_, AppState>,
+    session_id: String,
+    remote_dir: String,
+    names: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    sftp::name_conflicts(&s.handle, &remote_dir, &names).await
 }
 #[tauri::command]
 async fn sftp_upload_paths(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_dir: String, paths: Vec<String>) -> Result<Value, String> {
@@ -396,6 +498,89 @@ async fn sftp_upload_paths(app: AppHandle, state: State<'_, AppState>, session_i
 async fn sftp_download_to(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_path: String, local_dir: String) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     sftp::download_path(app, s.handle.clone(), &session_id, &remote_path, &local_dir, s.alive.clone(), state.transfers.clone()).await
+}
+#[tauri::command]
+async fn sftp_drag_out(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    remote_paths: Vec<String>,
+) -> Result<(), String> {
+    if remote_paths.is_empty() {
+        return Err("Нечего перетаскивать".into());
+    }
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let handle = s.handle.clone();
+    let alive = s.alive.clone();
+    let hub = state.transfers.clone();
+    // Не ждём скачивание в invoke с dragstart: WebView2 может оборвать промис и дропнуть SFTP-канал.
+    tauri::async_runtime::spawn(async move {
+        dnd::cleanup_old();
+        let mut ole_ok = true;
+        if let Ok(sftp) = sftp::open(&handle).await {
+            let mut total = 0u64;
+            for remote in &remote_paths {
+                match sftp.metadata(remote).await {
+                    Ok(m) if m.file_type().is_dir() => ole_ok = false,
+                    Ok(m) => total = total.saturating_add(m.size.unwrap_or(0)),
+                    Err(_) => ole_ok = false,
+                }
+            }
+            if total > dnd::OLE_MAX_BYTES {
+                ole_ok = false;
+            }
+        } else {
+            ole_ok = false;
+        }
+        let dest_dir = if ole_ok {
+            match dnd::new_tmp() {
+                Ok(t) => t,
+                Err(_) => return,
+            }
+        } else {
+            dnd::downloads_dir()
+        };
+        let dest_s = dest_dir.to_string_lossy().replace('\\', "/");
+        for remote in &remote_paths {
+            let _ = sftp::download_path(
+                app.clone(),
+                handle.clone(),
+                &session_id,
+                remote,
+                &dest_s,
+                alive.clone(),
+                hub.clone(),
+            )
+            .await;
+        }
+        if !ole_ok {
+            return;
+        }
+        let mut locals = Vec::new();
+        for remote in &remote_paths {
+            let Some(name) = std::path::Path::new(remote)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+            else {
+                continue;
+            };
+            let dest = dest_dir.join(&name);
+            if !dest.exists() {
+                let _ = std::fs::create_dir_all(&dest);
+            }
+            if let Ok(p) = dnd::drag_path(&dest) {
+                locals.push(p);
+            }
+        }
+        if locals.is_empty() {
+            return;
+        }
+        if dnd::start_files(&window, locals, dest_dir.clone()).is_err() {
+            let _ = dnd::move_into_downloads(&dest_dir);
+        }
+    });
+    Ok(())
 }
 #[tauri::command]
 async fn sftp_edit(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_path: String) -> Result<(), String> {
@@ -586,15 +771,16 @@ pub fn run() {
             settings_get, settings_set,
             servers_list, servers_save, servers_delete,
             snippets_list, snippets_save, snippets_delete,
-            layout_get, layout_set,
-            localfs_home, localfs_parent, localfs_list,
+            layout_get, layout_set, aux_layout_get, aux_layout_set,
+            localfs_home, localfs_parent, localfs_list, localfs_copy_into,
             session_open_local, session_open_ssh, session_write, session_resize, session_close,
             session_ping, session_monitor, session_ki_respond,
             docker_list, docker_action, docker_logs, docker_logs_cancel,
-            sftp_list, sftp_mkdir, sftp_remove, sftp_rename, sftp_read_file, sftp_write_file,
-            sftp_upload_paths, sftp_download_to, sftp_edit, sftp_edit_stop, sftp_cancel_transfer,
+            sftp_list, sftp_mkdir, sftp_remove, sftp_rename, sftp_chmod, sftp_preview, sftp_read_file, sftp_write_file,
+            sftp_upload_paths, sftp_download_to, sftp_drag_out, sftp_name_conflicts, sftp_edit, sftp_edit_stop, sftp_cancel_transfer,
             sftp_pause_transfer, sftp_resume_transfer,
             tunnel_list_status, tunnel_open, tunnel_close,
+            workspace_processes, workspace_kill, workspace_services, workspace_service_action, workspace_logs,
             vault_status, vault_unlock, vault_enable, vault_disable,
             backup_export, backup_import,
             keygen_generate, keygen_save, keygen_install,

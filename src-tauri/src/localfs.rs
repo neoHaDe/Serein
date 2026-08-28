@@ -60,3 +60,39 @@ pub fn list(path: &str) -> Result<Value, String> {
     });
     Ok(json!({ "path": p, "entries": entries }))
 }
+
+/// Копирует файлы/папки в dest_dir (drop из Проводника в локальную панель).
+pub fn copy_into(paths: &[String], dest_dir: &str) -> Result<u32, String> {
+    let dest = Path::new(dest_dir);
+    if !dest.is_dir() {
+        return Err("Папка назначения не найдена".into());
+    }
+    let mut n = 0u32;
+    for p in paths {
+        let src = Path::new(p);
+        let name = src
+            .file_name()
+            .ok_or_else(|| format!("Некорректный путь: {p}"))?;
+        copy_item(src, &dest.join(name))?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+fn copy_item(src: &Path, dst: &Path) -> Result<(), String> {
+    let meta = fs::metadata(src).map_err(|e| e.to_string())?;
+    if meta.is_dir() {
+        fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+        for ent in fs::read_dir(src).map_err(|e| e.to_string())? {
+            let ent = ent.map_err(|e| e.to_string())?;
+            copy_item(&ent.path(), &dst.join(ent.file_name()))?;
+        }
+        Ok(())
+    } else {
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::copy(src, dst).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}

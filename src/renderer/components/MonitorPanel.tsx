@@ -35,7 +35,15 @@ function Bar({ label, pct, sub }: { label: string; pct: number; sub: string }): 
   )
 }
 
-export function MonitorPanel({ sessionId, onClose }: { sessionId: string; onClose: () => void }): JSX.Element {
+export function MonitorPanel({
+  sessionId,
+  onClose,
+  docked
+}: {
+  sessionId: string
+  onClose: () => void
+  docked?: boolean
+}): JSX.Element {
   const [m, setM] = useState<ServerMetrics | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const aliveRef = useRef(true)
@@ -66,16 +74,19 @@ export function MonitorPanel({ sessionId, onClose }: { sessionId: string; onClos
 
   return (
     <>
-      <div className="split-menu-backdrop" onClick={onClose} />
-      <div className="monitor-panel">
-        <div className="tunnel-menu-header">
-          <span className="tunnel-menu-title">Мониторинг</span>
+      {!docked && <div className="split-menu-backdrop" onClick={onClose} />}
+      <div className={docked ? 'ws-panel' : 'monitor-panel'}>
+        <div className={docked ? 'ws-head' : 'tunnel-menu-header'}>
+          <span className={docked ? 'ws-head-title' : 'tunnel-menu-title'}>
+            {docked && <Icon name="monitor" size={15} />}
+            {docked ? 'Ресурсы' : 'Мониторинг'}
+          </span>
           {m && <span className="mon-uptime"><Icon name="arrow-up" size={11} /> {fmtUptime(m.uptimeSec)}</span>}
         </div>
         {err && <div className="hint" style={{ padding: '10px 12px' }}>{err}</div>}
         {!err && !m && <div className="hint" style={{ padding: '10px 12px' }}>Сбор метрик…</div>}
         {m && (
-          <div className="mon-body">
+          <div className={'mon-body' + (docked ? ' docked' : '')}>
             <Bar label="CPU" pct={m.cpuPct} sub={`${m.cpuPct}% · ${m.cores} ядр.`} />
             <Bar label="RAM" pct={memPct} sub={`${fmtKb(m.memUsedKb)} / ${fmtKb(m.memTotalKb)}`} />
             <Bar label="Диск /" pct={m.diskPct} sub={`${m.diskPct}%`} />

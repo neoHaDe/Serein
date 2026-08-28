@@ -25,12 +25,16 @@ import type {
   LocalListResult,
   RemoteEditStatus,
   RemoteFileContent,
+  SftpPreview,
   WriteFileResult,
   SerializedTab,
+  AuxLayout,
   ServerMetrics,
   DockerListResult,
   DockerAction,
-  DockerLogsChunk
+  DockerLogsChunk,
+  WorkspaceProcess,
+  WorkspaceService
 } from '../shared/types'
 
 /** Подписка на событие Tauri с синхронной функцией отписки (как в Electron-preload). */
@@ -101,6 +105,10 @@ export const api = {
       invoke('sftp_remove', { sessionId, path, isDir }),
     rename: (sessionId: string, from: string, to: string): Promise<void> =>
       invoke('sftp_rename', { sessionId, from, to }),
+    chmod: (sessionId: string, path: string, mode: number): Promise<void> =>
+      invoke('sftp_chmod', { sessionId, path, mode }),
+    preview: (sessionId: string, remotePath: string): Promise<SftpPreview> =>
+      invoke('sftp_preview', { sessionId, remotePath }),
     uploadFolder: async (sessionId: string, remoteDir: string): Promise<{ uploaded: number }> => {
       const sel = await openDialog({ directory: true, title: 'Папка для загрузки на сервер' })
       if (typeof sel !== 'string') return { uploaded: 0 }
@@ -108,8 +116,12 @@ export const api = {
     },
     uploadPaths: (sessionId: string, remoteDir: string, paths: string[]): Promise<{ uploaded: number }> =>
       invoke('sftp_upload_paths', { sessionId, remoteDir, paths }),
+    nameConflicts: (sessionId: string, remoteDir: string, names: string[]): Promise<string[]> =>
+      invoke('sftp_name_conflicts', { sessionId, remoteDir, names }),
     downloadTo: (sessionId: string, remotePath: string, localDir: string): Promise<void> =>
       invoke('sftp_download_to', { sessionId, remotePath, localDir }),
+    startOsDrag: (sessionId: string, remotePaths: string[]): Promise<void> =>
+      invoke('sftp_drag_out', { sessionId, remotePaths }),
     listTransfers: (): Promise<TransferItem[]> => Promise.resolve([]),
     cancelTransfer: (id: string): Promise<void> => invoke('sftp_cancel_transfer', { id }),
     pauseTransfer: (id: string): Promise<void> => invoke('sftp_pause_transfer', { id }),
@@ -129,7 +141,6 @@ export const api = {
     edit: (sessionId: string, remotePath: string): Promise<void> => invoke('sftp_edit', { sessionId, remotePath }),
     editStop: (sessionId: string, remotePath: string): Promise<void> =>
       invoke('sftp_edit_stop', { sessionId, remotePath }),
-    startDrag: (_s: string, _r: string): void => {},
     onProgress: (cb: (p: TransferProgress) => void) => sub<TransferProgress>('sftp-progress', cb),
     onTransfer: (cb: (p: TransferItem) => void) => sub<TransferItem>('sftp-transfer', cb),
     onEditStatus: (cb: (p: RemoteEditStatus) => void) => sub<RemoteEditStatus>('sftp-edit-status', cb)
@@ -137,7 +148,9 @@ export const api = {
   localfs: {
     list: (path: string): Promise<LocalListResult> => invoke('localfs_list', { path }),
     home: (): Promise<string> => invoke('localfs_home'),
-    parent: (path: string): Promise<string> => invoke('localfs_parent', { path })
+    parent: (path: string): Promise<string> => invoke('localfs_parent', { path }),
+    copyInto: (paths: string[], destDir: string): Promise<number> =>
+      invoke('localfs_copy_into', { paths, destDir })
   },
   dialog: {
     pickKey: async (): Promise<string | null> => {
@@ -146,12 +159,24 @@ export const api = {
     }
   },
   files: {
-    // В Tauri путь перетащенного файла приходит через onDragDrop окна; здесь заглушка.
+    pick: async (opts: { title: string; multiple?: boolean; directory?: boolean }): Promise<string[]> => {
+      const sel = await openDialog({
+        title: opts.title,
+        multiple: opts.directory ? false : opts.multiple !== false,
+        directory: !!opts.directory
+      })
+      if (Array.isArray(sel)) return sel
+      return typeof sel === 'string' ? [sel] : []
+    },
     pathForFile: (_file: File): string => ''
   },
   layout: {
     get: (): Promise<SerializedTab[]> => invoke('layout_get'),
     set: (tabs: SerializedTab[]): Promise<void> => invoke('layout_set', { tabs })
+  },
+  auxLayout: {
+    get: (): Promise<AuxLayout> => invoke('aux_layout_get'),
+    set: (layout: AuxLayout): Promise<void> => invoke('aux_layout_set', { layout })
   },
   docker: {
     list: (id: string): Promise<DockerListResult> => invoke('docker_list', { id }),
@@ -208,6 +233,22 @@ export const api = {
     open: (sessionId: string, tunnelId: string): Promise<void> => invoke('tunnel_open', { sessionId, tunnelId }),
     close: (sessionId: string, tunnelId: string): Promise<void> => invoke('tunnel_close', { sessionId, tunnelId }),
     onStatus: (cb: (s: TunnelStatus) => void) => sub<TunnelStatus>('tunnel-status', cb)
+  },
+  workspace: {
+    processes: (sessionId: string): Promise<{ ok: boolean; error?: string; rows?: WorkspaceProcess[] }> =>
+      invoke('workspace_processes', { sessionId }),
+    kill: (sessionId: string, pid: number): Promise<{ ok: boolean; error?: string }> =>
+      invoke('workspace_kill', { sessionId, pid }),
+    services: (sessionId: string): Promise<{ ok: boolean; error?: string; rows?: WorkspaceService[] }> =>
+      invoke('workspace_services', { sessionId }),
+    serviceAction: (
+      sessionId: string,
+      name: string,
+      action: 'start' | 'stop' | 'restart'
+    ): Promise<{ ok: boolean; error?: string }> =>
+      invoke('workspace_service_action', { sessionId, name, action }),
+    logs: (sessionId: string): Promise<{ ok: boolean; error?: string; text?: string }> =>
+      invoke('workspace_logs', { sessionId })
   }
 }
 

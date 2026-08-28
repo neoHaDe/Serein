@@ -35,6 +35,13 @@ function extOf(name: string): string {
   return i > 0 ? name.slice(i + 1).toLowerCase() : ''
 }
 
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg'])
+
+/** Картинка — превью во вкладке, не скачивание и не текстовый редактор. */
+export function isImageFile(name: string): boolean {
+  return IMAGE_EXTS.has(extOf(name))
+}
+
 /** Похоже ли имя файла на текстовый файл (для открытия в редакторе). */
 export function isTextFile(name: string): boolean {
   const lower = name.toLowerCase()

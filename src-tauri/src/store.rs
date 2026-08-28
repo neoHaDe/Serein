@@ -50,7 +50,13 @@ fn default_settings() -> Value {
         "localShell": "auto",
         "density": "comfortable",
         "auxInTaskbar": false,
-        "sftpConcurrency": 4
+        "sftpConcurrency": 4,
+        "restoreAuxOnStart": false,
+        "sftpShowHidden": false,
+        "sftpColOn": { "name": true, "ext": true, "mode": true, "size": true, "mtime": true },
+        "sftpColWidths": { "name": 200, "ext": 64, "mode": 52, "size": 84, "mtime": 136 },
+        "sftpSortCol": "name",
+        "sftpSortDir": "asc"
     })
 }
 
@@ -314,6 +320,13 @@ pub fn layout_get() -> Value {
 }
 pub fn layout_set(tabs: Value) -> Result<(), String> {
     write_value("layout.json", &tabs)
+}
+
+pub fn aux_layout_get() -> Value {
+    read_value("aux-layout.json").unwrap_or_else(|| json!({ "windows": [] }))
+}
+pub fn aux_layout_set(layout: Value) -> Result<(), String> {
+    write_value("aux-layout.json", &layout)
 }
 
 // Заглушка, чтобы избежать предупреждения о неиспользуемом импорте Map в некоторых конфигурациях.

@@ -21,11 +21,13 @@ interface Props {
   onOpenKeyGen: () => void
   onImport: (kind: 'ssh' | 'putty') => void
   width: number
+  collapsed?: boolean
+  onToggleCollapse?: () => void
   /** Агрегированный статус подключения по serverId (для живого индикатора). */
   statuses?: Record<string, 'connected' | 'connecting' | 'reconnecting' | 'error'>
 }
 
-export function Sidebar({ servers, onConnect, onOpenLocal, onNew, onEdit, onDelete, onOpenSettings, onOpenKeyGen, onImport, width, statuses }: Props): JSX.Element {
+export function Sidebar({ servers, onConnect, onOpenLocal, onNew, onEdit, onDelete, onOpenSettings, onOpenKeyGen, onImport, width, collapsed, onToggleCollapse, statuses }: Props): JSX.Element {
   const [filter, setFilter] = useState('')
   const [importMenu, setImportMenu] = useState(false)
 
@@ -48,12 +50,21 @@ export function Sidebar({ servers, onConnect, onOpenLocal, onNew, onEdit, onDele
   }, [servers, filter])
 
   return (
-    <aside className="sidebar" style={{ width }}>
+    <aside className={'sidebar' + (collapsed ? ' collapsed' : '')} style={{ width: collapsed ? 56 : width }}>
       <div className="sidebar-header">
+        {collapsed ? (
+          <button className="icon-btn" title="Развернуть список серверов" onClick={onToggleCollapse}>
+            <Icon name="chevron-right" />
+          </button>
+        ) : (
+          <>
         <span className="logo">
           <Icon name="logo" size={16} /> Serein
         </span>
         <div className="sidebar-header-actions">
+          <button className="icon-btn" title="Свернуть список серверов" onClick={onToggleCollapse}>
+            <Icon name="chevron-left" />
+          </button>
           <div className="import-control">
             <button className="icon-btn" title="Импортировать серверы" onClick={() => setImportMenu((v) => !v)}>
               <Icon name="import" />
@@ -88,26 +99,31 @@ export function Sidebar({ servers, onConnect, onOpenLocal, onNew, onEdit, onDele
             <Icon name="plus" />
           </button>
         </div>
+          </>
+        )}
       </div>
 
+      {!collapsed && (
       <input
         className="search"
         placeholder="Поиск серверов…"
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
       />
+      )}
 
       <div className="server-list">
-        {groups.length === 0 && <div className="hint">Серверов пока нет. Нажмите «+».</div>}
+        {!collapsed && groups.length === 0 && <div className="hint">Серверов пока нет. Нажмите «+».</div>}
         {groups.map(([group, items]) => (
           <div key={group} className="group">
-            <div className="group-title">{group}</div>
+            {!collapsed && <div className="group-title">{group}</div>}
             {items.map((s) => (
               <div
                 key={s.id}
                 className="server-item"
+                onClick={collapsed ? () => onConnect(s) : undefined}
                 onDoubleClick={() => onConnect(s)}
-                title={`${s.username}@${s.host}:${s.port}`}
+                title={`${s.name} — ${s.username}@${s.host}:${s.port}`}
               >
                 <span className="dot-wrap" title={statuses?.[s.id] ? `Статус: ${statuses[s.id]}` : undefined}>
                   <span className="dot" style={{ background: s.color || '#7aa2f7' }} />
@@ -121,6 +137,8 @@ export function Sidebar({ servers, onConnect, onOpenLocal, onNew, onEdit, onDele
                     />
                   )}
                 </span>
+                {!collapsed && (
+                <>
                 <div className="server-info">
                   <div className="server-name">{s.name}</div>
                   <div className="server-host">
@@ -144,6 +162,8 @@ export function Sidebar({ servers, onConnect, onOpenLocal, onNew, onEdit, onDele
                     <Icon name="trash" size={14} />
                   </button>
                 </div>
+                </>
+                )}
               </div>
             ))}
           </div>
@@ -151,6 +171,20 @@ export function Sidebar({ servers, onConnect, onOpenLocal, onNew, onEdit, onDele
       </div>
 
       <div className="sidebar-footer">
+        {collapsed ? (
+          <>
+            <button className="icon-btn" title="Локальный терминал" onClick={onOpenLocal}>
+              <Icon name="desktop" />
+            </button>
+            <button className="icon-btn" title="Генерация ключей" onClick={onOpenKeyGen}>
+              <Icon name="key" />
+            </button>
+            <button className="icon-btn" title="Настройки" onClick={onOpenSettings}>
+              <Icon name="settings" />
+            </button>
+          </>
+        ) : (
+          <>
         <button className="full-btn" onClick={onOpenLocal}>
           <Icon name="desktop" /> Локальный терминал
         </button>
@@ -160,6 +194,8 @@ export function Sidebar({ servers, onConnect, onOpenLocal, onNew, onEdit, onDele
         <button className="full-btn" onClick={onOpenSettings}>
           <Icon name="settings" /> Настройки
         </button>
+          </>
+        )}
       </div>
     </aside>
   )

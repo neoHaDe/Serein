@@ -1,5 +1,70 @@
 import { invoke } from '@tauri-apps/api/core'
+import { PhysicalPosition, PhysicalSize } from '@tauri-apps/api/dpi'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
+import type { SavedAuxWindow } from '../shared/types'
+import { registerAuxWindow, unregisterAuxWindow, updateAuxGeometry } from './auxLayout'
+
+export type AuxPersistMeta = Pick<SavedAuxWindow, 'kind' | 'serverId' | 'containerId' | 'name'>
+
+async function applyInnerGeo(
+  w: WebviewWindow,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): Promise<void> {
+  try {
+    await w.setSize(new PhysicalSize(Math.round(width), Math.round(height)))
+    const outer = await w.outerPosition()
+    const inner = await w.innerPosition()
+    const padX = inner.x - outer.x
+    const padY = inner.y - outer.y
+    await w.setPosition(new PhysicalPosition(Math.round(x - padX), Math.round(y - padY)))
+  } catch {
+    /* */
+  }
+}
+
+async function snapshotGeo(w: WebviewWindow, label: string): Promise<void> {
+  try {
+    const inner = await w.innerPosition()
+    const size = await w.innerSize()
+    updateAuxGeometry(label, { x: inner.x, y: inner.y, w: size.width, h: size.height })
+  } catch {
+    /* */
+  }
+}
+
+function trackAux(
+  w: WebviewWindow,
+  label: string,
+  persist: AuxPersistMeta,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): void {
+  registerAuxWindow(label, {
+    kind: persist.kind,
+    serverId: persist.serverId,
+    containerId: persist.containerId,
+    name: persist.name,
+    x,
+    y,
+    w: width,
+    h: height
+  })
+  void snapshotGeo(w, label)
+  void w.onMoved(() => {
+    void snapshotGeo(w, label)
+  })
+  void w.onResized(() => {
+    void snapshotGeo(w, label)
+  })
+  void w.once('tauri://destroyed', () => {
+    unregisterAuxWindow(label)
+  })
+}
 
 export async function openAuxWindow(opts: {
   label: string
@@ -9,6 +74,9 @@ export async function openAuxWindow(opts: {
   height: number
   minWidth?: number
   minHeight?: number
+  x?: number
+  y?: number
+  persist?: AuxPersistMeta
 }): Promise<void> {
   const existing = await WebviewWindow.getByLabel(opts.label)
   if (existing) {
@@ -51,6 +119,12 @@ export async function openAuxWindow(opts: {
       reject(new Error(String(e.payload ?? e)))
     })
   })
+  if (opts.x != null && opts.y != null) {
+    await applyInnerGeo(w, opts.x, opts.y, opts.width, opts.height)
+  }
+  if (opts.persist) {
+    trackAux(w, opts.label, opts.persist, opts.x ?? 0, opts.y ?? 0, opts.width, opts.height)
+  }
   await invoke('windows_raise_group', { focused: opts.label }).catch(() => {})
 }
 
