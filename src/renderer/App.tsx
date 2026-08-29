@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { HostKeyRequest, KIPrompt, SavedAuxWindow, SerializedPane, SerializedTab, ServerConfig, WorkspaceTool } from '../shared/types'
-import { parseWorkspaceTool } from '../shared/types'
+import { paneKindOf, parseWorkspaceTool } from '../shared/types'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { PaneView } from './components/PaneView'
@@ -382,7 +382,7 @@ export default function App(): JSX.Element {
   }, [scheduleReconnect])
 
   const openServerTab = useCallback((server: ServerConfig) => {
-    const leaf = makeLeaf(server.connection === 'serial' ? 'serial' : 'ssh', server.name, server.id)
+    const leaf = makeLeaf(paneKindOf(server), server.name, server.id)
     const key = uid()
     setTabs((prev) => [...prev, { key, title: server.name, kind: 'terminal', root: leaf, activePaneId: leaf.id, sftpOpen: false, workspace: 'terminal' }])
     setActiveKey(key)
@@ -533,14 +533,19 @@ export default function App(): JSX.Element {
         if (t.key !== tabKey) return t
         const cur = findLeaf(t.root, t.activePaneId)
         if (!cur) return t
-        const fresh =
-          choice.kind === 'local'
-            ? makeLeaf('local', 'Локальный терминал')
-            : makeLeaf('ssh', choice.title, choice.serverId)
+        // Вид панели берём из профиля: при split сервер с COM-портом или telnet
+        // иначе открывался бы как SSH и подключение падало на первом же шаге.
+        let fresh
+        if (choice.kind === 'local') {
+          fresh = makeLeaf('local', 'Локальный терминал')
+        } else {
+          const srv = servers.find((x) => x.id === choice.serverId)
+          fresh = makeLeaf(srv ? paneKindOf(srv) : 'ssh', choice.title, choice.serverId)
+        }
         return { ...t, root: splitLeaf(t.root, cur.id, dir, fresh), activePaneId: fresh.id }
       })
     )
-  }, [])
+  }, [servers])
 
   const focusPane = useCallback((tabKey: string, paneId: string) => {
     setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, activePaneId: paneId } : t)))
@@ -851,7 +856,7 @@ export default function App(): JSX.Element {
           else {
             const srv = serverList.find((x) => x.id === w.serverId)
             if (srv) {
-              const leaf = makeLeaf('ssh', srv.name, srv.id)
+              const leaf = makeLeaf(paneKindOf(srv), srv.name, srv.id)
               restored.push({
                 key: uid(),
                 title: srv.name,
