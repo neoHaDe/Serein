@@ -202,8 +202,10 @@ fn port_of(server: &Value) -> u16 {
 
 /// Окно и keepalive под длинные SFTP. `maximum_packet_size` 32 КиБ — как у OpenSSH;
 /// SFTP-чанк в `sftp.rs` режется под этот лимит, иначе DATA не влезает в SSH-пакет.
-pub(crate) fn ssh_client_config() -> Arc<client::Config> {
+pub(crate) fn ssh_client_config(server: &Value) -> Arc<client::Config> {
     let mut cfg = client::Config::default();
+    // Наборы алгоритмов зависят от профиля: сжатие и режим совместимости со старым железом.
+    cfg.preferred = crate::ssh_algos::preferred_for(server);
     cfg.window_size = 32 * 1024 * 1024;
     cfg.maximum_packet_size = 32 * 1024;
     cfg.keepalive_interval = Some(std::time::Duration::from_secs(15));
@@ -307,7 +309,7 @@ async fn connect_one(
         agent_forward_channels: Arc::new(Mutex::new(HashSet::new())),
         agent_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
-    let config = ssh_client_config();
+    let config = ssh_client_config(server);
     // Таймаут подключения: к офлайн/firewall-хосту (DROP без TCP-reset) connect иначе
     // виснет надолго. russh отдаёт ошибку Result (не EventEmitter, как ssh2 в Electron),
     // поэтому "двойного error" тут нет — достаточно ограничить ожидание и вернуть Err.
@@ -367,7 +369,7 @@ pub async fn connect_chain(
             .await
             .map_err(|e| format!("ProxyJump к {nhost} не удался: {e}"))?;
         jump_handles.push(Arc::new(cur));
-        let config = ssh_client_config();
+        let config = ssh_client_config(next);
         let handler = ClientHandler {
             host_id: knownhosts::host_id(nhost, port_of(next)),
             remote_forwards: remote_forwards.clone(),
@@ -490,7 +492,7 @@ pub async fn connect_client(chain: Vec<Value>) -> Result<SharedHandle, String> {
             .channel_open_direct_tcpip(nhost, port_of(next) as u32, "127.0.0.1", 0)
             .await
             .map_err(|e| format!("ProxyJump к {nhost} не удался: {e}"))?;
-        let config = ssh_client_config();
+        let config = ssh_client_config(next);
         let handler = ClientHandler {
             host_id: knownhosts::host_id(nhost, port_of(next)),
             remote_forwards: remote_forwards.clone(),

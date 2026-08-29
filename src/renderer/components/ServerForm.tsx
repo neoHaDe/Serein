@@ -126,6 +126,8 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
   const [addingTunnel, setAddingTunnel] = useState(false)
   const [executeOnConnect, setExecuteOnConnect] = useState(initial?.executeOnConnect ?? '')
   const [connection, setConnection] = useState<'ssh' | 'serial'>(initial?.connection ?? 'ssh')
+  const [sshCompression, setSshCompression] = useState(initial?.sshCompression ?? false)
+  const [sshLegacyAlgos, setSshLegacyAlgos] = useState(initial?.sshLegacyAlgos ?? false)
   const [serial, setSerial] = useState<SerialConfig>(
     initial?.serial ?? {
       port: '',
@@ -203,6 +205,8 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
       authType,
       connection,
       serial: connection === 'serial' ? { ...serial, port: serial.port.trim() } : initial?.serial,
+      sshCompression: connection === 'ssh' && sshCompression ? true : undefined,
+      sshLegacyAlgos: connection === 'ssh' && sshLegacyAlgos ? true : undefined,
       group: group.trim() || undefined,
       color,
       proxyJump: proxyJump || undefined,
@@ -454,6 +458,31 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
             ))}
           </select>
         </label>
+
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={sshCompression}
+            onChange={(e) => setSshCompression(e.target.checked)}
+          />
+          Сжимать трафик (zlib) — для медленного канала
+        </label>
+
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={sshLegacyAlgos}
+            onChange={(e) => setSshLegacyAlgos(e.target.checked)}
+          />
+          Разрешить устаревшие алгоритмы (старые коммутаторы и прошивки)
+        </label>
+        {sshLegacyAlgos && (
+          <div className="agent-hint">
+            Добавит <code>diffie-hellman-group1-sha1</code>, CBC-шифры, <code>3des-cbc</code> и{' '}
+            <code>ssh-rsa</code> в конец списка. С современным сервером по-прежнему выберется
+            сильный набор.
+          </div>
+        )}
 
         <label>
           Команда при подключении (выполнится после открытия shell)

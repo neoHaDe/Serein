@@ -17,6 +17,7 @@ mod remoteedit;
 mod serial;
 pub mod sftp;
 mod ssh_agent;
+mod ssh_algos;
 pub mod ssh;
 pub mod store;
 mod term_out;
