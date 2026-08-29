@@ -41,7 +41,10 @@ any `C:\…` key paths by hand (path normalisation is still TODO).
 SHA-256:
 
 ```
-(pending build)
+3ed4a664dfdb466903748d8a37e97ab56bc7f868742bb578f9400da0198a2c43  Serein_1.2.5_x64-setup.exe
+e7ad5f294d65d147654c3e9c3b54e9bb5b0b7af1668fffc7603e8a154974b6dd  Serein_1.2.5_x64-portable.exe
+73ff9f5becde785ae9c8939b085246e21d309721cacc3a3f922028b4f8c68f33  Serein_1.2.5_amd64.deb
+1cb2eaab71c212af319c2c64b4c21cd59e3141357340b62b0582732597241b7c  Serein_1.2.5_amd64.AppImage
 ```
 
 ### Limitations

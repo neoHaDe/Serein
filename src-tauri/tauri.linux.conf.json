@@ -1,7 +1,10 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
-    "targets": ["deb", "appimage"],
+    "targets": [
+      "deb",
+      "appimage"
+    ],
     "category": "DeveloperTool",
     "linux": {
       "appimage": {
@@ -15,6 +18,7 @@
         "section": "net",
         "priority": "optional"
       }
-    }
+    },
+    "createUpdaterArtifacts": false
   }
 }
