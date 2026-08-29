@@ -323,6 +323,10 @@ export const api = {
     logs: (sessionId: string): Promise<{ ok: boolean; error?: string; text?: string }> =>
       invoke('workspace_logs', { sessionId })
   },
+  app: {
+    /** Куда приложение реально пишет профиль и логи — видно в настройках. */
+    paths: (): Promise<{ config: string; logs: string }> => invoke('app_paths')
+  },
   exportText: async (
     content: string,
     defaultName: string

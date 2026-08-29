@@ -41,11 +41,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
   const [busy, setBusy] = useState(false)
   const [appVersion, setAppVersion] = useState('')
+  const [paths, setPaths] = useState<{ config: string; logs: string } | null>(null)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
 
   useEffect(() => {
     window.api.vault.status().then((s) => setMasterEnabled(s.enabled))
     getVersion().then(setAppVersion).catch(() => {})
+    window.api.app.paths().then(setPaths).catch(() => {})
   }, [])
 
   const onCheckUpdate = async (): Promise<void> => {
@@ -474,6 +476,24 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
               {checkingUpdate ? '…' : 'Проверить обновления'}
             </button>
           </div>
+
+          {/* Путь к профилю — не украшение: если приложение запустили из окружения
+              с другим HOME (на Linux так бывает при старте из меню), оно молча
+              откроет пустой профиль, и по этой строке это видно сразу. */}
+          {paths && (
+            <div className="settings-row">
+              <div>
+                <div className="settings-row-name">Профиль и логи</div>
+                <div className="settings-row-desc settings-path">{paths.config}</div>
+              </div>
+              <button
+                className="secondary"
+                onClick={() => void window.api.clipboard.write(paths.config)}
+              >
+                Скопировать путь
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="modal-actions">

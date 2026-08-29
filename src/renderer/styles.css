@@ -4128,3 +4128,12 @@ button.secondary:hover {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* Путь к профилю в настройках: моноширинный и переносится, а не уезжает за край —
+   на Linux он длиннее, чем `%APPDATA%\serein`. */
+.settings-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  word-break: break-all;
+  user-select: text;
+}

@@ -117,6 +117,20 @@ fn app_platform() -> &'static str {
     }
 }
 
+/// Куда приложение на самом деле пишет профиль и логи сессий.
+///
+/// Не украшение: на Linux запуск из меню приложений и из терминала может прийти с разным
+/// `HOME`/`XDG_CONFIG_HOME`, и тогда приложение молча открывает пустой профиль — список
+/// серверов выглядит потерянным. По этой строке разница видна за секунду.
+#[tauri::command]
+fn app_paths() -> Value {
+    let cfg = store::config_dir();
+    json!({
+        "config": cfg.to_string_lossy(),
+        "logs": cfg.join("logs").to_string_lossy(),
+    })
+}
+
 #[tauri::command]
 fn settings_get() -> Value {
     store::settings_get()
@@ -1060,36 +1074,88 @@ fn servers_import_putty() -> Result<Value, String> {
     Ok(json!({ "imported": importers::import_putty()? }))
 }
 
+/// Сдвинуть окна группы на (dx, dy) в физических пикселях.
+/// Делаем из Rust: на Linux JS `setPosition` из чужого webview часто не доезжает,
+/// а emit `serein-dock-move` сам по себе окна не двигает — только помечает «это наше».
+#[tauri::command]
+fn windows_nudge_group(app: AppHandle, members: Vec<String>, dx: i32, dy: i32) {
+    if dx == 0 && dy == 0 {
+        return;
+    }
+    use tauri::Manager;
+    for label in members {
+        let Some(w) = app.webview_windows().get(&label).cloned() else {
+            continue;
+        };
+        let Ok(pos) = w.outer_position() else {
+            continue;
+        };
+        let _ = w.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+            x: pos.x.saturating_add(dx),
+            y: pos.y.saturating_add(dy),
+        }));
+    }
+}
+
 /// Поднять все окна приложения над чужими, фокус оставить на `focused`.
 #[tauri::command]
 fn windows_raise_group(app: AppHandle, focused: String) {
-    #[cfg(windows)]
     windows_raise_group_impl(&app, &focused);
-    #[cfg(not(windows))]
-    let _ = (app, focused);
 }
 
 /// Развернуть все свёрнутые окна приложения (для режима «одна кнопка на панели задач»).
 #[tauri::command]
 fn windows_restore_minimized(app: AppHandle) -> u32 {
-    #[cfg(windows)]
-    return windows_restore_minimized_impl(&app);
-    #[cfg(not(windows))]
-    {
-        let _ = app;
-        0
-    }
+    windows_restore_minimized_impl(&app)
 }
 
 /// Сколько окон приложения сейчас свёрнуто.
 #[tauri::command]
 fn windows_count_minimized(app: AppHandle) -> u32 {
-    #[cfg(windows)]
-    return windows_count_minimized_impl(&app);
-    #[cfg(not(windows))]
-    {
-        let _ = app;
-        0
+    windows_count_minimized_impl(&app)
+}
+
+// На Linux те же три операции делаются средствами самого Tauri. Раньше они там были
+// заглушками, из-за чего «одна кнопка на панели задач» и подъём группы не работали
+// вовсе: свёрнутые окна не разворачивались, а клик по одному окну не поднимал остальные.
+
+#[cfg(not(windows))]
+fn windows_count_minimized_impl(app: &AppHandle) -> u32 {
+    app.webview_windows()
+        .values()
+        .filter(|w| w.is_minimized().unwrap_or(false))
+        .count() as u32
+}
+
+#[cfg(not(windows))]
+fn windows_restore_minimized_impl(app: &AppHandle) -> u32 {
+    let mut n = 0;
+    for w in app.webview_windows().values() {
+        if w.is_minimized().unwrap_or(false) {
+            let _ = w.unminimize();
+            n += 1;
+        }
+    }
+    n
+}
+
+#[cfg(not(windows))]
+fn windows_raise_group_impl(app: &AppHandle, focused: &str) {
+    // В Win32 есть отдельное «поднять, не забирая фокус» (SWP_NOACTIVATE); в Tauri его нет,
+    // а `set_focus` перетащил бы фокус на каждое окно по очереди и заставил их мигать.
+    // Переносимый эквивалент — короткое «поверх всех» и обратно: менеджер окон поднимает
+    // окно, фокус остаётся там, где был.
+    let windows = app.webview_windows();
+    for (label, w) in &windows {
+        if label == focused || w.is_minimized().unwrap_or(false) {
+            continue;
+        }
+        let _ = w.set_always_on_top(true);
+        let _ = w.set_always_on_top(false);
+    }
+    // Фокусируемое поднимаем последним, чтобы оно осталось верхним и активным.
+    if let Some(w) = windows.get(focused) {
+        let _ = w.set_focus();
     }
 }
 
@@ -1225,8 +1291,8 @@ pub fn run() {
             export_text_file,
             keygen_generate, keygen_save, keygen_install,
             servers_import_ssh_config, servers_import_putty,
-            app_platform,
-            windows_raise_group, windows_restore_minimized, windows_count_minimized,
+            app_platform, app_paths,
+            windows_nudge_group, windows_raise_group, windows_restore_minimized, windows_count_minimized,
             clipboard_write, clipboard_read
         ])
         .run(tauri::generate_context!())
