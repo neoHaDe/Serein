@@ -145,6 +145,14 @@ fn encrypt_secret(value: &str) -> Option<String> {
     os_protect(&v)
 }
 
+/// Отпустить прежний секрет в OS-хранилище перед перезаписью или удалением.
+/// На Windows это пустая операция, на Linux — удаление записи из связки ключей.
+fn release_secret(holder: &Value, field: &str) {
+    if let Some(s) = holder.get(field).and_then(|v| v.as_str()) {
+        os_secrets::forget(s);
+    }
+}
+
 fn decrypt_secret(enc: &str) -> Option<String> {
     // Префикс `plain:` больше не пишется (см. os_protect) — разбор оставлен только
     // для чтения профилей, сохранённых старыми сборками.
@@ -234,11 +242,13 @@ pub fn servers_save(mut cfg: Value) -> Result<Value, String> {
     let prev = secrets.get(&id).cloned().unwrap_or_else(|| json!({}));
     let mut next = Map::new();
     let pw = if had_password {
+        release_secret(&prev, "password");
         password.as_deref().and_then(encrypt_secret).map(Value::String)
     } else {
         prev.get("password").cloned()
     };
     let pp = if had_passphrase {
+        release_secret(&prev, "passphrase");
         passphrase.as_deref().and_then(encrypt_secret).map(Value::String)
     } else {
         prev.get("passphrase").cloned()
@@ -259,6 +269,10 @@ pub fn servers_save(mut cfg: Value) -> Result<Value, String> {
 pub fn servers_delete(id: &str) -> Result<(), String> {
     delete_item("servers.json", id)?;
     let mut secrets = read_secrets();
+    if let Some(sec) = secrets.get(id) {
+        release_secret(sec, "password");
+        release_secret(sec, "passphrase");
+    }
     if let Some(o) = secrets.as_object_mut() {
         o.remove(id);
     }

@@ -52,6 +52,28 @@ pub fn unprotect(stored: &str) -> Option<String> {
     }
 }
 
+/// Забыть секрет в OS-хранилище.
+///
+/// На Windows звать нечего: DPAPI ничего не хранит, в файле лежит сам шифртекст, и он
+/// исчезает вместе с записью. На Linux полезная нагрузка живёт в связке ключей, а в файле
+/// только ссылка `kr:{uuid}` — если запись не удалять, связка копит мусор: каждая правка
+/// пароля заводит новую, а старая остаётся навсегда и её уже никто не найдёт.
+pub fn forget(stored: &str) {
+    #[cfg(unix)]
+    {
+        if let Some(id) = stored.strip_prefix(KR_PREFIX) {
+            use keyring::Entry;
+            if let Ok(entry) = Entry::new(SERVICE, &format!("secret:{id}")) {
+                let _ = entry.delete_credential();
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = stored;
+    }
+}
+
 #[cfg(unix)]
 fn protect_keyring(plaintext: &str) -> Option<String> {
     use keyring::Entry;
