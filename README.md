@@ -70,6 +70,8 @@ A weak laptop will not magically match 33 MB.
 - Sidebar with **drag & drop groups**, right-click menus and search, **live connection status**
 - Auth: **password · key · keyboard-interactive 2FA · SSH agent** (pick the key from the ring)
 - **Serial / COM console** — baud, parity, flow control, DTR/RTS, send BREAK
+- **Telnet** — option negotiation, terminal type, window size, BREAK/Interrupt/AYT, per-server Enter mode
+- **Raw TCP** — untouched bytes, for console servers
 - **ProxyJump / bastion** chains (recursive, `direct-tcpip`) and **ProxyCommand** (`%h %p %r`)
 - **Compression** (`zlib@openssh.com`) and an opt-in **legacy algorithm** set for old gear
 - **TOFU known-hosts** on every hop: verification dialog, management and OpenSSH import
@@ -225,13 +227,13 @@ and `npm run tauri dev` output.
 
 ## Known limitations
 
-- No **Telnet** or **raw TCP** connections yet — SSH and Serial/COM only.
+- No **SCP** (SFTP only) and no **X11 forwarding** yet.
 - **Windows x64** only. No `.dmg` / `.AppImage`.
 - Installer is **unsigned**. SmartScreen will fight you.
 - Updater endpoint exists; do not rely on it while the installer is unsigned.
 - Not on the near-term list: cloud sync, mobile, plugins, RDP/VNC, a generic LLM chat pane.
 
-Product plan: reliability hardening → Telnet and raw TCP → multi-host and automation. RDP/VNC are out of scope for now. See [release notes 1.2.2](docs/RELEASE_NOTES_v1.2.2.md).
+Product plan: reliability hardening → multi-host and automation → migration importers. RDP/VNC are out of scope for now. See [release notes 1.2.4](docs/RELEASE_NOTES_v1.2.4.md).
 
 ---
 
