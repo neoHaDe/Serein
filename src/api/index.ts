@@ -68,6 +68,9 @@ export const api = {
     list: (): Promise<ServerConfig[]> => invoke('servers_list'),
     save: (cfg: ServerConfig): Promise<ServerConfig> => invoke('servers_save', { cfg }),
     remove: (id: string): Promise<void> => invoke('servers_delete', { id }),
+    /** Перестановка после перетаскивания: меняет только группу и позицию. */
+    reorder: (items: { id: string; group: string; order: number }[]): Promise<void> =>
+      invoke('servers_reorder', { items }),
     importSshConfig: (): Promise<{ imported: number }> => invoke('servers_import_ssh_config'),
     importPutty: (): Promise<{ imported: number }> => invoke('servers_import_putty')
   },

@@ -99,6 +99,8 @@ export interface ServerConfig {
    * старые наборы идут последними в списке предпочтений.
    */
   sshLegacyAlgos?: boolean
+  /** Позиция в списке внутри своей группы. Меньше — выше. */
+  order?: number
   /** Вид подключения. Отсутствует = `ssh` (все профили, созданные до появления COM). */
   connection?: 'ssh' | 'serial'
   /** Параметры линии для `connection: 'serial'`. */
@@ -427,6 +429,13 @@ export interface AppSettings {
   auxInTaskbar?: boolean
   /** Параллельных SFTP-файлов (1–8, по умолчанию 4). */
   sftpConcurrency?: number
+  /**
+   * Порядок групп в боковой панели. Хранится отдельно от серверов, иначе пустая группа
+   * (только что созданная) исчезала бы до появления в ней первого сервера.
+   */
+  groupOrder?: string[]
+  /** Свёрнутые группы — чтобы список не разворачивался заново при каждом запуске. */
+  collapsedGroups?: string[]
   /** Показывать скрытые файлы (имя начинается с точки) в SFTP. */
   sftpShowHidden?: boolean
   /** Сохранять расположение доп. панелей (SFTP / откреплённые окна) после перезапуска. */
@@ -532,6 +541,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   density: 'comfortable',
   auxInTaskbar: false,
   sftpConcurrency: 4,
+  groupOrder: [],
+  collapsedGroups: [],
   restoreAuxOnStart: false,
   sftpShowHidden: false,
   sftpColOn: { name: true, ext: true, mode: true, size: true, mtime: true },

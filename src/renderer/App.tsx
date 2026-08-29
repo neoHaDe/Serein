@@ -11,6 +11,7 @@ import { SettingsModal } from './components/SettingsModal'
 import { KiModal } from './components/KiModal'
 import { HostKeyModal } from './components/HostKeyModal'
 import { KeyGenModal } from './components/KeyGenModal'
+import { GroupsModal } from './components/GroupsModal'
 import { StatusBar } from './components/StatusBar'
 import { CodeEditor } from './components/CodeEditor'
 import { CommandPalette, type PaletteItem } from './components/CommandPalette'
@@ -52,6 +53,7 @@ import {
   serializePane,
   deserializePane
 } from './paneTree'
+import { errText } from './errText'
 
 export interface Tab {
   key: string
@@ -122,6 +124,7 @@ export default function App(): JSX.Element {
   const [editing, setEditing] = useState<ServerConfig | null | undefined>(undefined)
   const [showSettings, setShowSettings] = useState(false)
   const [showKeyGen, setShowKeyGen] = useState(false)
+  const [showGroups, setShowGroups] = useState(false)
   const [broadcast, setBroadcast] = useState(false)
   const [sftpWidth, setSftpWidth] = useState(380)
   const [sidebarWidth, setSidebarWidth] = useState(270)
@@ -975,12 +978,134 @@ export default function App(): JSX.Element {
           ? await window.api.servers.importSshConfig()
           : await window.api.servers.importPutty()
         await reloadServers()
-        alert(`Импортировано серверов: ${r.imported}`)
+        alert(
+          r.imported
+            ? `Импортировано серверов: ${r.imported}`
+            : 'Новых серверов не нашлось — всё уже есть в списке.'
+        )
       } catch (e) {
-        alert('Ошибка импорта: ' + (e as Error).message)
+        // Частый случай — импортировать просто неоткуда; это не поломка, а факт.
+        alert(errText(e))
       }
     },
     [reloadServers]
+  )
+
+  const groupOrder = useMemo(() => settings.groupOrder ?? [], [settings.groupOrder])
+  const collapsedGroups = useMemo(() => settings.collapsedGroups ?? [], [settings.collapsedGroups])
+
+  /** Группы из настроек плюс те, что встречаются у серверов, — вторые могли приехать импортом. */
+  const allGroups = useMemo(() => {
+    const fromServers = servers
+      .map((s) => s.group?.trim())
+      .filter((g): g is string => !!g)
+    return [...new Set([...groupOrder, ...fromServers])]
+  }, [groupOrder, servers])
+
+  const saveGroupOrder = useCallback(
+    (next: string[]) => {
+      update({ groupOrder: next })
+    },
+    [update]
+  )
+
+  const toggleGroup = useCallback(
+    (group: string) => {
+      const cur = settingsRef.current.collapsedGroups ?? []
+      update({
+        collapsedGroups: cur.includes(group) ? cur.filter((g) => g !== group) : [...cur, group]
+      })
+    },
+    [update]
+  )
+
+  const createGroup = useCallback(() => {
+    const name = prompt('Название новой группы')?.trim()
+    if (!name) return
+    const cur = settingsRef.current.groupOrder ?? []
+    if (cur.includes(name)) {
+      alert(`Группа «${name}» уже есть`)
+      return
+    }
+    update({ groupOrder: [...cur, name] })
+  }, [update])
+
+  /**
+   * Перенос сервера: пересчитываем позиции всей целевой группы, а не только
+   * перетащенного, — иначе после нескольких перестановок порядок «слипается».
+   */
+  const dropServer = useCallback(
+    async (serverId: string, group: string, index?: number) => {
+      const moved = servers.find((s) => s.id === serverId)
+      if (!moved) return
+      const target = servers
+        .filter((s) => s.id !== serverId && (s.group?.trim() || '') === group)
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name))
+      const at = index === undefined ? target.length : Math.max(0, Math.min(index, target.length))
+      target.splice(at, 0, moved)
+
+      // Новый порядок показываем сразу, не дожидаясь записи в хранилище: запись
+      // идёт через IPC и приезжает кадров через несколько, а список всё это время
+      // стоял бы в старом порядке — на глаз это рывок сразу после броска.
+      const order = new Map(target.map((s, i) => [s.id, i]))
+      setServers((prev) =>
+        prev.map((s) => (order.has(s.id) ? { ...s, group, order: order.get(s.id)! } : s))
+      )
+
+      await window.api.servers.reorder(target.map((s, i) => ({ id: s.id, group, order: i })))
+      await reloadServers()
+    },
+    [servers, reloadServers]
+  )
+
+  // Сайдбар присылает готовый порядок целиком: только он знает, что нарисовал
+  // (в списке есть и группы, которых ещё нет в настройках).
+  const dropGroup = useCallback(
+    (order: string[]) => {
+      update({ groupOrder: order })
+    },
+    [update]
+  )
+
+  const renameGroup = useCallback(
+    async (from: string, to: string) => {
+      const members = servers.filter((s) => (s.group?.trim() || '') === from)
+      if (members.length) {
+        await window.api.servers.reorder(
+          members.map((s, i) => ({ id: s.id, group: to, order: s.order ?? i }))
+        )
+      }
+      const cur = settingsRef.current.groupOrder ?? []
+      update({ groupOrder: cur.map((g) => (g === from ? to : g)) })
+      await reloadServers()
+    },
+    [servers, update, reloadServers]
+  )
+
+  const deleteGroup = useCallback(
+    async (group: string) => {
+      const members = servers.filter((s) => (s.group?.trim() || '') === group)
+      if (members.length) {
+        // Серверы не удаляем — только вынимаем из группы.
+        await window.api.servers.reorder(members.map((s, i) => ({ id: s.id, group: '', order: i })))
+      }
+      const cur = settingsRef.current.groupOrder ?? []
+      update({ groupOrder: cur.filter((g) => g !== group) })
+      await reloadServers()
+    },
+    [servers, update, reloadServers]
+  )
+
+  const moveGroup = useCallback(
+    (group: string, dir: -1 | 1) => {
+      const cur = [...(settingsRef.current.groupOrder ?? allGroups)]
+      const i = cur.indexOf(group)
+      const j = i + dir
+      if (i < 0 || j < 0 || j >= cur.length) return
+      ;[cur[i], cur[j]] = [cur[j], cur[i]]
+      update({ groupOrder: cur })
+    },
+    [update, allGroups]
   )
 
   const paletteItems = useMemo<PaletteItem[]>(() => {
@@ -1052,6 +1177,13 @@ export default function App(): JSX.Element {
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
         statuses={serverStatuses}
+        groupOrder={allGroups}
+        collapsedGroups={collapsedGroups}
+        onToggleGroup={toggleGroup}
+        onNewGroup={createGroup}
+        onOpenGroups={() => setShowGroups(true)}
+        onDropServer={(id, group, index) => void dropServer(id, group, index)}
+        onDropGroup={dropGroup}
       />
 
       {!sidebarCollapsed && <div className="sidebar-resizer" onMouseDown={startSidebarResize} />}
@@ -1245,6 +1377,19 @@ export default function App(): JSX.Element {
       {paletteOpen && <CommandPalette items={paletteItems} onClose={() => setPaletteOpen(false)} />}
 
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+
+      {showGroups && (
+        <GroupsModal
+          groups={allGroups}
+          servers={servers}
+          onClose={() => setShowGroups(false)}
+          onRename={(from, to) => void renameGroup(from, to)}
+          onDelete={(g) => void deleteGroup(g)}
+          onCreate={(name) => saveGroupOrder([...(settingsRef.current.groupOrder ?? []), name])}
+          onAssign={(id, group) => void dropServer(id, group)}
+          onMove={moveGroup}
+        />
+      )}
 
       {showKeyGen && (
         <KeyGenModal

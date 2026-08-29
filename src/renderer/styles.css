@@ -228,15 +228,164 @@ button {
   align-items: center;
   gap: 7px;
 }
-.group-title::before {
-  content: '';
-  width: 5px;
-  height: 5px;
-  border-radius: 1px;
-  background: var(--accent);
-  opacity: 0.7;
-  transform: rotate(45deg);
+.group-title {
+  cursor: pointer;
+  user-select: none;
+  border-radius: var(--r-sm);
+}
+.group-title:hover {
+  color: var(--text);
+  background: rgba(var(--fg-rgb), 0.05);
+}
+.group-title svg {
   flex-shrink: 0;
+  opacity: 0.8;
+}
+.group-title-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-title-count {
+  font-size: 10px;
+  opacity: 0.65;
+}
+/* Куда упадёт перетаскиваемый элемент. Пунктирная рамка на каждом движении мыши
+   выглядела как мигание, поэтому подсветка мягкая и с плавным переходом. */
+.group.drop-target {
+  background: rgba(var(--accent-rgb), 0.07);
+  border-radius: var(--r);
+  box-shadow: inset 2px 0 0 rgba(var(--accent-rgb), 0.7);
+  transition: background 0.12s ease, box-shadow 0.12s ease;
+}
+/* Пока тащим — гасим наведение на элементах, иначе рамка «прыгает» под курсором. */
+.group.drop-target .server-item:hover {
+  background: transparent;
+}
+/* Разделитель групп в свёрнутой панели: заголовков там нет. */
+.group-divider {
+  height: 1px;
+  margin: 8px 12px;
+  background: var(--border);
+}
+.group:last-child .group-divider {
+  display: none;
+}
+/* Подсказка занимает ровно столько же, сколько строка сервера (--row-h меряется
+   по живому списку). Иначе последний сервер уезжает из группы — подсказка
+   встаёт на его место другой высоты, и всё, что ниже, дёргается. */
+.group-empty {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: var(--row-h, 38px);
+  padding: 0 10px 0 22px;
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Меню по правому клику. */
+.ctx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+}
+.ctx-menu {
+  position: fixed;
+  z-index: 901;
+  min-width: 190px;
+  padding: 4px;
+  border-radius: var(--r);
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  box-shadow: var(--sh-2);
+}
+.ctx-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.ctx-item:hover {
+  background: rgba(var(--accent-rgb), 0.16);
+}
+.ctx-item.danger {
+  color: var(--danger);
+}
+.ctx-item.danger:hover {
+  background: rgba(var(--danger-rgb), 0.16);
+}
+.ctx-item.separated {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 9px;
+}
+
+/* Настройки групп. */
+.groups-modal {
+  max-width: 720px;
+}
+.groups-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.groups-col {
+  flex: 1;
+  min-width: 0;
+}
+.groups-col-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.groups-list,
+.groups-members {
+  max-height: 190px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+.groups-row,
+.groups-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.groups-row:last-child,
+.groups-member:last-child {
+  border-bottom: none;
+}
+.groups-row.selected {
+  background: rgba(var(--accent-rgb), 0.14);
+}
+.groups-row-name,
+.groups-member-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.groups-row-count,
+.groups-member-where {
+  font-size: 11px;
+  color: var(--muted);
 }
 
 .server-item {
@@ -303,6 +452,55 @@ button {
 }
 .server-item:hover .server-actions {
   display: flex;
+}
+
+/* Перетаскивание списка серверов и групп.
+   Порядок в DOM не меняется, пока тащим: двигаем только картинку через
+   `transform`. Перестройка списка на каждое движение мыши накладывает анимации
+   друг на друга — элементы размазывает по экрану.
+   Соседи расступаются ровно на высоту переносимого, а он сам идёт за курсором
+   и поднят над списком, поэтому пересечений быть не может. */
+.row-move {
+  transition: transform 190ms cubic-bezier(0.2, 0.7, 0.3, 1);
+  will-change: transform;
+}
+.row-drag {
+  position: relative;
+  z-index: 20;
+  cursor: grabbing;
+  /* За курсором — без задержки: любая анимация здесь читается как «тормозит». */
+  transition: none;
+}
+.server-item.row-drag,
+.group.row-drag {
+  background: var(--panel-2);
+  border-radius: var(--r);
+  box-shadow: 0 10px 26px rgba(var(--shadow-rgb), 0.5),
+    inset 0 0 0 1px rgba(var(--accent-rgb), 0.55);
+}
+.server-item.row-drag::before {
+  opacity: 0;
+}
+.group-title.grabbable {
+  cursor: grab;
+}
+/* Пока тащим — гасим наведение: подсветка бежала бы за курсором по чужим строкам. */
+body.row-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+body.row-dragging .server-item:not(.row-drag):hover {
+  background: transparent;
+}
+body.row-dragging .server-item:hover::before {
+  opacity: 0;
+}
+body.row-dragging .server-item:hover .server-actions {
+  display: none;
+}
+body.row-dragging .group-title:hover {
+  background: transparent;
+  color: var(--muted);
 }
 
 .mini {
@@ -1943,6 +2141,12 @@ button.secondary:hover {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+}
+.settings-row > div:first-child {
+  min-width: 0; /* иначе длинное описание распирает строку и кнопка уезжает за окно */
+}
+.settings-row > button {
+  flex: 0 0 auto;
 }
 .settings-row-name {
   font-size: 13px;

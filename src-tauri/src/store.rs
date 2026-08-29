@@ -194,6 +194,41 @@ pub fn servers_list_safe() -> Vec<Value> {
         .collect()
 }
 
+/// Перестановка серверов: меняет только группу и позицию, не трогая остальные поля.
+///
+/// Отдельная операция, а не цикл `servers_save`: тот прогоняет запись через слой секретов,
+/// и перетаскивание мышью каждый раз перешифровывало бы пароли — лишний риск на ровном месте.
+pub fn servers_reorder(items: &[Value]) -> Result<(), String> {
+    let mut servers = list_items("servers.json");
+    for patch in items {
+        let Some(id) = patch.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(target) = servers
+            .iter_mut()
+            .find(|s| s.get("id").and_then(|v| v.as_str()) == Some(id))
+        else {
+            continue;
+        };
+        let Some(obj) = target.as_object_mut() else {
+            continue;
+        };
+        match patch.get("group").and_then(|v| v.as_str()) {
+            // Пустая строка = «без группы»: поле убираем, чтобы не плодить пустые ключи.
+            Some(g) if !g.trim().is_empty() => {
+                obj.insert("group".into(), json!(g.trim()));
+            }
+            _ => {
+                obj.remove("group");
+            }
+        }
+        if let Some(order) = patch.get("order").and_then(|v| v.as_u64()) {
+            obj.insert("order".into(), json!(order));
+        }
+    }
+    write_value("servers.json", &Value::Array(servers))
+}
+
 pub fn servers_save(mut cfg: Value) -> Result<Value, String> {
     let password = cfg.get("password").and_then(|v| v.as_str()).map(|s| s.to_string());
     let passphrase = cfg.get("passphrase").and_then(|v| v.as_str()).map(|s| s.to_string());

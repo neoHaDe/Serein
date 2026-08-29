@@ -18,6 +18,7 @@
         "minWidth": 900,
         "minHeight": 560,
         "decorations": false,
+        "dragDropEnabled": false,
         "shadow": false,
         "backgroundColor": "#1a1b26"
       }

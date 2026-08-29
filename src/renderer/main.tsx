@@ -12,6 +12,13 @@ import './styles.css'
 
 window.api = api
 
+/**
+ * Гасим меню WebView2 («Назад», «Обновить», «Печать», «Проверить») — в десктопном
+ * приложении оно неуместно. Наши собственные меню вызывают `stopPropagation`,
+ * поэтому до этого обработчика не доходят и продолжают работать.
+ */
+document.addEventListener('contextmenu', (e) => e.preventDefault())
+
 const q = new URLSearchParams(window.location.search)
 const detachedLogs = q.get('dockerLogs') === '1'
 const detachedSftp = q.get('sftp') === '1'

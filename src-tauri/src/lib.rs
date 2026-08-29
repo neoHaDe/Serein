@@ -116,6 +116,11 @@ fn servers_list() -> Vec<Value> {
 fn servers_save(cfg: Value) -> Result<Value, String> {
     store::servers_save(cfg)
 }
+/// Перестановка серверов после перетаскивания: `[{ id, group, order }]`.
+#[tauri::command]
+fn servers_reorder(items: Vec<Value>) -> Result<(), String> {
+    store::servers_reorder(&items)
+}
 #[tauri::command]
 fn servers_delete(id: String) -> Result<(), String> {
     store::servers_delete(&id)
@@ -1111,7 +1116,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             settings_get, settings_set,
-            servers_list, servers_save, servers_delete,
+            servers_list, servers_save, servers_delete, servers_reorder,
             snippets_list, snippets_save, snippets_delete,
             layout_get, layout_set, aux_layout_get, aux_layout_set,
             localfs_home, localfs_parent, localfs_list, localfs_copy_into,
