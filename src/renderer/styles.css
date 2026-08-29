@@ -831,6 +831,68 @@ button {
   margin: 0 !important;
 }
 
+/* Диалог про ключ сервера: отпечаток читают глазами, поэтому моноширинный и крупнее. */
+.hostkey-fp {
+  font-family: var(--font-mono) !important;
+  font-size: 12px !important;
+  letter-spacing: 0.3px;
+}
+.hostkey-fp.old {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.hostkey-warn {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: var(--r);
+  border: 1px solid rgba(var(--danger-rgb), 0.45);
+  background: rgba(var(--danger-rgb), 0.1);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.hostkey-hint {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.hostkey-hint code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+/* Список известных хостов в настройках. */
+.known-hosts-list {
+  max-height: 210px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+.known-host-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.known-host-row:last-child {
+  border-bottom: none;
+}
+.known-host-name {
+  flex: 0 0 auto;
+  font-weight: 600;
+  font-size: 12px;
+}
+.known-host-fp {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
 /* Выбор ключа SSH-агента: заголовок поля с кнопкой обновления справа. */
 .agent-label {
   display: flex;

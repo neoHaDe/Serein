@@ -99,6 +99,25 @@ export interface ServerConfig {
   serial?: SerialConfig
 }
 
+/** Вопрос про ключ сервера во время рукопожатия. */
+export interface HostKeyRequest {
+  /** Сессия, к которой относится вопрос. */
+  id: string
+  requestId: string
+  /** `host:port` — как хранится в known_hosts. */
+  host: string
+  fingerprint: string
+  /** Прежний отпечаток; пусто, если хост встречается впервые. */
+  previous: string
+  kind: 'new' | 'changed'
+}
+
+/** Запись в списке известных хостов. */
+export interface KnownHostEntry {
+  host: string
+  fingerprint: string
+}
+
 /** Что открыто в панели терминала. */
 export type PaneKind = 'ssh' | 'local' | 'serial'
 

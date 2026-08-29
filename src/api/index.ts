@@ -8,6 +8,8 @@ import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialo
 import type {
   ServerConfig,
   AgentIdentitiesResult,
+  HostKeyRequest,
+  KnownHostEntry,
   SerialConfig,
   SerialPortInfo,
   OpenSshPayload,
@@ -73,6 +75,11 @@ export const api = {
     /** Ключи локального SSH-агента. `ok: false` — агент не запущен, не ошибка вызова. */
     identities: (): Promise<AgentIdentitiesResult> => invoke('ssh_agent_identities')
   },
+  knownHosts: {
+    list: (): Promise<KnownHostEntry[]> => invoke('knownhosts_list'),
+    forget: (host: string): Promise<boolean> => invoke('knownhosts_forget', { host }),
+    importOpenssh: (): Promise<{ imported: number }> => invoke('knownhosts_import')
+  },
   serial: {
     ports: (): Promise<SerialPortInfo[]> => invoke('serial_ports'),
     /** BREAK на линию (recovery-режим сетевого железа). */
@@ -99,6 +106,10 @@ export const api = {
     onStatus: (cb: (p: SessionStatus) => void) => sub<SessionStatus>('session-status', cb),
     onKi: (cb: (p: { id: string; prompts: KIPrompt[] }) => void) =>
       sub<{ id: string; prompts: KIPrompt[] }>('session-ki', cb),
+    /** Сервер предъявил незнакомый или изменившийся ключ — ждём решения пользователя. */
+    onHostKey: (cb: (p: HostKeyRequest) => void) => sub<HostKeyRequest>('session-hostkey', cb),
+    respondHostKey: (requestId: string, accept: boolean): Promise<void> =>
+      invoke('session_hostkey_respond', { requestId, accept }),
     respondKi: (id: string, answers: string[]): Promise<void> =>
       invoke('session_ki_respond', { id, answers })
   },

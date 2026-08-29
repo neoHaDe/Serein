@@ -22,6 +22,40 @@ pub type RemoteForwards = Arc<Mutex<HashMap<u32, u16>>>;
 /// Мост keyboard-interactive: sessionId → канал доставки ответов из renderer.
 pub type KiBridge = Arc<Mutex<HashMap<String, oneshot::Sender<Vec<String>>>>>;
 
+/// Мост подтверждения ключа хоста: requestId → канал с ответом пользователя.
+pub type HostKeyBridge = Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>;
+
+/// Чем спросить пользователя про ключ хоста во время рукопожатия.
+#[derive(Clone)]
+pub struct HostKeyAsk {
+    pub app: AppHandle,
+    pub bridge: HostKeyBridge,
+    /// id сессии — чтобы фронт понял, к какой вкладке относится вопрос.
+    pub session_id: String,
+}
+
+impl HostKeyAsk {
+    /// Шлёт событие в UI и ждёт ответ. Обрыв канала (окно закрыли) = отказ:
+    /// на вопрос о доверии молчание не может значить «да».
+    pub async fn confirm(&self, host: &str, fingerprint: &str, kind: &str, previous: &str) -> bool {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = oneshot::channel();
+        self.bridge.lock().unwrap().insert(request_id.clone(), tx);
+        let _ = self.app.emit(
+            "session-hostkey",
+            json!({
+                "id": self.session_id,
+                "requestId": request_id,
+                "host": host,
+                "fingerprint": fingerprint,
+                "previous": previous,
+                "kind": kind,
+            }),
+        );
+        rx.await.unwrap_or(false)
+    }
+}
+
 /// true = сессию гасим: туннельные copy и SFTP выходят из select/цикла.
 pub type CancelRx = watch::Receiver<bool>;
 
@@ -103,6 +137,9 @@ impl SshSession {
 
 pub struct ClientHandler {
     host_id: String,
+    /// Куда спрашивать про незнакомый/сменившийся ключ. None — молча доверять (jump-хопы
+    /// при восстановлении туннелей, где спросить некого).
+    host_key_ask: Option<HostKeyAsk>,
     remote_forwards: RemoteForwards,
     cancel: CancelRx,
     /// Каналы agent forwarding → локальный ssh-agent.
@@ -114,13 +151,41 @@ pub struct ClientHandler {
 impl Handler for ClientHandler {
     type Error = russh::Error;
 
-    /// TOFU-проверка ключа сервера (known_hosts).
+    /// Проверка ключа сервера. Незнакомый ключ и смена ключа выносятся пользователю:
+    /// молча доверять первому встречному — это TOFU без буквы T, а молча рвать соединение
+    /// при смене ключа выглядит как «непонятная ошибка сети».
     async fn check_server_key(
         &mut self,
         server_public_key: &russh_keys::key::PublicKey,
     ) -> Result<bool, Self::Error> {
         let fp = knownhosts::fingerprint_from_b64(&server_public_key.public_key_base64());
-        Ok(knownhosts::check_and_remember(&self.host_id, &fp))
+        let status = knownhosts::status(&self.host_id, &fp);
+
+        if status == knownhosts::HostKeyStatus::Trusted {
+            return Ok(true);
+        }
+
+        let Some(ask) = self.host_key_ask.clone() else {
+            // Спросить некого (например, переподключение туннеля): ведём себя как раньше —
+            // новый ключ принимаем, смену отвергаем.
+            if matches!(status, knownhosts::HostKeyStatus::New) {
+                knownhosts::remember(&self.host_id, &fp);
+                return Ok(true);
+            }
+            return Ok(false);
+        };
+
+        let (kind, previous) = match &status {
+            knownhosts::HostKeyStatus::New => ("new", String::new()),
+            knownhosts::HostKeyStatus::Changed { previous } => ("changed", previous.clone()),
+            knownhosts::HostKeyStatus::Trusted => unreachable!("обработано выше"),
+        };
+
+        let accepted = ask.confirm(&self.host_id, &fp, kind, &previous).await;
+        if accepted {
+            knownhosts::remember(&self.host_id, &fp);
+        }
+        Ok(accepted)
     }
 
     /// Входящее соединение по remote-форварду (-R): маршрутизируем на локальный порт.
@@ -300,10 +365,12 @@ async fn connect_one(
     server: &Value,
     rf: RemoteForwards,
     cancel: CancelRx,
+    ask: Option<HostKeyAsk>,
 ) -> Result<client::Handle<ClientHandler>, String> {
     let host = field(server, "host").ok_or("Не задан host")?;
     let handler = ClientHandler {
         host_id: knownhosts::host_id(host, port_of(server)),
+        host_key_ask: ask.clone(),
         remote_forwards: rf,
         cancel,
         agent_forward_channels: Arc::new(Mutex::new(HashSet::new())),
@@ -333,6 +400,7 @@ pub async fn connect_chain(
     cols: u32,
     rows: u32,
     ki: KiBridge,
+    host_keys: HostKeyBridge,
 ) -> Result<SshSession, String> {
     if chain.is_empty() {
         return Err("Пустая цепочка хостов".into());
@@ -342,10 +410,16 @@ pub async fn connect_chain(
     let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let alive = Arc::new(AtomicBool::new(true));
+    // Вопросы про ключ хоста задаём в UI этой сессии — и для цели, и для каждого jump-хопа.
+    let ask = Some(HostKeyAsk {
+        app: app.clone(),
+        bridge: host_keys.clone(),
+        session_id: id.clone(),
+    });
 
     // Самый дальний хоп (конец цепочки) — прямое подключение.
     let far = chain.last().unwrap();
-    let mut handle = connect_one(far, remote_forwards.clone(), cancel_rx.clone()).await?;
+    let mut handle = connect_one(far, remote_forwards.clone(), cancel_rx.clone(), ask.clone()).await?;
     let far_is_target = chain.len() == 1;
     if !authenticate(
         &mut handle,
@@ -372,6 +446,7 @@ pub async fn connect_chain(
         let config = ssh_client_config(next);
         let handler = ClientHandler {
             host_id: knownhosts::host_id(nhost, port_of(next)),
+            host_key_ask: ask.clone(),
             remote_forwards: remote_forwards.clone(),
             cancel: cancel_rx.clone(),
             agent_forward_channels: Arc::new(Mutex::new(HashSet::new())),
@@ -480,7 +555,7 @@ pub async fn connect_client(chain: Vec<Value>) -> Result<SharedHandle, String> {
     let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
     let (_cancel_tx, cancel_rx) = watch::channel(false);
     let far = chain.last().unwrap();
-    let mut handle = connect_one(far, remote_forwards.clone(), cancel_rx.clone()).await?;
+    let mut handle = connect_one(far, remote_forwards.clone(), cancel_rx.clone(), None).await?;
     if !authenticate(&mut handle, far, None, &dummy_ki, None).await? {
         return Err("Аутентификация отклонена сервером".into());
     }
@@ -495,6 +570,7 @@ pub async fn connect_client(chain: Vec<Value>) -> Result<SharedHandle, String> {
         let config = ssh_client_config(next);
         let handler = ClientHandler {
             host_id: knownhosts::host_id(nhost, port_of(next)),
+            host_key_ask: None,
             remote_forwards: remote_forwards.clone(),
             cancel: cancel_rx.clone(),
             agent_forward_channels: Arc::new(Mutex::new(HashSet::new())),

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import type { KIPrompt, SavedAuxWindow, SerializedPane, SerializedTab, ServerConfig, WorkspaceTool } from '../shared/types'
+import type { HostKeyRequest, KIPrompt, SavedAuxWindow, SerializedPane, SerializedTab, ServerConfig, WorkspaceTool } from '../shared/types'
 import { parseWorkspaceTool } from '../shared/types'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
@@ -9,6 +9,7 @@ import { ServerForm } from './components/ServerForm'
 import { SftpPanel } from './components/SftpPanel'
 import { SettingsModal } from './components/SettingsModal'
 import { KiModal } from './components/KiModal'
+import { HostKeyModal } from './components/HostKeyModal'
 import { KeyGenModal } from './components/KeyGenModal'
 import { StatusBar } from './components/StatusBar'
 import { CodeEditor } from './components/CodeEditor'
@@ -126,6 +127,8 @@ export default function App(): JSX.Element {
   const [sidebarWidth, setSidebarWidth] = useState(270)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [kiRequest, setKiRequest] = useState<{ id: string; prompts: KIPrompt[] } | null>(null)
+  // Вопросы про ключ хоста копим очередью: цепочка jump-хостов может спросить несколько раз.
+  const [hostKeyQueue, setHostKeyQueue] = useState<HostKeyRequest[]>([])
   const [paletteOpen, setPaletteOpen] = useState(false)
   const { settings, update } = useSettings()
   useWindowSnap()
@@ -328,6 +331,10 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     return window.api.session.onKi((p) => setKiRequest(p))
+  }, [])
+
+  useEffect(() => {
+    return window.api.session.onHostKey((p) => setHostKeyQueue((q) => [...q, p]))
   }, [])
 
   useEffect(() => {
@@ -1247,6 +1254,17 @@ export default function App(): JSX.Element {
               .map((l) => ({ sessionId: l.sessionId!, title: `${t.title} — ${l.title}` }))
           )}
           onClose={() => setShowKeyGen(false)}
+        />
+      )}
+
+      {hostKeyQueue.length > 0 && (
+        <HostKeyModal
+          request={hostKeyQueue[0]}
+          onAnswer={(accept) => {
+            const req = hostKeyQueue[0]
+            setHostKeyQueue((q) => q.slice(1))
+            void window.api.session.respondHostKey(req.requestId, accept)
+          }}
         />
       )}
 

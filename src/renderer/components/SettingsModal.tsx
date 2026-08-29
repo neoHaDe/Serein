@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { KnownHostEntry } from '../../shared/types'
 import { useSettings } from '../SettingsContext'
 import { THEME_NAMES } from '../themes'
 import { ACTIONS, resolveBindings, comboFromEvent, formatCombo, type ActionId } from '../keybindings'
@@ -18,6 +19,15 @@ type Action = null | 'enable' | 'disable' | 'export' | 'import'
 export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
   const { settings, update } = useSettings()
   const [recording, setRecording] = useState<ActionId | null>(null)
+  const [knownHosts, setKnownHosts] = useState<KnownHostEntry[]>([])
+  const [hostsMsg, setHostsMsg] = useState('')
+
+  const reloadKnownHosts = async (): Promise<void> => {
+    setKnownHosts(await window.api.knownHosts.list())
+  }
+  useEffect(() => {
+    void reloadKnownHosts()
+  }, [])
   const [masterEnabled, setMasterEnabled] = useState(false)
   const [action, setAction] = useState<Action>(null)
   const [password, setPassword] = useState('')
@@ -376,6 +386,64 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
         </div>
 
         {/* ---- Обновления ---- */}
+        <div className="settings-section">
+          <div className="settings-section-title">Ключи серверов (known hosts)</div>
+
+          <div className="settings-row">
+            <div>
+              <div className="settings-row-name">Запомненные отпечатки</div>
+              <div className="settings-row-desc">
+                {knownHosts.length
+                  ? `Хостов: ${knownHosts.length}. Забыть — и при следующем подключении ключ спросят заново.`
+                  : 'Пока пусто: отпечаток запоминается после подтверждения при подключении.'}
+              </div>
+            </div>
+            <button
+              className="mini"
+              onClick={() => {
+                void window.api.knownHosts
+                  .importOpenssh()
+                  .then((r) => {
+                    setHostsMsg(
+                      r.imported ? `Импортировано записей: ${r.imported}` : 'Новых записей не нашлось'
+                    )
+                    return reloadKnownHosts()
+                  })
+                  .catch((e: Error) => setHostsMsg(e.message))
+              }}
+            >
+              Импорт из ~/.ssh/known_hosts
+            </button>
+          </div>
+
+          {hostsMsg && <div className="settings-row-desc">{hostsMsg}</div>}
+
+          {knownHosts.length > 0 && (
+            <div className="known-hosts-list">
+              {knownHosts.map((h) => (
+                <div key={h.host} className="known-host-row">
+                  <span className="known-host-name">{h.host}</span>
+                  <span className="known-host-fp" title={h.fingerprint}>
+                    {h.fingerprint}
+                  </span>
+                  <button
+                    className="mini danger"
+                    title="Забыть этот хост"
+                    onClick={() => {
+                      void window.api.knownHosts.forget(h.host).then(() => {
+                        setHostsMsg(`Забыт: ${h.host}`)
+                        return reloadKnownHosts()
+                      })
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         <div className="settings-section">
           <div className="settings-section-title">Обновления</div>
           <div className="settings-row">

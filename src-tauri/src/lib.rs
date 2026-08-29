@@ -40,6 +40,7 @@ pub(crate) enum Session {
 pub(crate) struct AppState {
     sessions: Mutex<HashMap<String, Session>>,
     ki: ssh::KiBridge,
+    host_keys: ssh::HostKeyBridge,
     tunnels: tunnels::TunnelManager,
     edit: remoteedit::EditManager,
     transfers: sftp::TransferHub,
@@ -51,6 +52,7 @@ impl AppState {
         Self {
             sessions: Mutex::new(HashMap::new()),
             ki: Arc::new(Mutex::new(HashMap::new())),
+            host_keys: Arc::new(Mutex::new(HashMap::new())),
             tunnels: tunnels::TunnelManager::default(),
             edit: remoteedit::EditManager::default(),
             transfers: sftp::TransferHub::default(),
@@ -271,8 +273,10 @@ async fn session_open_ssh(app: AppHandle, state: State<'_, AppState>, p: Value) 
     let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u32;
     let id = uuid::Uuid::new_v4().to_string();
     let ki = state.ki.clone();
+    let host_keys = state.host_keys.clone();
 
-    let sess = ssh::connect_chain(app.clone(), id.clone(), chain, cols, rows, ki).await?;
+    let sess =
+        ssh::connect_chain(app.clone(), id.clone(), chain, cols, rows, ki, host_keys).await?;
     let sess = Arc::new(sess);
     // Автозапуск туннелей + команда на подключении.
     let server = store::server_with_secrets(server_id);
@@ -338,6 +342,34 @@ async fn session_ping(state: State<'_, AppState>, id: String) -> Result<Option<u
         Some(s) => Ok(ssh::ping(&s.handle).await),
         None => Ok(None),
     }
+}
+
+/// Ответ пользователя на вопрос о ключе хоста (доверять или нет).
+#[tauri::command]
+fn session_hostkey_respond(state: State<'_, AppState>, request_id: String, accept: bool) {
+    if let Some(tx) = state.host_keys.lock().unwrap().remove(&request_id) {
+        let _ = tx.send(accept);
+    }
+}
+
+/// Известные ключи хостов — список для настроек.
+#[tauri::command]
+fn knownhosts_list() -> Vec<Value> {
+    knownhosts::list()
+}
+
+/// Забыть хост: при следующем подключении ключ спросят заново.
+#[tauri::command]
+fn knownhosts_forget(host: String) -> bool {
+    knownhosts::forget(&host)
+}
+
+/// Импорт отпечатков из `~/.ssh/known_hosts` — чтобы не подтверждать заново то,
+/// чему пользователь уже доверился в OpenSSH.
+#[tauri::command]
+fn knownhosts_import() -> Result<Value, String> {
+    let added = knownhosts::import_openssh()?;
+    Ok(json!({ "imported": added }))
 }
 
 /// Ключи локального SSH-агента — для выбора в настройках сервера.
@@ -1085,6 +1117,7 @@ pub fn run() {
             session_open_local, session_open_ssh, session_write, session_resize, session_close,
             session_ping, session_monitor, session_ki_respond,
             session_log_status, session_log_toggle, ssh_agent_identities,
+            session_hostkey_respond, knownhosts_list, knownhosts_forget, knownhosts_import,
             serial_ports, session_open_serial, serial_send_break, serial_set_signal,
             docker_list, docker_action, docker_logs, docker_stats, docker_logs_cancel, docker_container_files,
             docker_compose_list, docker_compose_ps, docker_compose_action, docker_compose_read,
