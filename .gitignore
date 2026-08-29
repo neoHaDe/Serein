@@ -17,3 +17,11 @@ docs/phase0-bench.err.txt
 
 # Updater signing keys — приватный ключ НИКОГДА не коммитить
 .tauri/
+
+# Одноразовые помощники для поднятия VM под Linux-порт: держим на диске, но из репозитория
+# исключаем. Если что-то из этого станет постоянным — вынести и закоммитить осознанно.
+scripts/vm-*
+scripts/vm_*
+scripts/write_*.py
+scripts/make_vm_seed_iso.py
+scripts/cloud-init/

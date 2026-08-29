@@ -65,7 +65,8 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libssl-dev \
-            patchelf
+            patchelf \
+            libudev-dev
 
       - uses: actions/setup-node@v4
         with:
