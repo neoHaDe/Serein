@@ -10,7 +10,7 @@ SSH, SFTP со встроенным редактором, консоль по CO
 Вкладки и сплит-панели, проброс портов, мониторинг ресурсов, панель Docker
 и локальный терминал — в установщике на **≈ 6,7 МБ**.
 
-Бесплатно, открытый код, Apache 2.0. Windows x64, **v1.2.4**.
+Бесплатно, открытый код, Apache 2.0. Windows x64 и Linux x64, **v1.2.5**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -43,7 +43,7 @@ Windows · без своего Chromium (системный WebView2) ·
 | SSH-движок | чистый Rust [`russh`](https://github.com/Eugeny/russh) | libssh2 / нативный |
 | Рантайм | системный WebView2 | полный Chromium |
 
-Цифры — живой `tauri dev` (RAM) и NSIS 1.2.4 (~6,7 МБ сжатый). На слабом ноутбуке те же 33 МБ не обещаем.
+Цифры — живой `tauri dev` (RAM) и NSIS 1.2.5 (~6,7 МБ сжатый). На слабом ноутбуке те же 33 МБ не обещаем.
 
 ---
 
@@ -117,7 +117,7 @@ Windows · без своего Chromium (системный WebView2) ·
 
 ## Быстрый старт
 
-1. Поставь установщик или скачай portable `Serein_1.2.4_x64-portable.exe` из [Releases](../../releases/latest).
+1. Поставь установщик или скачай portable `Serein_1.2.5_x64-portable.exe` из [Releases](../../releases/latest).
 2. Импортируй `~/.ssh/config` или добавь сервер вручную.
 3. Подключись. Локальный терминал работает и без SSH.
 
@@ -129,7 +129,7 @@ Windows · без своего Chromium (системный WebView2) ·
 
 | Требование | Ответ |
 | --- | --- |
-| Система | Windows 10 x64 **22H2+** или Windows 11 x64. macOS и Linux пока не собираются |
+| Система | Windows 10 x64 **22H2+** или Windows 11 x64; Linux x64 (`.deb` / AppImage). macOS пока нет |
 | WebView2 | уже есть в актуальном Windows; отдельно ставить не нужно |
 | Права | администратор для повседневной работы не нужен |
 | Сборка из исходников | Node **18.18+** (проверено на 24.16), Rust **stable** `x86_64-pc-windows-msvc` (проверено на 1.96.0), Tauri CLI **2.11.x** |
@@ -143,11 +143,13 @@ Windows · без своего Chromium (системный WebView2) ·
 
 С [Releases](../../releases/latest):
 
-- **`Serein_1.2.4_x64-setup.exe`** — установщик (меню Пуск, удаление).
-- **`Serein_1.2.4_x64-portable.exe`** — один файл, без установки. Положи и запусти. Настройки всё равно в `%APPDATA%\serein`.
+- **`Serein_1.2.5_x64-setup.exe`** — установщик Windows (меню Пуск, удаление).
+- **`Serein_1.2.5_x64-portable.exe`** — один файл Windows, без установки. Положи и запусти. Настройки всё равно в `%APPDATA%\serein`.
+- **`Serein_1.2.5_amd64.deb`** — пакет Debian/Ubuntu/Astra (`/usr/bin/serein`).
+- **`Serein_1.2.5_amd64.AppImage`** — портативный Linux-бинарь.
 
 Сборка **не подписана** — SmartScreen ругнётся. *Подробнее → Выполнить в любом случае*.
-Что нового — [release notes](docs/RELEASE_NOTES_v1.2.4.md) и описание выпуска на GitHub.
+Что нового — [release notes](docs/RELEASE_NOTES_v1.2.5.md) и описание выпуска на GitHub.
 
 Автообновление в конфиге заведено (`nehade.xyz/updates/terminal/`), на неподписанном
 установщике на него не рассчитывай.
@@ -235,7 +237,7 @@ npm run smoke
 - Автообновление в конфиге есть, под неподписанный установщик пока не рассчитывай.
 - Не цель ближайших релизов: облачный sync, мобилка, плагины, RDP/VNC, «просто чат с LLM».
 
-Дорожная карта: надёжность → multi-host и automation → импорт из чужих клиентов. RDP/VNC пока вне планов. Подробнее — [release notes 1.2.4](docs/RELEASE_NOTES_v1.2.4.md).
+Дорожная карта: надёжность → multi-host и automation → импорт из чужих клиентов. RDP/VNC пока вне планов. Подробнее — [release notes 1.2.5](docs/RELEASE_NOTES_v1.2.5.md).
 
 ---
 
