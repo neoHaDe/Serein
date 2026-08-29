@@ -142,7 +142,14 @@ pub fn resolve_shell(pref: &str) -> String {
     }
     #[cfg(not(windows))]
     {
-        let _ = pref;
-        std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into())
+        if pref.contains('/') {
+            return pref.to_string();
+        }
+        match pref {
+            "bash" => "/bin/bash".into(),
+            "zsh" => "/bin/zsh".into(),
+            "fish" => "/usr/bin/fish".into(),
+            _ => std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into()),
+        }
     }
 }

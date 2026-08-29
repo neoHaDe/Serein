@@ -6,6 +6,7 @@ import { ACTIONS, resolveBindings, comboFromEvent, formatCombo, type ActionId } 
 import { checkForUpdates } from '../updater'
 import { getVersion } from '@tauri-apps/api/app'
 import { errText } from '../errText'
+import { appPlatform } from '../platform'
 
 const FONTS = [
   'Cascadia Code, Consolas, "Courier New", monospace',
@@ -22,6 +23,11 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
   const [recording, setRecording] = useState<ActionId | null>(null)
   const [knownHosts, setKnownHosts] = useState<KnownHostEntry[]>([])
   const [hostsMsg, setHostsMsg] = useState('')
+  const [platform, setPlatform] = useState<'windows' | 'linux' | 'other'>('windows')
+
+  useEffect(() => {
+    void appPlatform().then(setPlatform)
+  }, [])
 
   const reloadKnownHosts = async (): Promise<void> => {
     setKnownHosts(await window.api.knownHosts.list())
@@ -277,13 +283,24 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
         </div>
 
         <label>
-          Shell локального терминала (Windows)
+          {platform === 'linux' ? 'Shell локального терминала' : 'Shell локального терминала (Windows)'}
           <select value={settings.localShell ?? 'auto'} onChange={(e) => update({ localShell: e.target.value })}>
-            <option value="auto">Авто (PowerShell → cmd)</option>
-            <option value="pwsh">PowerShell 7 (pwsh)</option>
-            <option value="powershell">Windows PowerShell</option>
-            <option value="cmd">cmd.exe</option>
-            <option value="wsl">WSL</option>
+            {platform === 'linux' ? (
+              <>
+                <option value="auto">Авто ($SHELL)</option>
+                <option value="bash">/bin/bash</option>
+                <option value="zsh">/bin/zsh</option>
+                <option value="fish">/usr/bin/fish</option>
+              </>
+            ) : (
+              <>
+                <option value="auto">Авто (PowerShell → cmd)</option>
+                <option value="pwsh">PowerShell 7 (pwsh)</option>
+                <option value="powershell">Windows PowerShell</option>
+                <option value="cmd">cmd.exe</option>
+                <option value="wsl">WSL</option>
+              </>
+            )}
           </select>
         </label>
 

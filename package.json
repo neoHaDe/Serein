@@ -12,6 +12,8 @@
     "tauri": "tauri",
     "typecheck": "tsc --noEmit",
     "smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke.ps1",
+    "smoke:linux": "bash scripts/smoke.sh",
+    "build:linux": "npm run tauri -- build --config src-tauri/tauri.linux.conf.json",
     "bench:phase0": "cargo run --release --manifest-path src-tauri/Cargo.toml --bin phase0_bench -- home_server"
   },
   "dependencies": {

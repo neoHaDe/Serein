@@ -81,11 +81,17 @@ pub fn read_text() -> Result<String, String> {
 }
 
 #[cfg(not(windows))]
-pub fn write_text(_text: &str) -> Result<(), String> {
-    Err("clipboard: Windows only".into())
+pub fn write_text(text: &str) -> Result<(), String> {
+    arboard::Clipboard::new()
+        .map_err(|e| e.to_string())?
+        .set_text(text)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(windows))]
 pub fn read_text() -> Result<String, String> {
-    Err("clipboard: Windows only".into())
+    arboard::Clipboard::new()
+        .map_err(|e| e.to_string())?
+        .get_text()
+        .map_err(|e| e.to_string())
 }

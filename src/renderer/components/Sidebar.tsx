@@ -30,6 +30,7 @@ interface Props {
   onOpenSettings: () => void
   onOpenKeyGen: () => void
   onImport: (kind: 'ssh' | 'putty') => void
+  showPuttyImport?: boolean
   width: number
   collapsed?: boolean
   onToggleCollapse?: () => void
@@ -110,6 +111,7 @@ export function Sidebar({
   onOpenSettings,
   onOpenKeyGen,
   onImport,
+  showPuttyImport = true,
   width,
   collapsed,
   onToggleCollapse,
@@ -610,7 +612,9 @@ export function Sidebar({
                     y: r.bottom + 6,
                     items: [
                       { label: 'Из ~/.ssh/config', onClick: () => onImport('ssh') },
-                      { label: 'Из сессий PuTTY', onClick: () => onImport('putty') }
+                      ...(showPuttyImport
+                        ? [{ label: 'Из сессий PuTTY', onClick: () => onImport('putty') }]
+                        : [])
                     ]
                   })
                 }}

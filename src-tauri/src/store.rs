@@ -1,7 +1,7 @@
 //! Простое JSON-хранилище в каталоге конфигурации (серверы/настройки/сниппеты/раскладка).
 //! Значения храним как `serde_json::Value`, чтобы не мирроровать все типы фронтенда.
 
-use crate::{crypto, dpapi, vaultkey};
+use crate::{crypto, os_secrets, vaultkey};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Map, Value};
 use std::fs;
@@ -127,28 +127,17 @@ fn delete_item(name: &str, id: &str) -> Result<(), String> {
 
 // ---------- Серверы ----------
 
-// ----- Шифрование секретов (DPAPI + опциональный мастер-слой scrypt→AES) -----
+// ----- Шифрование секретов (OS-слой + опциональный мастер-слой scrypt→AES) -----
 
 fn os_protect(v: &str) -> Option<String> {
-    #[cfg(windows)]
-    {
-        dpapi::protect(v.as_bytes()).ok().map(|b| STANDARD.encode(b))
-    }
-    #[cfg(not(windows))]
-    {
-        // Без DPAPI класть секрет в файл нельзя: base64 — не шифрование, а видимость его.
-        // Лучше не сохранить вовсе, чем сохранить открытым текстом. Порт на macOS/Linux
-        // должен подключить сюда Keychain / Secret Service.
-        let _ = v;
-        None
-    }
+    os_secrets::protect(v)
 }
 
 fn encrypt_secret(value: &str) -> Option<String> {
     if value.is_empty() {
         return None;
     }
-    // Доп. слой мастер-пароля поверх DPAPI, если задан и разблокирован.
+    // Доп. слой мастер-пароля поверх OS-хранилища, если задан и разблокирован.
     let v = match vaultkey::get() {
         Some(mk) => format!("mk:{}", crypto::aes_encrypt(value, &mk).ok()?),
         None => value.to_string(),
@@ -162,8 +151,7 @@ fn decrypt_secret(enc: &str) -> Option<String> {
     let v = if let Some(rest) = enc.strip_prefix("plain:") {
         String::from_utf8(STANDARD.decode(rest).ok()?).ok()?
     } else {
-        let bytes = STANDARD.decode(enc).ok()?;
-        String::from_utf8(dpapi::unprotect(&bytes).ok()?).ok()?
+        os_secrets::unprotect(enc)?
     };
     if let Some(rest) = v.strip_prefix("mk:") {
         let mk = vaultkey::get()?; // заблокировано — секрет недоступен

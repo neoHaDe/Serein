@@ -8,6 +8,7 @@ mod docker;
 mod docker_compose;
 mod dpapi;
 mod importers;
+mod os_secrets;
 mod keygen;
 mod knownhosts;
 mod localfs;
@@ -99,6 +100,22 @@ fn emit_connected(app: &AppHandle, id: String) {
 }
 
 // ---------------- Настройки / серверы / сниппеты / раскладка / localfs ----------------
+
+#[tauri::command]
+fn app_platform() -> &'static str {
+    #[cfg(windows)]
+    {
+        "windows"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "linux"
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        "other"
+    }
+}
 
 #[tauri::command]
 fn settings_get() -> Value {
@@ -1208,6 +1225,7 @@ pub fn run() {
             export_text_file,
             keygen_generate, keygen_save, keygen_install,
             servers_import_ssh_config, servers_import_putty,
+            app_platform,
             windows_raise_group, windows_restore_minimized, windows_count_minimized,
             clipboard_write, clipboard_read
         ])

@@ -28,6 +28,7 @@ import { useSettings } from './SettingsContext'
 import { bindingLookup, comboFromEvent } from './keybindings'
 import { applyUiTheme } from './themes'
 import { useWindowSnap } from './windowSnap'
+import { isWindowsPlatform } from './platform'
 import { openAuxWindow, sanitizeWindowLabel } from './auxWindows'
 import {
   auxWindowKey,
@@ -133,6 +134,7 @@ export default function App(): JSX.Element {
   // Вопросы про ключ хоста копим очередью: цепочка jump-хостов может спросить несколько раз.
   const [hostKeyQueue, setHostKeyQueue] = useState<HostKeyRequest[]>([])
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [showPuttyImport, setShowPuttyImport] = useState(true)
   const { settings, update } = useSettings()
   useWindowSnap()
 
@@ -152,6 +154,10 @@ export default function App(): JSX.Element {
   const reconnectTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
 
   useEffect(() => listenAuxGeoEvents(), [])
+
+  useEffect(() => {
+    void isWindowsPlatform().then(setShowPuttyImport)
+  }, [])
 
   useEffect(() => {
     const t = window.setTimeout(() => window.dispatchEvent(new Event('resize')), 100)
@@ -1178,6 +1184,7 @@ export default function App(): JSX.Element {
         onOpenSettings={() => setShowSettings(true)}
         onOpenKeyGen={() => setShowKeyGen(true)}
         onImport={importServers}
+        showPuttyImport={showPuttyImport}
         width={sidebarWidth}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
@@ -1222,7 +1229,9 @@ export default function App(): JSX.Element {
               </p>
               <div className="welcome-actions">
                 <button onClick={() => void importServers('ssh')}>Импорт из ~/.ssh/config</button>
-                <button onClick={() => void importServers('putty')}>Импорт сессий PuTTY</button>
+                {showPuttyImport && (
+                  <button onClick={() => void importServers('putty')}>Импорт сессий PuTTY</button>
+                )}
                 <button onClick={() => setEditing(null)}>Добавить сервер вручную</button>
               </div>
               <p className="welcome-hint">Локальный терминал работает и без настройки.</p>
