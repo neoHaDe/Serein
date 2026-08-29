@@ -4,6 +4,7 @@ import { PhysicalPosition } from '@tauri-apps/api/dpi'
 import { emit, listen } from '@tauri-apps/api/event'
 import { getCurrentWindow, type Window } from '@tauri-apps/api/window'
 import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow'
+import { appPlatform } from './platform'
 
 const MAGNET = 22
 const FLUSH = 4
@@ -235,6 +236,10 @@ export function useWindowSnap(): void {
       try {
         const me = getCurrentWindow()
         const isMain = me.label === 'main'
+        // Linux: setPosition из чужого webview ненадёжен — двигаем группу из Rust.
+        // Windows: частые invoke + SetWindowPos при перетаскивании валят процесс
+        // (см. RELEASE_NOTES_v1.2.3) — aux двигают сами по emit.
+        const useRustGroupMove = (await appPlatform()) === 'linux'
 
         // Кэш геометрии. Раньше на каждое событие перемещения уходило три запроса
         // в бэкенд (outerPosition + innerPosition + innerSize) — при перетаскивании
@@ -272,9 +277,6 @@ export function useWindowSnap(): void {
         await refresh()
 
         // ——— перенос группы за главным окном ————————————————————————————
-        // Двигаем окна из Rust (`windows_nudge_group`): на Linux setPosition из
-        // соседнего webview часто не срабатывает. Emit только помечает «это наше»,
-        // чтобы onMoved у ведомого не принял чужой сдвиг за ручной отрыв.
         let pendDx = 0
         let pendDy = 0
         let pendMembers: string[] = []
@@ -285,16 +287,31 @@ export function useWindowSnap(): void {
           pendDx = 0
           pendDy = 0
           pendMembers = []
-          if (disposed || (dx === 0 && dy === 0) || !members.length) return
+          if (disposed || (dx === 0 && dy === 0)) return
+
+          if (useRustGroupMove) {
+            if (!isMain || !members.length) return
+            skipUntil = Date.now() + SKIP
+            await emit('serein-dock-move', {
+              origin: me.label,
+              dx,
+              dy,
+              members
+            } satisfies GroupMove)
+            await invoke('windows_nudge_group', { members, dx, dy })
+            return
+          }
+
+          // Windows: ведомое окно двигает себя само — без IPC на каждый шаг.
+          if (isMain) return
           skipUntil = Date.now() + SKIP
-          // Сначала пометить ведомых, потом двигать — иначе их onMoved отцепит группу.
-          await emit('serein-dock-move', {
-            origin: me.label,
-            dx,
-            dy,
-            members
-          } satisfies GroupMove)
-          await invoke('windows_nudge_group', { members, dx, dy })
+          const r = rOf()
+          const nx = r.x + dx
+          const ny = r.y + dy
+          wantPos = { x: nx, y: ny }
+          await setVisPos(me, r, nx, ny)
+          vis = { x: nx, y: ny }
+          emitAuxGeo(me.label, { x: nx, y: ny, w: size.w, h: size.h })
         })
 
         stopListen = await listen<GroupMove>('serein-dock-move', (e) => {
@@ -303,9 +320,15 @@ export function useWindowSnap(): void {
           if (!p.members.includes(me.label)) return
           if (p.dx === 0 && p.dy === 0) return
           skipUntil = Date.now() + SKIP
-          wantPos = { x: vis.x + p.dx, y: vis.y + p.dy }
-          vis = { x: wantPos.x, y: wantPos.y }
-          emitAuxGeo(me.label, { x: vis.x, y: vis.y, w: size.w, h: size.h })
+          if (useRustGroupMove) {
+            wantPos = { x: vis.x + p.dx, y: vis.y + p.dy }
+            vis = { x: wantPos.x, y: wantPos.y }
+            emitAuxGeo(me.label, { x: vis.x, y: vis.y, w: size.w, h: size.h })
+            return
+          }
+          pendDx += p.dx
+          pendDy += p.dy
+          applyGroupMove()
         })
 
         if (isMain) {
@@ -392,7 +415,9 @@ export function useWindowSnap(): void {
                   dy: cdy,
                   members: [id]
                 } satisfies GroupMove)
-                await invoke('windows_nudge_group', { members: [id], dx: cdx, dy: cdy })
+                if (useRustGroupMove) {
+                  await invoke('windows_nudge_group', { members: [id], dx: cdx, dy: cdy })
+                }
               }
             }
           }
@@ -421,12 +446,21 @@ export function useWindowSnap(): void {
               if (o) offset.set(id, { dx: o.x - cur.x, dy: o.y - cur.y })
             }
             if (followers.length && (sdx !== 0 || sdy !== 0)) {
-              pendDx += sdx
-              pendDy += sdy
-              for (const id of followers) {
-                if (!pendMembers.includes(id)) pendMembers.push(id)
+              if (useRustGroupMove) {
+                pendDx += sdx
+                pendDy += sdy
+                for (const id of followers) {
+                  if (!pendMembers.includes(id)) pendMembers.push(id)
+                }
+                applyGroupMove()
+              } else {
+                await emit('serein-dock-move', {
+                  origin: me.label,
+                  dx: sdx,
+                  dy: sdy,
+                  members: followers
+                } satisfies GroupMove)
               }
-              applyGroupMove()
             }
           }
         })
@@ -482,8 +516,8 @@ export function useWindowSnap(): void {
             // Группа готова к первому же шагу — считать нечего, всё в реестре.
             buildGroup(anchor)
             // На Linux geo-события между webview иногда молчат — добираем состав
-            // живым опросом. Пока ответ едет, уже есть то, что успел реестр.
-            if (isMain) {
+            // живым опросом. На Windows лишний listVis при старте жеста только грузит IPC.
+            if (isMain && useRustGroupMove) {
               const a = anchor
               void listVis(me.label).then((others) => {
                 // Если группа уже поехала — пересобирать нельзя: соседи сдвинулись,
@@ -533,12 +567,21 @@ export function useWindowSnap(): void {
               const members = [...sticky]
               if (members.length) {
                 groupMoved = true
-                pendDx += dx
-                pendDy += dy
-                for (const id of members) {
-                  if (!pendMembers.includes(id)) pendMembers.push(id)
+                if (useRustGroupMove) {
+                  pendDx += dx
+                  pendDy += dy
+                  for (const id of members) {
+                    if (!pendMembers.includes(id)) pendMembers.push(id)
+                  }
+                  applyGroupMove()
+                } else {
+                  void emit('serein-dock-move', {
+                    origin: me.label,
+                    dx,
+                    dy,
+                    members
+                  } satisfies GroupMove)
                 }
-                applyGroupMove()
               }
             }
           }

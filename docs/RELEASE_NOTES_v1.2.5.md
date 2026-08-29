@@ -27,6 +27,10 @@ a keyring leak fix, and **GitHub Dark** as the default theme.
 Same binary line as 1.2.4 plus the theme default and the window-group rebuild fix (the late
 geometry reply could affect Windows too). NSIS + portable as before.
 
+**Hotfix (2026-08-30):** re-uploaded Windows installers — docked aux windows no longer crash
+the app when the main window is dragged for a long time (regression from the Linux
+`windows_nudge_group` path; Windows again uses emit + self-move only).
+
 ### Install
 
 1. **Serein_1.2.5_x64-setup.exe** — Windows NSIS installer (RU+EN).
@@ -41,8 +45,8 @@ any `C:\…` key paths by hand (path normalisation is still TODO).
 SHA-256:
 
 ```
-3ed4a664dfdb466903748d8a37e97ab56bc7f868742bb578f9400da0198a2c43  Serein_1.2.5_x64-setup.exe
-e7ad5f294d65d147654c3e9c3b54e9bb5b0b7af1668fffc7603e8a154974b6dd  Serein_1.2.5_x64-portable.exe
+c569733c1e16490b727be10bc83ccf21f0d80241cfe87a3c1baf9f9241fa9ecd  Serein_1.2.5_x64-setup.exe
+cfd5bb91b8754e825772be7abb1b1048d50fe009de527cfd561ab249e9fd3f0d  Serein_1.2.5_x64-portable.exe
 73ff9f5becde785ae9c8939b085246e21d309721cacc3a3f922028b4f8c68f33  Serein_1.2.5_amd64.deb
 1cb2eaab71c212af319c2c64b4c21cd59e3141357340b62b0582732597241b7c  Serein_1.2.5_amd64.AppImage
 ```
