@@ -44,6 +44,9 @@ rand = "0.8"
 ssh-key = { version = "0.6", features = ["ed25519", "rsa", "encryption", "std", "getrandom"] }
 open = "5"
 dunce = "1"
+
+[target.'cfg(not(windows))'.dependencies]
+# Буфер обмена вне Windows: на Windows работаем напрямую через Win32, там arboard лишний.
 arboard = "3.4"
 
 [target.'cfg(unix)'.dependencies]

@@ -1,0 +1,25 @@
+# Репозиторий собирается и на Windows, и на Linux, поэтому переводы строк задаём здесь,
+# а не полагаемся на core.autocrlf у каждого разработчика: shell-скрипт с CRLF на Linux
+# не запускается вовсе — `bad interpreter: /bin/bash^M`.
+
+* text=auto eol=lf
+
+*.sh        text eol=lf
+*.py        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.desktop   text eol=lf
+
+# Скрипты, которые исполняет Windows, — наоборот, только CRLF.
+*.ps1       text eol=crlf
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.nsi       text eol=crlf
+
+# Двоичное — не трогать и не пытаться сливать.
+*.png       binary
+*.ico       binary
+*.icns      binary
+*.exe       binary
+*.deb       binary
+*.AppImage  binary
