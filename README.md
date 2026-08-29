@@ -4,13 +4,13 @@
 
 # Serein
 
-**Desktop SSH / SFTP client — everything in one window.**
+**Desktop client for servers and network gear — everything in one window.**
 
-Tabs and split panes, an SFTP file manager with an editor,
-port forwards, resource monitoring, a Docker panel, and a local terminal —
-in an installer of about **6 MB**.
+SSH, SFTP with an editor, serial consoles, telnet and raw TCP.
+Tabs and split panes, port forwards, resource monitoring, a Docker panel
+and a local terminal — in an installer of about **6.7 MB**.
 
-Free, open source, Apache 2.0. Windows x64, **v1.2.1**.
+Free, open source, Apache 2.0. Windows x64, **v1.2.4**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -38,12 +38,12 @@ No Chromium tax. We are not racing Tabby on feature count. The point is a **serv
 
 | | **Serein (Tauri)** | Typical Electron client |
 | --- | :---: | :---: |
-| Installer size | **≈ 6 MB** | ≈ 85 MB |
+| Installer size | **≈ 6.7 MB** | ≈ 85 MB |
 | Idle RAM | **≈ 33 MB** | 150–250 MB |
 | SSH engine | pure Rust [`russh`](https://github.com/Eugeny/russh) | libssh2 / native |
 | Runtime | system WebView2 | full Chromium |
 
-Numbers come from a live `tauri dev` session (RAM) and the 1.2.0 NSIS build (~6 MB packed).
+Numbers come from a live `tauri dev` session (RAM) and the 1.2.4 NSIS build (~6.7 MB packed).
 A weak laptop will not magically match 33 MB.
 
 ---
@@ -117,7 +117,7 @@ A weak laptop will not magically match 33 MB.
 
 ## Quick start
 
-1. Install the setup exe or grab the portable `Serein_1.2.1_x64-portable.exe` from [Releases](../../releases/latest).
+1. Install the setup exe or grab the portable `Serein_1.2.4_x64-portable.exe` from [Releases](../../releases/latest).
 2. Import `~/.ssh/config` or add a host by hand.
 3. Connect. The local terminal works with no SSH at all.
 
@@ -143,11 +143,11 @@ Matrix and smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
 
 From [Releases](../../releases/latest):
 
-- **`Serein_1.2.1_x64-setup.exe`** — installer (Start menu, uninstall).
-- **`Serein_1.2.1_x64-portable.exe`** — a single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`.
+- **`Serein_1.2.4_x64-setup.exe`** — installer (Start menu, uninstall).
+- **`Serein_1.2.4_x64-portable.exe`** — a single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`.
 
 The build is **unsigned**. SmartScreen will complain. *More info → Run anyway*.
-Release notes: [RELEASE_NOTES_v1.2.1.md](docs/RELEASE_NOTES_v1.2.1.md).
+Release notes: [RELEASE_NOTES_v1.2.4.md](docs/RELEASE_NOTES_v1.2.4.md).
 
 The updater endpoint is wired (`nehade.xyz/updates/terminal/`). Do not rely on it
 while the installer is unsigned.
@@ -178,7 +178,8 @@ while the installer is unsigned.
                      Tauri commands and events
 ┌───────────────────────────────┴───────────────────────────────────────┐
 │  Rust backend (src-tauri/src)                                          │
-│  ssh · sftp · tunnels · monitor · docker · pty · store · vault ·       │
+│  ssh · ssh_agent · ssh_algos · proxycmd · serial · telnet · sftp ·     │
+│  tunnels · monitor · docker · pty · term_out · store · vault ·         │
 │  crypto · dpapi · keygen · importers · knownhosts · remoteedit         │
 └────────────────────────────────────────────────────────────────────────┘
 ```
@@ -186,8 +187,9 @@ while the installer is unsigned.
 - React talks to Rust through a thin `window.api` bridge (`invoke` / `listen`).
 - One SSH connection multiplexes **shell + SFTP + exec + tunnels**. The handle is locked
   only briefly, so opening channels does not stall the others.
-- Secrets decrypt **only in Rust**, at connect time. Outside Windows there is no DPAPI:
-  a `plain:` fallback exists (this build is Windows).
+- Secrets decrypt **only in Rust**, at connect time. Outside Windows there is no DPAPI,
+  and nothing is written instead: base64 is not encryption, so a port has to wire up
+  Keychain / Secret Service first.
 
 ---
 
@@ -220,8 +222,9 @@ npm run smoke
 Profiles, secrets, known_hosts, vault live in `%APPDATA%\serein\`
 (`servers.json`, `secrets.json`, `vault.json`, `known_hosts.json`, …).
 
-Secrets never go to the UI. There is no dedicated log file yet: use the app window
-and `npm run tauri dev` output.
+Secrets never go to the UI. Per-session terminal logs can be switched on and land in
+`%APPDATA%\serein\logs` with ANSI stripped; there is no application-wide log file yet —
+for that, use `npm run tauri dev` output.
 
 ---
 

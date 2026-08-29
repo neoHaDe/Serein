@@ -4,13 +4,13 @@
 
 # Serein
 
-**Десктоп-клиент SSH / SFTP «всё в одном окне».**
+**Десктоп-клиент для серверов и сетевого железа — всё в одном окне.**
 
-Вкладки и сплит-панели, файловый менеджер SFTP со встроенным редактором,
-проброс портов, мониторинг ресурсов, панель Docker и локальный терминал —
-в установщике на **≈ 6 МБ**.
+SSH, SFTP со встроенным редактором, консоль по COM-порту, telnet и сырой TCP.
+Вкладки и сплит-панели, проброс портов, мониторинг ресурсов, панель Docker
+и локальный терминал — в установщике на **≈ 6,7 МБ**.
 
-Бесплатно, открытый код, Apache 2.0. Windows x64, **v1.2.1**.
+Бесплатно, открытый код, Apache 2.0. Windows x64, **v1.2.4**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -38,12 +38,12 @@ Windows · без своего Chromium (системный WebView2) ·
 
 | | **Serein (Tauri)** | Типичный Electron-клиент |
 | --- | :---: | :---: |
-| Размер установщика | **≈ 6 МБ** | ≈ 85 МБ |
+| Размер установщика | **≈ 6,7 МБ** | ≈ 85 МБ |
 | Память в простое | **≈ 33 МБ** | 150–250 МБ |
 | SSH-движок | чистый Rust [`russh`](https://github.com/Eugeny/russh) | libssh2 / нативный |
 | Рантайм | системный WebView2 | полный Chromium |
 
-Цифры — живой `tauri dev` (RAM) и NSIS 1.2.0 (~6 МБ сжатый). На слабом ноутбуке те же 33 МБ не обещаем.
+Цифры — живой `tauri dev` (RAM) и NSIS 1.2.4 (~6,7 МБ сжатый). На слабом ноутбуке те же 33 МБ не обещаем.
 
 ---
 
@@ -117,7 +117,7 @@ Windows · без своего Chromium (системный WebView2) ·
 
 ## Быстрый старт
 
-1. Поставь установщик или скачай portable `Serein_1.2.1_x64-portable.exe` из [Releases](../../releases/latest).
+1. Поставь установщик или скачай portable `Serein_1.2.4_x64-portable.exe` из [Releases](../../releases/latest).
 2. Импортируй `~/.ssh/config` или добавь сервер вручную.
 3. Подключись. Локальный терминал работает и без SSH.
 
@@ -143,11 +143,11 @@ Windows · без своего Chromium (системный WebView2) ·
 
 С [Releases](../../releases/latest):
 
-- **`Serein_1.2.1_x64-setup.exe`** — установщик (меню Пуск, удаление).
-- **`Serein_1.2.1_x64-portable.exe`** — один файл, без установки. Положи и запусти. Настройки всё равно в `%APPDATA%\serein`.
+- **`Serein_1.2.4_x64-setup.exe`** — установщик (меню Пуск, удаление).
+- **`Serein_1.2.4_x64-portable.exe`** — один файл, без установки. Положи и запусти. Настройки всё равно в `%APPDATA%\serein`.
 
 Сборка **не подписана** — SmartScreen ругнётся. *Подробнее → Выполнить в любом случае*.
-Что нового — [release notes](docs/RELEASE_NOTES_v1.2.1.md) и описание выпуска на GitHub.
+Что нового — [release notes](docs/RELEASE_NOTES_v1.2.4.md) и описание выпуска на GitHub.
 
 Автообновление в конфиге заведено (`nehade.xyz/updates/terminal/`), на неподписанном
 установщике на него не рассчитывай.
@@ -178,7 +178,8 @@ Windows · без своего Chromium (системный WebView2) ·
                      команды и события Tauri
 ┌───────────────────────────────┴───────────────────────────────────────┐
 │  Rust-бэкенд (src-tauri/src)                                           │
-│  ssh · sftp · tunnels · monitor · docker · pty · store · vault ·       │
+│  ssh · ssh_agent · ssh_algos · proxycmd · serial · telnet · sftp ·     │
+│  tunnels · monitor · docker · pty · term_out · store · vault ·         │
 │  crypto · dpapi · keygen · importers · knownhosts · remoteedit         │
 └────────────────────────────────────────────────────────────────────────┘
 ```
@@ -186,8 +187,9 @@ Windows · без своего Chromium (системный WebView2) ·
 - React говорит с Rust через тонкий мост `window.api` (invoke / listen).
 - Одно SSH-соединение мультиплексирует **shell + SFTP + exec + туннели**; handle берётся
   коротким async-локом, каналы не ждут друг друга.
-- Секреты расшифровываются **только в Rust**, в момент подключения. Вне Windows DPAPI нет:
-  там запасной `plain:` (эта сборка — Windows).
+- Секреты расшифровываются **только в Rust**, в момент подключения. Вне Windows DPAPI нет,
+  и взамен ничего не пишется: base64 — не шифрование, поэтому порт должен сначала
+  подключить Keychain / Secret Service.
 
 ---
 
@@ -219,8 +221,9 @@ npm run smoke
 Профили, секреты, known_hosts, vault — в `%APPDATA%\serein\`
 (`servers.json`, `secrets.json`, `vault.json`, `known_hosts.json`, …).
 
-Секреты в UI-слой не едут. Логи отдельным файлом пока не пишем: смотри окно приложения
-и вывод `npm run tauri dev`.
+Секреты в UI-слой не едут. Запись вывода терминала включается по сессии и ложится
+в `%APPDATA%\serein\logs` без ANSI; общего лог-файла приложения пока нет — для него
+смотри вывод `npm run tauri dev`.
 
 ---
 
