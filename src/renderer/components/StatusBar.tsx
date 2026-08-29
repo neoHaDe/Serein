@@ -88,6 +88,52 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
         </span>
       )}
       {isSsh && !server && <span className="sb-item sb-muted">{leaf.title}</span>}
+      {(leaf.kind === 'telnet' || leaf.kind === 'raw') && (
+        <>
+          <span className="sb-item sb-muted">
+            <Icon name="server" size={13} />{' '}
+            {server
+              ? `${leaf.kind === 'telnet' ? 'telnet' : 'TCP'} ${server.host}:${server.port}`
+              : leaf.title}
+          </span>
+          {/* Прервать зависшую команду на железке: обычный Ctrl+C не проходит, если она
+              перестала читать поток данных, а telnet-команда идёт вне очереди. */}
+          {leaf.kind === 'telnet' && leaf.status === 'connected' && leaf.sessionId && (
+            <>
+              <button
+                className="sb-item sb-button"
+                title="Interrupt Process — прервать выполняемую команду"
+                onClick={() => {
+                  const id = leaf.sessionId
+                  if (id) void window.api.telnet.command(id, 'interrupt').catch(() => {})
+                }}
+              >
+                Прервать
+              </button>
+              <button
+                className="sb-item sb-button"
+                title="Are You There — проверить, отвечает ли сервер"
+                onClick={() => {
+                  const id = leaf.sessionId
+                  if (id) void window.api.telnet.command(id, 'are-you-there').catch(() => {})
+                }}
+              >
+                AYT
+              </button>
+              <button
+                className="sb-item sb-button"
+                title="BREAK — на сетевом железе переводит в recovery"
+                onClick={() => {
+                  const id = leaf.sessionId
+                  if (id) void window.api.telnet.command(id, 'break').catch(() => {})
+                }}
+              >
+                BREAK
+              </button>
+            </>
+          )}
+        </>
+      )}
       {leaf.kind === 'serial' && (
         <>
           <span className="sb-item sb-muted">

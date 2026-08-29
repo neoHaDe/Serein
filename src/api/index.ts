@@ -90,12 +90,31 @@ export const api = {
     setSignal: (id: string, line: 'dtr' | 'rts', on: boolean): Promise<void> =>
       invoke('serial_set_signal', { id, line, on })
   },
+  telnet: {
+    /**
+     * Управляющая команда telnet. `interrupt` — то же, что Ctrl+C на настоящем терминале,
+     * но проходит даже когда железка перестала читать поток данных.
+     */
+    command: (
+      id: string,
+      name: 'break' | 'interrupt' | 'abort-output' | 'are-you-there' | 'erase-char' | 'erase-line'
+    ): Promise<void> => invoke('telnet_command', { id, name })
+  },
   session: {
     openSsh: (p: OpenSshPayload): Promise<string> => invoke('session_open_ssh', { p }),
     openLocal: (p: OpenLocalPayload): Promise<string> => invoke('session_open_local', { p }),
     /** COM-порт: по профилю сервера (`serverId`) либо разовыми настройками (`serial`). */
     openSerial: (p: { serverId?: string; serial?: SerialConfig }): Promise<string> =>
       invoke('session_open_serial', { p }),
+    /** Telnet или «сырой» TCP: по профилю (`serverId`) либо разовыми параметрами. */
+    openTcp: (p: {
+      serverId?: string
+      connection?: 'telnet' | 'raw'
+      host?: string
+      port?: number
+      cols?: number
+      rows?: number
+    }): Promise<string> => invoke('session_open_tcp', { p }),
     ping: (id: string): Promise<number | null> => invoke('session_ping', { id }),
     monitor: (id: string): Promise<ServerMetrics> => invoke('session_monitor', { id }),
     logStatus: (id: string): Promise<boolean> => invoke('session_log_status', { id }),

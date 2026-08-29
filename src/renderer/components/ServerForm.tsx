@@ -110,6 +110,11 @@ function AddTunnelForm({
   )
 }
 
+/** Порт по умолчанию для типа подключения. У сырого TCP общепринятого нет. */
+function defaultPort(kind: ServerConfig['connection']): number {
+  return kind === 'telnet' ? 23 : kind === 'raw' ? 0 : 22
+}
+
 export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.Element {
   const isEdit = !!initial
   const [name, setName] = useState(initial?.name ?? '')
@@ -126,7 +131,12 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
   const [tunnels, setTunnels] = useState<TunnelConfig[]>(initial?.tunnels ?? [])
   const [addingTunnel, setAddingTunnel] = useState(false)
   const [executeOnConnect, setExecuteOnConnect] = useState(initial?.executeOnConnect ?? '')
-  const [connection, setConnection] = useState<'ssh' | 'serial'>(initial?.connection ?? 'ssh')
+  const [connection, setConnection] = useState<ServerConfig['connection']>(
+    initial?.connection ?? 'ssh'
+  )
+  const [telnetEol, setTelnetEol] = useState<'crlf' | 'cr-nul' | 'cr'>(initial?.telnetEol ?? 'crlf')
+  /** telnet и сырой TCP: адрес и порт есть, пользователя и аутентификации нет. */
+  const isTcp = connection === 'telnet' || connection === 'raw'
   const [proxyCommand, setProxyCommand] = useState(initial?.proxyCommand ?? '')
   const [sshCompression, setSshCompression] = useState(initial?.sshCompression ?? false)
   const [sshLegacyAlgos, setSshLegacyAlgos] = useState(initial?.sshLegacyAlgos ?? false)
@@ -193,6 +203,17 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
         alert('Выберите COM-порт')
         return
       }
+    } else if (isTcp) {
+      // У telnet и сырого TCP пользователя нет: логин спрашивает сама железка,
+      // если ей это вообще нужно.
+      if (!host.trim()) {
+        alert('Укажите адрес хоста')
+        return
+      }
+      if (!port || port < 1 || port > 65535) {
+        alert('Укажите порт от 1 до 65535')
+        return
+      }
     } else if (!host.trim() || !username.trim()) {
       alert('Заполните хост и пользователя')
       return
@@ -202,11 +223,12 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
       name: name.trim(),
       // Поля SSH сохраняем как есть: если профиль переключат обратно, настройки не пропадут.
       host: host.trim(),
-      port: Number(port) || 22,
+      port: Number(port) || defaultPort(connection),
       username: username.trim() || 'root',
       authType,
       connection,
       serial: connection === 'serial' ? { ...serial, port: serial.port.trim() } : initial?.serial,
+      telnetEol: connection === 'telnet' ? telnetEol : initial?.telnetEol,
       proxyCommand: connection === 'ssh' && proxyCommand.trim() ? proxyCommand.trim() : undefined,
       sshCompression: connection === 'ssh' && sshCompression ? true : undefined,
       sshLegacyAlgos: connection === 'ssh' && sshLegacyAlgos ? true : undefined,
@@ -244,10 +266,18 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
           Тип подключения
           <select
             value={connection}
-            onChange={(e) => setConnection(e.target.value as 'ssh' | 'serial')}
+            onChange={(e) => {
+              const next = e.target.value as ServerConfig['connection']
+              // Порт подставляем только если он ещё стандартный для прежнего типа:
+              // вручную выставленный 2001 у консольного сервера затирать нельзя.
+              if (port === defaultPort(connection)) setPort(defaultPort(next))
+              setConnection(next)
+            }}
           >
             <option value="ssh">SSH</option>
             <option value="serial">Последовательный порт (COM)</option>
+            <option value="telnet">Telnet</option>
+            <option value="raw">TCP без обработки</option>
           </select>
         </label>
 
@@ -375,6 +405,52 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
             <div className="agent-hint">
               Типовая консоль сетевого железа — 9600 8N1 без управления потоком. Платы на CH340
               и подобных часто требуют поднятых DTR/RTS.
+            </div>
+          </>
+        ) : isTcp ? (
+          <>
+            <div className="row">
+              <label style={{ flex: 3 }}>
+                Хост
+                <input
+                  value={host}
+                  onChange={(e) => setHost(e.target.value)}
+                  placeholder="192.168.88.1 / sw1.lan"
+                />
+              </label>
+              <label style={{ flex: 1 }}>
+                Порт
+                <input
+                  type="number"
+                  value={port || ''}
+                  onChange={(e) => setPort(Number(e.target.value))}
+                  placeholder={connection === 'telnet' ? '23' : '2001'}
+                />
+              </label>
+              <label style={{ flex: 2 }}>
+                Группа
+                <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Стойка 1" />
+              </label>
+            </div>
+
+            {connection === 'telnet' && (
+              <label>
+                Клавиша Enter отправляет
+                <select
+                  value={telnetEol}
+                  onChange={(e) => setTelnetEol(e.target.value as 'crlf' | 'cr-nul' | 'cr')}
+                >
+                  <option value="crlf">CR LF — по стандарту (подходит почти везде)</option>
+                  <option value="cr-nul">CR NUL — если строки задваиваются</option>
+                  <option value="cr">Только CR — для совсем упрямых железок</option>
+                </select>
+              </label>
+            )}
+
+            <div className="agent-hint">
+              {connection === 'telnet'
+                ? 'Логин и пароль спрашивает сама железка — здесь их указывать негде. Трафик telnet не шифруется: в чужой сети им ходить не стоит.'
+                : 'Байты идут в обе стороны без обработки: ни согласования опций, ни правки перевода строки. Так подключаются к консольным серверам (Cisco и Digi слушают порт 2000+ на каждую линию) и к текстовым протоколам вручную.'}
             </div>
           </>
         ) : (

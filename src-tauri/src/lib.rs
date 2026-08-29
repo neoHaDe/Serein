@@ -21,6 +21,7 @@ mod ssh_agent;
 mod ssh_algos;
 pub mod ssh;
 pub mod store;
+mod telnet;
 mod term_out;
 mod tunnels;
 mod vault;
@@ -36,6 +37,8 @@ pub(crate) enum Session {
     Local(pty::LocalSession),
     Ssh(Arc<ssh::SshSession>),
     Serial(serial::SerialSession),
+    /// Telnet или «сырой» TCP — общий транспорт, разный разбор потока.
+    Tcp(telnet::TcpSession),
 }
 
 pub(crate) struct AppState {
@@ -80,6 +83,7 @@ impl AppState {
             match s {
                 Session::Local(l) => l.close(),
                 Session::Serial(p) => p.close(),
+                Session::Tcp(t) => t.close(),
                 Session::Ssh(s) => s.shutdown(user),
             }
         }
@@ -271,6 +275,68 @@ fn serial_set_signal(state: State<'_, AppState>, id: String, line: String, on: b
     }
 }
 
+/// Открывает telnet- или «сырую» TCP-сессию.
+///
+/// `p.serverId` — подключение по сохранённому профилю; без него берём `host`/`port`/`mode`
+/// прямо из запроса (разовое подключение из палитры). `cols`/`rows` нужны сразу: telnet
+/// сообщает размер окна в момент согласования, и без них сервер считает экран 80x24.
+#[tauri::command]
+fn session_open_tcp(app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
+    let profile = match p.get("serverId").and_then(|v| v.as_str()) {
+        Some(sid) => store::servers_list()
+            .into_iter()
+            .find(|s| s.get("id").and_then(|v| v.as_str()) == Some(sid))
+            .ok_or("Сервер не найден")?,
+        None => p.clone(),
+    };
+
+    let kind = profile
+        .get("connection")
+        .and_then(|v| v.as_str())
+        .or_else(|| p.get("connection").and_then(|v| v.as_str()))
+        .unwrap_or("telnet");
+    let mode = match kind {
+        "telnet" => telnet::Mode::Telnet,
+        "raw" => telnet::Mode::Raw,
+        other => return Err(format!("Это не TCP-подключение: {other}")),
+    };
+    // У сырого TCP осмысленного порта по умолчанию нет — консольные серверы слушают
+    // кто на 2000, кто на 4001. Пусть пользователь укажет явно.
+    let default_port = if mode == telnet::Mode::Telnet { 23 } else { 0 };
+    let (host, port) = telnet::endpoint(&profile, default_port);
+    if port == 0 {
+        return Err("Укажите порт: у TCP-подключения нет значения по умолчанию".into());
+    }
+
+    let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80).clamp(20, 500) as u16;
+    let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24).clamp(5, 200) as u16;
+    let eol = profile.get("telnetEol").and_then(|v| v.as_str());
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let sess = telnet::open_tcp(app.clone(), id.clone(), mode, &host, port, eol, cols, rows)?;
+    state.sessions.lock().unwrap().insert(id.clone(), Session::Tcp(sess));
+
+    // Как и у COM-порта: молчащий экран не отличить от неверного порта, поэтому
+    // первой строкой пишем, куда именно подключились.
+    let _ = app.emit(
+        "session-data",
+        json!({ "id": id, "data": format!("[90m[{}][0m
+", telnet::describe(mode, &host, port)) }),
+    );
+    emit_connected(&app, id.clone());
+    Ok(id)
+}
+
+/// Управляющая команда telnet: BREAK, Interrupt Process, Are You There и соседи.
+/// На сетевом железе это единственный способ прервать зависшую команду.
+#[tauri::command]
+fn telnet_command(state: State<'_, AppState>, id: String, name: String) -> Result<(), String> {
+    match state.sessions.lock().unwrap().get(&id) {
+        Some(Session::Tcp(t)) => t.send_command(&name),
+        _ => Err("Это не telnet-сессия".into()),
+    }
+}
+
 #[tauri::command]
 async fn session_open_ssh(app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
     let server_id = p.get("serverId").and_then(|v| v.as_str()).ok_or("Не задан serverId")?;
@@ -310,6 +376,7 @@ fn session_write(state: State<'_, AppState>, id: String, data: String) {
         match s {
             Session::Local(l) => l.write(&data),
             Session::Serial(p) => p.write(&data),
+            Session::Tcp(t) => t.write(&data),
             Session::Ssh(s) => {
                 let _ = s.tx.send(ssh::SshCmd::Write(data.into_bytes()));
             }
@@ -330,6 +397,8 @@ fn session_resize(state: State<'_, AppState>, p: Value) {
             Session::Local(l) => l.resize(cols as u16, rows as u16),
             // У последовательного порта нет размера окна — ресайз игнорируем.
             Session::Serial(_) => {}
+            // У telnet размер окна есть (NAWS); у сырого TCP отправка молча пропускается.
+            Session::Tcp(t) => t.resize(cols as u16, rows as u16),
             Session::Ssh(s) => {
                 let _ = s.tx.send(ssh::SshCmd::Resize(cols as u32, rows as u32));
             }
@@ -1125,6 +1194,7 @@ pub fn run() {
             session_log_status, session_log_toggle, ssh_agent_identities,
             session_hostkey_respond, knownhosts_list, knownhosts_forget, knownhosts_import,
             serial_ports, session_open_serial, serial_send_break, serial_set_signal,
+            session_open_tcp, telnet_command,
             docker_list, docker_action, docker_logs, docker_stats, docker_logs_cancel, docker_container_files,
             docker_compose_list, docker_compose_ps, docker_compose_action, docker_compose_read,
             docker_compose_logs, docker_compose_logs_cancel,

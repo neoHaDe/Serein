@@ -7,6 +7,7 @@ import { useSettings } from '../SettingsContext'
 import { getTheme } from '../themes'
 import { shouldPreserveSession } from '../detachedSessions'
 import type { PaneKind } from '../../shared/types'
+import { errText } from '../errText'
 
 interface Props {
   paneId: string
@@ -306,7 +307,10 @@ export function TerminalView({
           ? window.api.session.openSsh({ serverId, cols, rows })
           : kind === 'serial' && serverId
             ? window.api.session.openSerial({ serverId })
-            : window.api.session.openLocal({ cols, rows })
+            : (kind === 'telnet' || kind === 'raw') && serverId
+              ? // Размер окна нужен уже на старте: telnet сообщает его при согласовании.
+                window.api.session.openTcp({ serverId, cols, rows })
+              : window.api.session.openLocal({ cols, rows })
       openPromise
         .then((id) => {
           e.sessionId = id
@@ -315,9 +319,10 @@ export function TerminalView({
           e.offData = bindWriter(id, (data) => e.term.write(data))
           onReady(paneId, id)
         })
-        .catch((err: Error) => {
-          e.term.writeln(`\r\n\x1b[31mОшибка подключения: ${err.message}\x1b[0m`)
-          onFailRef.current?.(paneId, err.message)
+        .catch((err: unknown) => {
+          const msg = errText(err)
+          e.term.writeln(`\r\n\x1b[31mОшибка подключения: ${msg}\x1b[0m`)
+          onFailRef.current?.(paneId, msg)
         })
     }
 

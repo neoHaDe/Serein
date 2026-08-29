@@ -102,9 +102,16 @@ export interface ServerConfig {
   /** Позиция в списке внутри своей группы. Меньше — выше. */
   order?: number
   /** Вид подключения. Отсутствует = `ssh` (все профили, созданные до появления COM). */
-  connection?: 'ssh' | 'serial'
+  connection?: 'ssh' | 'serial' | 'telnet' | 'raw'
   /** Параметры линии для `connection: 'serial'`. */
   serial?: SerialConfig
+  /**
+   * Что уходит на сервер по Enter в telnet вне двоичного режима.
+   * По RFC 854 это `CR LF`, он и стоит по умолчанию; часть железа ждёт `CR NUL`
+   * или голый `CR` — на неверном варианте получаются двойные переводы строки
+   * либо команда, которая не выполняется.
+   */
+  telnetEol?: 'crlf' | 'cr-nul' | 'cr'
 }
 
 /** Вопрос про ключ сервера во время рукопожатия. */
@@ -127,7 +134,30 @@ export interface KnownHostEntry {
 }
 
 /** Что открыто в панели терминала. */
-export type PaneKind = 'ssh' | 'local' | 'serial'
+export type PaneKind = 'ssh' | 'local' | 'serial' | 'telnet' | 'raw'
+
+/**
+ * Какая панель открывается под профиль сервера. Держим рядом с типом: мест, где
+ * профиль превращается в сессию, несколько (список, палитра, открепленное окно),
+ * и разъехавшийся маппинг молча открывал бы SSH вместо telnet.
+ */
+export function paneKindOf(s: Pick<ServerConfig, 'connection'>): PaneKind {
+  switch (s.connection) {
+    case 'serial':
+      return 'serial'
+    case 'telnet':
+      return 'telnet'
+    case 'raw':
+      return 'raw'
+    default:
+      return 'ssh'
+  }
+}
+
+/** Разбор `kind` из query-строки открепленного окна: чужое значение не должно стать сессией. */
+export function parsePaneKind(v: string | null): PaneKind {
+  return v === 'local' || v === 'serial' || v === 'telnet' || v === 'raw' ? v : 'ssh'
+}
 
 /** Параметры линии последовательного порта. */
 export interface SerialConfig {

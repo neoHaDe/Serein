@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { ServerConfig, WorkspaceTool } from '../../shared/types'
-import { parseWorkspaceTool } from '../../shared/types'
+import { parsePaneKind, parseWorkspaceTool } from '../../shared/types'
 import type { PaneLeaf } from '../paneTree'
 import { applyUiTheme } from '../themes'
 import { useWindowSnap } from '../windowSnap'
@@ -63,8 +63,7 @@ export function DetachedTabWindow(): JSX.Element {
   const serverId = q.get('serverId') ?? ''
   const title = q.get('title') ?? 'Terminal'
   const kindParam = q.get('kind')
-  const kind: PaneKind =
-    kindParam === 'local' ? 'local' : kindParam === 'serial' ? 'serial' : 'ssh'
+  const kind: PaneKind = parsePaneKind(kindParam)
   const initialTool = parseWorkspaceTool(q.get('workspace'))
   const initialSftp = q.get('sftpOpen') === '1'
   const reattachingRef = useRef(false)

@@ -52,6 +52,9 @@ function serverSubtitle(s: ServerConfig): string {
     const cfg = s.serial
     return cfg ? `${cfg.port} · ${cfg.baudRate} бод` : 'COM-порт не настроен'
   }
+  // У telnet и сырого TCP пользователя нет — показываем адрес с портом.
+  if (s.connection === 'telnet') return `telnet ${s.host}:${s.port}`
+  if (s.connection === 'raw') return `TCP ${s.host}:${s.port}`
   return `${s.username}@${s.host}`
 }
 
