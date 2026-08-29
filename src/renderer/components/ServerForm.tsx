@@ -8,6 +8,7 @@ import type {
   TunnelConfig,
   TunnelType
 } from '../../shared/types'
+import { errText } from '../errText'
 
 interface Props {
   initial: ServerConfig | null // null = создание нового
@@ -158,7 +159,7 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
       setAgentError(r.ok ? '' : r.error ?? 'SSH-агент недоступен')
     } catch (e) {
       setAgentKeys([])
-      setAgentError((e as Error).message)
+      setAgentError(errText(e))
     } finally {
       setAgentLoading(false)
     }

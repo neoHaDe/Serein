@@ -4,6 +4,7 @@ import { basicSetup } from 'codemirror'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { languageFor, isImageFile } from '../editorLang'
 import { useSettings } from '../SettingsContext'
+import { errText } from '../errText'
 
 interface Props {
   sessionId: string
@@ -51,7 +52,7 @@ export function CodeEditor({ sessionId, remotePath, fileName, active, onDirtyCha
         .catch((e) => {
           if (cancelled) return
           setPhase('error')
-          setMsg((e as Error).message)
+          setMsg(errText(e))
         })
     } else
     window.api.sftp
@@ -95,7 +96,7 @@ export function CodeEditor({ sessionId, remotePath, fileName, active, onDirtyCha
       .catch((e) => {
         if (cancelled) return
         setPhase('error')
-        setMsg((e as Error).message)
+        setMsg(errText(e))
       })
 
     return () => {
@@ -143,7 +144,7 @@ export function CodeEditor({ sessionId, remotePath, fileName, active, onDirtyCha
       }
     } catch (e) {
       setSaveState('error')
-      setMsg((e as Error).message)
+      setMsg(errText(e))
     }
   }
 

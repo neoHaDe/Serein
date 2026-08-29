@@ -28,6 +28,7 @@ import {
   entryKind,
   fmtPerms,
 } from '../sftpExplorer'
+import { errText } from '../errText'
 
 /** Разбивает абсолютный remote-путь на сегменты-крошки: [{label, path}]. */
 function remoteCrumbs(path: string): { label: string; path: string }[] {
@@ -374,7 +375,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
           setCtxMenu(null)
         }
       } catch (e) {
-        setError((e as Error).message)
+        setError(errText(e))
       } finally {
         if (!silent) setLoading(false)
       }
@@ -390,7 +391,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
       setSelLocal([])
       setAnchorLocal(null)
     } catch (e) {
-      setError((e as Error).message)
+      setError(errText(e))
     }
   }, [])
   loadRemoteRef.current = load
@@ -409,7 +410,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
     try {
       await window.api.sftp.uploadPaths(sessionIdRef.current, pathRef.current, paths)
     } catch (e) {
-      setError((e as Error).message)
+      setError(errText(e))
     }
   }
   uploadToRemoteRef.current = uploadToRemote
@@ -450,7 +451,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
           void window.api.localfs
             .copyInto(paths, localPathRef.current)
             .then(() => loadLocalRef.current(localPathRef.current))
-            .catch((e) => setError((e as Error).message))
+            .catch((e) => setError(errText(e)))
           return
         }
         if (!pointIn(panelRef.current, pos.x, pos.y)) return
@@ -566,7 +567,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
       })
       await uploadToRemote(paths)
     } catch (e) {
-      setError((e as Error).message)
+      setError(errText(e))
     }
   }
   const uploadFolderDialog = async (): Promise<void> => {
@@ -577,7 +578,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
       })
       await uploadToRemote(paths)
     } catch (e) {
-      setError((e as Error).message)
+      setError(errText(e))
     }
   }
 
@@ -585,7 +586,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
     try {
       await window.api.sftp.edit(sessionId, joinRemote(path, entry.name))
     } catch (e) {
-      setError((e as Error).message)
+      setError(errText(e))
     }
   }
 
@@ -596,7 +597,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
       await window.api.sftp.mkdir(sessionId, joinRemote(path, name))
       load(path)
     } catch (e) {
-      setError((e as Error).message)
+      setError(errText(e))
     }
   }
 
@@ -613,7 +614,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
       await window.api.sftp.rename(sessionId, joinRemote(path, oldName), joinRemote(path, next))
       load(path)
     } catch (e) {
-      setError((e as Error).message)
+      setError(errText(e))
     }
   }
 
@@ -635,7 +636,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
       setChmodEntry(null)
       load(path)
     } catch (e) {
-      setError((e as Error).message)
+      setError(errText(e))
     }
   }
 
@@ -745,7 +746,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
         await window.api.sftp.downloadTo(sessionId, joinRemote(path, item.name), first.path)
       }
     } catch (e) {
-      setError((e as Error).message)
+      setError(errText(e))
     }
   }
 
@@ -760,7 +761,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
       setSelRemote([])
       load(path)
     } catch (e) {
-      setError((e as Error).message)
+      setError(errText(e))
       load(path)
     }
   }

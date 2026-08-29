@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ServerMetrics } from '../../shared/types'
 import { Icon } from './Icon'
+import { errText } from '../errText'
 
 function fmtKb(kb: number): string {
   const mb = kb / 1024
@@ -185,7 +186,7 @@ export function MonitorMetrics({
           }, 600)
         } else setErr(data.error || 'Не удалось получить метрики')
       } catch (e) {
-        if (aliveRef.current) setErr((e as Error).message)
+        if (aliveRef.current) setErr(errText(e))
       }
     }
     void tick()

@@ -5,6 +5,7 @@ import { THEME_NAMES } from '../themes'
 import { ACTIONS, resolveBindings, comboFromEvent, formatCombo, type ActionId } from '../keybindings'
 import { checkForUpdates } from '../updater'
 import { getVersion } from '@tauri-apps/api/app'
+import { errText } from '../errText'
 
 const FONTS = [
   'Cascadia Code, Consolas, "Courier New", monospace',
@@ -85,7 +86,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
       setAction(null)
       setPassword('')
     } catch (e) {
-      setMsg({ text: (e as Error).message, ok: false })
+      setMsg({ text: errText(e), ok: false })
     } finally {
       setBusy(false)
     }
@@ -396,6 +397,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
                 {knownHosts.length
                   ? `Хостов: ${knownHosts.length}. Забыть — и при следующем подключении ключ спросят заново.`
                   : 'Пока пусто: отпечаток запоминается после подтверждения при подключении.'}
+                {' '}Можно перенести уже доверенные из <code>~/.ssh/known_hosts</code>.
               </div>
             </div>
             <button
@@ -412,7 +414,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
                   .catch((e: Error) => setHostsMsg(e.message))
               }}
             >
-              Импорт из ~/.ssh/known_hosts
+              Импорт
             </button>
           </div>
 

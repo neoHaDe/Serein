@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { GeneratedKey, KeyType } from '../../shared/types'
+import { errText } from '../errText'
 
 interface ConnectedSession {
   sessionId: string
@@ -33,7 +34,7 @@ export function KeyGenModal({ connectedSessions, onClose }: Props): JSX.Element 
       })
       setKey(result)
     } catch (e) {
-      setMsg('Ошибка генерации: ' + (e as Error).message)
+      setMsg('Ошибка генерации: ' + errText(e))
     } finally {
       setBusy(false)
     }
@@ -61,7 +62,7 @@ export function KeyGenModal({ connectedSessions, onClose }: Props): JSX.Element 
       const t = connectedSessions.find((s) => s.sessionId === installTarget)
       setMsg(`Публичный ключ установлен на «${t?.title ?? 'сервер'}».`)
     } catch (e) {
-      setMsg('Ошибка установки: ' + (e as Error).message)
+      setMsg('Ошибка установки: ' + errText(e))
     } finally {
       setBusy(false)
     }
