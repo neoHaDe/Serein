@@ -1,6 +1,6 @@
 [package]
 name = "serein"
-version = "1.2.1"
+version = "1.2.2"
 description = "Serein — desktop SSH/SFTP workstation"
 authors = ["HaDe"]
 license = "Apache-2.0"

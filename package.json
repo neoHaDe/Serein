@@ -1,7 +1,7 @@
 {
   "name": "serein",
   "private": true,
-  "version": "1.2.1",
+  "version": "1.2.2",
   "type": "module",
   "description": "Serein — десктоп SSH/SFTP workstation на Tauri + React",
   "license": "Apache-2.0",

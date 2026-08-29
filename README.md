@@ -67,10 +67,12 @@ A weak laptop will not magically match 33 MB.
 - Keyboard pane navigation, remappable shortcuts, **command palette** (`Ctrl+Shift+P`)
 
 ### Connections
-- Sidebar with groups and search, **live connection status**
-- Auth: **password · key · keyboard-interactive 2FA**
-- **ProxyJump / bastion** chains (recursive, `direct-tcpip`)
-- **TOFU known-hosts** on every hop
+- Sidebar with **drag & drop groups**, right-click menus and search, **live connection status**
+- Auth: **password · key · keyboard-interactive 2FA · SSH agent** (pick the key from the ring)
+- **Serial / COM console** — baud, parity, flow control, DTR/RTS, send BREAK
+- **ProxyJump / bastion** chains (recursive, `direct-tcpip`) and **ProxyCommand** (`%h %p %r`)
+- **Compression** (`zlib@openssh.com`) and an opt-in **legacy algorithm** set for old gear
+- **TOFU known-hosts** on every hop: verification dialog, management and OpenSSH import
 - **Reconnect on drop** — manual or auto (up to 5 attempts, backoff)
 - Import from **`~/.ssh/config`** and **PuTTY** sessions
 
@@ -223,13 +225,13 @@ and `npm run tauri dev` output.
 
 ## Known limitations
 
-- No **Serial/COM**, **Telnet**, or **raw TCP** connections yet — SSH only.
+- No **Telnet** or **raw TCP** connections yet — SSH and Serial/COM only.
 - **Windows x64** only. No `.dmg` / `.AppImage`.
 - Installer is **unsigned**. SmartScreen will fight you.
 - Updater endpoint exists; do not rely on it while the installer is unsigned.
 - Not on the near-term list: cloud sync, mobile, plugins, RDP/VNC, a generic LLM chat pane.
 
-Product plan: reliability and SSH compatibility hardening → Serial/Telnet → multi-host and automation → RDP/VNC. See [release notes 1.2.1](docs/RELEASE_NOTES_v1.2.1.md).
+Product plan: reliability hardening → Telnet and raw TCP → multi-host and automation. RDP/VNC are out of scope for now. See [release notes 1.2.2](docs/RELEASE_NOTES_v1.2.2.md).
 
 ---
 
