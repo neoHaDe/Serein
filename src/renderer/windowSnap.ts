@@ -272,22 +272,29 @@ export function useWindowSnap(): void {
         await refresh()
 
         // ——— перенос группы за главным окном ————————————————————————————
+        // Двигаем окна из Rust (`windows_nudge_group`): на Linux setPosition из
+        // соседнего webview часто не срабатывает. Emit только помечает «это наше»,
+        // чтобы onMoved у ведомого не принял чужой сдвиг за ручной отрыв.
         let pendDx = 0
         let pendDy = 0
+        let pendMembers: string[] = []
         const applyGroupMove = coalesced(async () => {
           const dx = pendDx
           const dy = pendDy
+          const members = pendMembers
           pendDx = 0
           pendDy = 0
-          if (disposed || (dx === 0 && dy === 0)) return
+          pendMembers = []
+          if (disposed || (dx === 0 && dy === 0) || !members.length) return
           skipUntil = Date.now() + SKIP
-          const r = rOf()
-          const nx = r.x + dx
-          const ny = r.y + dy
-          wantPos = { x: nx, y: ny }
-          await setVisPos(me, r, nx, ny)
-          vis = { x: nx, y: ny }
-          emitAuxGeo(me.label, { x: nx, y: ny, w: size.w, h: size.h })
+          // Сначала пометить ведомых, потом двигать — иначе их onMoved отцепит группу.
+          await emit('serein-dock-move', {
+            origin: me.label,
+            dx,
+            dy,
+            members
+          } satisfies GroupMove)
+          await invoke('windows_nudge_group', { members, dx, dy })
         })
 
         stopListen = await listen<GroupMove>('serein-dock-move', (e) => {
@@ -296,9 +303,9 @@ export function useWindowSnap(): void {
           if (!p.members.includes(me.label)) return
           if (p.dx === 0 && p.dy === 0) return
           skipUntil = Date.now() + SKIP
-          pendDx += p.dx
-          pendDy += p.dy
-          applyGroupMove()
+          wantPos = { x: vis.x + p.dx, y: vis.y + p.dy }
+          vis = { x: wantPos.x, y: wantPos.y }
+          emitAuxGeo(me.label, { x: vis.x, y: vis.y, w: size.w, h: size.h })
         })
 
         if (isMain) {
@@ -385,6 +392,7 @@ export function useWindowSnap(): void {
                   dy: cdy,
                   members: [id]
                 } satisfies GroupMove)
+                await invoke('windows_nudge_group', { members: [id], dx: cdx, dy: cdy })
               }
             }
           }
@@ -412,13 +420,13 @@ export function useWindowSnap(): void {
               const o = others.find((r) => r.label === id)
               if (o) offset.set(id, { dx: o.x - cur.x, dy: o.y - cur.y })
             }
-            if (followers.length) {
-              await emit('serein-dock-move', {
-                origin: me.label,
-                dx: sdx,
-                dy: sdy,
-                members: followers
-              } satisfies GroupMove)
+            if (followers.length && (sdx !== 0 || sdy !== 0)) {
+              pendDx += sdx
+              pendDy += sdy
+              for (const id of followers) {
+                if (!pendMembers.includes(id)) pendMembers.push(id)
+              }
+              applyGroupMove()
             }
           }
         })
@@ -430,6 +438,8 @@ export function useWindowSnap(): void {
         let anchor: { x: number; y: number } | null = null
         /** Сколько пикселей окно проехало руками с начала жеста. */
         let dragAway = 0
+        /** Группу в этом жесте уже двигали — состав пересобирать поздно. */
+        let groupMoved = false
         let lastGeoAt = 0
 
         /**
@@ -468,8 +478,24 @@ export function useWindowSnap(): void {
             prev = null
             anchor = { x: nx, y: ny }
             dragAway = 0
+            groupMoved = false
             // Группа готова к первому же шагу — считать нечего, всё в реестре.
             buildGroup(anchor)
+            // На Linux geo-события между webview иногда молчат — добираем состав
+            // живым опросом. Пока ответ едет, уже есть то, что успел реестр.
+            if (isMain) {
+              const a = anchor
+              void listVis(me.label).then((others) => {
+                // Если группа уже поехала — пересобирать нельзя: соседи сдвинулись,
+                // а смещения считаются от точки старта жеста. Получились бы завышенные
+                // смещения, и доводка после остановки растащила бы окна.
+                if (disposed || !a || groupMoved) return
+                for (const o of others) {
+                  geo.set(o.label, { label: o.label, x: o.x, y: o.y, w: o.w, h: o.h })
+                }
+                buildGroup(a)
+              })
+            }
           }
           lastMoveAt = now
 
@@ -506,12 +532,13 @@ export function useWindowSnap(): void {
             } else {
               const members = [...sticky]
               if (members.length) {
-                void emit('serein-dock-move', {
-                  origin: me.label,
-                  dx,
-                  dy,
-                  members
-                } satisfies GroupMove)
+                groupMoved = true
+                pendDx += dx
+                pendDy += dy
+                for (const id of members) {
+                  if (!pendMembers.includes(id)) pendMembers.push(id)
+                }
+                applyGroupMove()
               }
             }
           }
