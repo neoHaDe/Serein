@@ -385,8 +385,24 @@ async fn connect_one(
         .and_then(|v| v.as_u64())
         .filter(|n| *n > 0)
         .unwrap_or(15);
+    let timeout = std::time::Duration::from_secs(secs);
+
+    // ProxyCommand: вместо TCP берём stdin/stdout внешней программы. Таймаут тот же —
+    // посредник может молчать так же, как недоступный хост.
+    if let Some(cmd) = field(server, "proxyCommand").map(str::trim).filter(|c| !c.is_empty()) {
+        let user = field(server, "username").unwrap_or("root");
+        let stream = crate::proxycmd::spawn(cmd, host, port_of(server), user)?;
+        let fut = client::connect_stream(config, stream, handler);
+        return match tokio::time::timeout(timeout, fut).await {
+            Ok(r) => r.map_err(|e| format!("Подключение к {host} через прокси-команду не удалось: {e}")),
+            Err(_) => Err(format!(
+                "Подключение к {host} через прокси-команду: таймаут {secs}с (посредник не отвечает?)"
+            )),
+        };
+    }
+
     let fut = client::connect(config, (host, port_of(server)), handler);
-    match tokio::time::timeout(std::time::Duration::from_secs(secs), fut).await {
+    match tokio::time::timeout(timeout, fut).await {
         Ok(r) => r.map_err(|e| format!("Подключение к {host} не удалось: {e}")),
         Err(_) => Err(format!("Подключение к {host}: таймаут {secs}с (хост недоступен?)")),
     }

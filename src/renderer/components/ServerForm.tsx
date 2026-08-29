@@ -126,6 +126,7 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
   const [addingTunnel, setAddingTunnel] = useState(false)
   const [executeOnConnect, setExecuteOnConnect] = useState(initial?.executeOnConnect ?? '')
   const [connection, setConnection] = useState<'ssh' | 'serial'>(initial?.connection ?? 'ssh')
+  const [proxyCommand, setProxyCommand] = useState(initial?.proxyCommand ?? '')
   const [sshCompression, setSshCompression] = useState(initial?.sshCompression ?? false)
   const [sshLegacyAlgos, setSshLegacyAlgos] = useState(initial?.sshLegacyAlgos ?? false)
   const [serial, setSerial] = useState<SerialConfig>(
@@ -205,6 +206,7 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
       authType,
       connection,
       serial: connection === 'serial' ? { ...serial, port: serial.port.trim() } : initial?.serial,
+      proxyCommand: connection === 'ssh' && proxyCommand.trim() ? proxyCommand.trim() : undefined,
       sshCompression: connection === 'ssh' && sshCompression ? true : undefined,
       sshLegacyAlgos: connection === 'ssh' && sshLegacyAlgos ? true : undefined,
       group: group.trim() || undefined,
@@ -458,6 +460,29 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
             ))}
           </select>
         </label>
+
+        <label>
+          Прокси-команда (вместо прямого подключения)
+          <input
+            value={proxyCommand}
+            onChange={(e) => setProxyCommand(e.target.value)}
+            placeholder="cloudflared access ssh --hostname %h"
+            disabled={!!proxyJump}
+          />
+        </label>
+        {proxyJump ? (
+          <div className="agent-hint">
+            Не используется: выбран jump-хост, он идёт первым — как в OpenSSH.
+          </div>
+        ) : (
+          proxyCommand.trim() && (
+            <div className="agent-hint">
+              Подстановки: <code>%h</code> — хост, <code>%p</code> — порт, <code>%r</code> —
+              пользователь. Программа запускается на этом компьютере, её ввод-вывод и служит
+              каналом до сервера.
+            </div>
+          )
+        )}
 
         <label className="checkbox-row">
           <input

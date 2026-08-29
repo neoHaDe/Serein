@@ -85,6 +85,12 @@ export interface ServerConfig {
    * Пусто — перебирать все ключи агента подряд.
    */
   agentKey?: string
+  /**
+   * Внешняя программа-посредник вместо прямого TCP (как `ProxyCommand` в ssh_config).
+   * Токены: `%h` — хост, `%p` — порт, `%r` — пользователь.
+   * Игнорируется, если задан `proxyJump` — тот идёт первым, как в OpenSSH.
+   */
+  proxyCommand?: string
   /** Сжимать трафик (zlib). Помогает на медленном канале, грузит процессор. */
   sshCompression?: boolean
   /**
