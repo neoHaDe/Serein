@@ -558,7 +558,7 @@ export interface AuxLayout {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  theme: 'Tokyo Night',
+  theme: 'GitHub Dark',
   fontSize: 14,
   fontFamily: 'Cascadia Code, Consolas, "Courier New", monospace',
   openLocalOnStart: false,

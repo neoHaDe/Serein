@@ -126,7 +126,7 @@ export const THEMES: Record<string, ITheme> = {
 export const THEME_NAMES = Object.keys(THEMES)
 
 export function getTheme(name: string): ITheme {
-  return THEMES[name] ?? THEMES['Tokyo Night']
+  return THEMES[name] ?? THEMES['GitHub Dark']
 }
 
 // ---------- Применение темы ко всему UI (CSS-переменные) ----------
