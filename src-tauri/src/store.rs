@@ -17,8 +17,48 @@ pub fn config_dir() -> PathBuf {
         let _ = fs::rename(&legacy, &d);
     }
     let _ = fs::create_dir_all(&d);
+    // Права выставляем один раз за запуск: `config_dir` зовётся на каждое чтение и запись,
+    // и лишний системный вызов там ни к чему.
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| harden(&d));
     d
 }
+
+/// Закрыть каталог профиля от других пользователей машины.
+///
+/// `create_dir_all` создаёт каталог по umask — обычно это `755`, и на многопользовательской
+/// Linux-машине `servers.json` с хостами, пользователями и `secrets.json` читает кто угодно.
+/// На Windows этой дыры нет: `%APPDATA%` и так закрыт списком доступа, поэтому при переносе
+/// проблема и не проявилась. Ведём себя как OpenSSH со своим `~/.ssh`.
+#[cfg(unix)]
+fn harden(d: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(d, fs::Permissions::from_mode(0o700));
+    // Файлы, созданные прежними сборками, остались с правами от umask. Каталог `700`
+    // уже закрывает к ним доступ, но оставлять `644` внутри — значит зависеть от того,
+    // что каталог никто не откроет обратно.
+    if let Ok(entries) = fs::read_dir(d) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_file() {
+                let _ = fs::set_permissions(&p, fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn harden(_d: &std::path::Path) {}
+
+/// То же для файла: секреты и профили не должны быть доступны на чтение всем.
+#[cfg(unix)]
+pub(crate) fn restrict_file(p: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(p, fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+pub(crate) fn restrict_file(_p: &std::path::Path) {}
 
 fn dir() -> PathBuf {
     config_dir()
@@ -31,7 +71,31 @@ fn read_value(name: &str) -> Option<Value> {
 
 fn write_value(name: &str, v: &Value) -> Result<(), String> {
     let txt = serde_json::to_string_pretty(v).map_err(|e| e.to_string())?;
-    fs::write(dir().join(name), txt).map_err(|e| e.to_string())
+    let path = dir().join(name);
+    fs::write(&path, txt).map_err(|e| e.to_string())?;
+    restrict_file(&path);
+    Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod perm_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// Профиль хранит хосты, пользователей и секреты — читать его должен только владелец.
+    /// На многопользовательской машине `755`/`644` от umask отдают всё это соседям.
+    #[test]
+    fn config_dir_and_files_are_private() {
+        let d = config_dir();
+        let mode = fs::metadata(&d).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "каталог профиля открыт: {mode:o}");
+
+        write_value("perm-probe.json", &json!({ "x": 1 })).unwrap();
+        let f = d.join("perm-probe.json");
+        let fmode = fs::metadata(&f).unwrap().permissions().mode() & 0o777;
+        let _ = fs::remove_file(&f);
+        assert_eq!(fmode, 0o600, "файл профиля открыт: {fmode:o}");
+    }
 }
 
 // ---------- Настройки ----------
