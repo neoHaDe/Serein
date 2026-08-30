@@ -30,16 +30,34 @@ pub fn status() -> Value {
     json!({ "enabled": enabled, "locked": enabled && vaultkey::get().is_none() })
 }
 
-fn key_from(password: &str, salt_b64: &str) -> Option<[u8; 32]> {
+/// Параметры KDF из конфигурации хранилища.
+///
+/// Их не было в прежних сборках, поэтому отсутствие поля означает набор 2009 года.
+/// Существующее хранилище на новые параметры молча не переводим: ключ изменился бы,
+/// и все уже зашифрованные секреты перестали бы открываться. Новые параметры
+/// достаются при следующем включении мастер-пароля — там секреты и так перешифровываются.
+fn kdf_of(cfg: &Value) -> crypto::Kdf {
+    let Some(k) = cfg.get("kdf") else {
+        return crypto::KDF_LEGACY;
+    };
+    let num = |name: &str, d: u32| k.get(name).and_then(|v| v.as_u64()).unwrap_or(d as u64) as u32;
+    crypto::Kdf {
+        log_n: num("logN", crypto::KDF_LEGACY.log_n as u32) as u8,
+        r: num("r", crypto::KDF_LEGACY.r),
+        p: num("p", crypto::KDF_LEGACY.p),
+    }
+}
+
+fn key_from(password: &str, salt_b64: &str, kdf: crypto::Kdf) -> Option<[u8; 32]> {
     let salt = STANDARD.decode(salt_b64).ok()?;
-    Some(crypto::derive_key(password, &salt))
+    Some(crypto::derive_key_with(password, &salt, kdf))
 }
 
 pub fn unlock(password: &str) -> bool {
     let Some(cfg) = read_config() else { return false };
     let salt = cfg.get("salt").and_then(|v| v.as_str()).unwrap_or("");
     let verifier = cfg.get("verifier").and_then(|v| v.as_str()).unwrap_or("");
-    let Some(key) = key_from(password, salt) else { return false };
+    let Some(key) = key_from(password, salt, kdf_of(&cfg)) else { return false };
     match crypto::aes_decrypt(verifier, &key) {
         Ok(t) if t == VERIFY_TOKEN => {
             vaultkey::set(Some(key));
@@ -64,7 +82,8 @@ pub fn enable(password: &str) -> Value {
         rand::thread_rng().fill_bytes(&mut s);
         s
     };
-    let key = crypto::derive_key(password, &salt);
+    let kdf = crypto::KDF_CURRENT;
+    let key = crypto::derive_key_with(password, &salt, kdf);
     vaultkey::set(Some(key));
     if let Err(e) = crate::store::import_all_secrets(&plain) {
         return json!({ "ok": false, "error": e });
@@ -73,7 +92,14 @@ pub fn enable(password: &str) -> Value {
         Ok(v) => v,
         Err(e) => return json!({ "ok": false, "error": e }),
     };
-    let cfg = json!({ "enabled": true, "salt": STANDARD.encode(salt), "verifier": verifier });
+    let cfg = json!({
+        "enabled": true,
+        "salt": STANDARD.encode(salt),
+        "verifier": verifier,
+        // Параметры записываем рядом: без них поднять стойкость в следующий раз
+        // можно будет только сломав все существующие хранилища.
+        "kdf": { "logN": kdf.log_n, "r": kdf.r, "p": kdf.p },
+    });
     if let Err(e) = std::fs::write(vault_path(), serde_json::to_string_pretty(&cfg).unwrap()) {
         return json!({ "ok": false, "error": e.to_string() });
     }
@@ -86,7 +112,7 @@ pub fn disable(password: &str) -> Value {
     };
     let salt = cfg.get("salt").and_then(|v| v.as_str()).unwrap_or("");
     let verifier = cfg.get("verifier").and_then(|v| v.as_str()).unwrap_or("");
-    let Some(key) = key_from(password, salt) else {
+    let Some(key) = key_from(password, salt, kdf_of(&cfg)) else {
         return json!({ "ok": false, "error": "Неверный пароль" });
     };
     if crypto::aes_decrypt(verifier, &key).ok().as_deref() != Some(VERIFY_TOKEN) {
