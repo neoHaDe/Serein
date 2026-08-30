@@ -378,7 +378,15 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           <div className="settings-row">
             <div>
               <div className="settings-row-name">Резервная копия</div>
-              <div className="settings-row-desc">Зашифрованный бэкап серверов, настроек и сниппетов</div>
+              {/* Про ключи говорим здесь, а не после неудачного восстановления: файлы ключей
+                  в бэкап не кладём намеренно — он и так несёт пароли, и приватные ключи в том
+                  же файле сильно повышают цену его утечки. */}
+              <div className="settings-row-desc">
+                Зашифрованный бэкап серверов, настроек и сниппетов.
+                <br />
+                Файлы SSH-ключей в него не входят — перенесите их отдельно, пути к ним при
+                восстановлении подставятся автоматически.
+              </div>
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
               <button className="secondary" onClick={() => startAction('export')}>Экспорт</button>
