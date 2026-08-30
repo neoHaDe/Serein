@@ -18,7 +18,7 @@ docker compose up -d --build
 
 # Ждём именно готовности принимать соединения: `up -d` возвращается раньше, чем sshd
 # успевает сгенерировать ключи хоста, и первый же тест ловил бы отказ на ровном месте.
-for port in 2201 2202; do
+for port in 2201 2202 2203; do
   echo -n "жду 127.0.0.1:$port "
   for _ in $(seq 1 60); do
     if printf '' 2>/dev/null >/dev/tcp/127.0.0.1/"$port"; then echo "— готов"; break; fi
@@ -38,6 +38,7 @@ cat <<VARS
   export SEREIN_STAND_PASSWORD=probe-pass
   export SEREIN_STAND_KEY=$(pwd)/.stand/id_ed25519
   export SEREIN_STAND_ALPINE_INTERNAL=alpine
+  export SEREIN_STAND_HOSTKEY_PORT=2203
 
 Запуск: cargo test --manifest-path ../../src-tauri/Cargo.toml -- --ignored
 Остановить: ./down.sh

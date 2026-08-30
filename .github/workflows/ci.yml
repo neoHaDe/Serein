@@ -124,11 +124,13 @@ jobs:
           SEREIN_STAND_DEBIAN_PORT: "2201"
           SEREIN_STAND_ALPINE_PORT: "2202"
           SEREIN_STAND_ALPINE_INTERNAL: alpine
+          SEREIN_STAND_HOSTKEY_PORT: "2203"
           SEREIN_STAND_USER: probe
           SEREIN_STAND_PASSWORD: probe-pass
         run: |
           export SEREIN_STAND_KEY="$GITHUB_WORKSPACE/scripts/ssh-stand/.stand/id_ed25519"
           cargo test --manifest-path src-tauri/Cargo.toml --test ssh_stand --locked -- --ignored
+          cargo test --manifest-path src-tauri/Cargo.toml --test sftp_stand --locked -- --ignored
 
       - name: Логи стенда при падении
         if: failure()

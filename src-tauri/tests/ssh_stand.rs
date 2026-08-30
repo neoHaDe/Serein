@@ -12,75 +12,9 @@
 //! ⚠ `SEREIN_CONFIG_DIR` обязателен. Тесты подтверждают ключи хостов, а это запись в
 //! профиль — гадить в профиль живого пользователя они не имеют права.
 
+mod common;
+use common::{profile_lock, rt, Stand};
 use serde_json::{json, Value};
-
-/// Параметры стенда. Отсутствие любого — повод упасть с внятным текстом, а не молча
-/// «пройти»: зелёный тест, который ничего не проверил, хуже красного.
-struct Stand {
-    host: String,
-    debian_port: u16,
-    alpine_port: u16,
-    user: String,
-    password: String,
-    key_path: String,
-    /// Как Alpine видно ИЗНУТРИ сети стенда. Для jump-цепочки нужен именно этот адрес:
-    /// дальний хост открывается каналом с промежуточного, и проброшенный на хост порт
-    /// оттуда не виден вовсе.
-    alpine_internal: String,
-}
-
-fn env(name: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| {
-        panic!("не задана {name} — подними стенд через scripts/ssh-stand/up.sh и возьми переменные оттуда")
-    })
-}
-
-impl Stand {
-    fn from_env() -> Self {
-        assert!(
-            std::env::var_os("SEREIN_CONFIG_DIR").is_some(),
-            "не задана SEREIN_CONFIG_DIR: тесты подтверждают ключи хостов и писали бы в профиль живого пользователя"
-        );
-        Self {
-            host: env("SEREIN_STAND_HOST"),
-            debian_port: env("SEREIN_STAND_DEBIAN_PORT").parse().expect("порт Debian"),
-            alpine_port: env("SEREIN_STAND_ALPINE_PORT").parse().expect("порт Alpine"),
-            user: env("SEREIN_STAND_USER"),
-            password: env("SEREIN_STAND_PASSWORD"),
-            key_path: env("SEREIN_STAND_KEY"),
-            alpine_internal: env("SEREIN_STAND_ALPINE_INTERNAL"),
-        }
-    }
-
-    fn by_password(&self, port: u16) -> Value {
-        json!({
-            "host": self.host,
-            "port": port,
-            "username": self.user,
-            "authType": "password",
-            "password": self.password,
-            "connectTimeout": 20,
-        })
-    }
-
-    fn by_key(&self, port: u16) -> Value {
-        json!({
-            "host": self.host,
-            "port": port,
-            "username": self.user,
-            "authType": "key",
-            "privateKeyPath": self.key_path,
-            "connectTimeout": 20,
-        })
-    }
-}
-
-fn rt() -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("рантайм")
-}
 
 /// Подключиться и выполнить команду, вернув (код, stdout).
 fn run(server: Value, command: &str) -> (i32, String) {
@@ -222,6 +156,7 @@ fn parallel_first_contact_remembers_every_host() {
         rb.expect("Alpine");
     });
 
+    let _guard = profile_lock().lock().unwrap_or_else(|e| e.into_inner());
     let file = serein_lib::store::config_dir().join("known_hosts.json");
     let text = std::fs::read_to_string(&file).expect("файл отпечатков");
     for port in [s.debian_port, s.alpine_port] {
@@ -229,3 +164,44 @@ fn parallel_first_contact_remembers_every_host() {
         assert!(text.contains(&id), "потерян отпечаток {id} в {text}");
     }
 }
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn changed_host_key_is_refused_when_there_is_nobody_to_ask() {
+    // Смена ключа хоста — это либо переустановленный сервер, либо чужой сервер на том же
+    // адресе. Спросить пользователя можно только в живой сессии; когда спрашивать некого
+    // (восстановление туннеля, массовый прогон), молча доверять нельзя ни при каких
+    // обстоятельствах. Проверяем именно этот путь.
+    //
+    // Ключ хоста не подменяем перезапуском контейнера — записываем заведомо чужой
+    // отпечаток в профиль. Для проверяемой логики это одно и то же, а тест не зависит
+    // от того, есть ли у него доступ к docker.
+    let s = Stand::from_env();
+    let host_id = format!("{}:{}", s.host, s.hostkey_port);
+
+    // Правим ровно свою запись и ничего не восстанавливаем обратно. Первый вариант этого
+    // теста читал файл целиком, а в конце writeback'ом возвращал снимок — и стирал
+    // отпечатки, которые за это время записали соседние тесты. Ровно та же гонка, которую
+    // мы только что чинили в приложении, воспроизведённая в тесте.
+    //
+    // Восстанавливать нечего: порт 2203 существует только ради этой проверки, и чужой
+    // отпечаток на нём никому не мешает.
+    {
+        let _guard = profile_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let file = serein_lib::store::config_dir().join("known_hosts.json");
+        let mut data: serde_json::Map<String, Value> = std::fs::read_to_string(&file)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        data.insert(
+            host_id.clone(),
+            json!("SHA256:0000000000000000000000000000000000000000000"),
+        );
+        std::fs::write(&file, serde_json::to_string_pretty(&data).unwrap())
+            .expect("подмена отпечатка");
+    }
+
+    let res = rt().block_on(serein_lib::ssh::connect_client(vec![s.by_key(s.hostkey_port)]));
+    assert!(res.is_err(), "сервер со сменившимся ключом принимать нельзя");
+}
+
