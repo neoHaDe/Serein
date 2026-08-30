@@ -306,9 +306,16 @@ async fn authenticate(
 
     match auth_type {
         "key" => {
-            let path = field(server, "privateKeyPath").ok_or("Не задан путь к ключу")?;
+            let raw = field(server, "privateKeyPath").ok_or("Не задан путь к ключу")?;
             let passphrase = field(server, "passphrase");
-            let key = load_secret_key(path, passphrase).map_err(|e| e.to_string())?;
+            // Путь мог приехать вместе с бэкапом из другой системы: `C:\Users\…\.ssh\id_ed25519`
+            // на Linux не существует. Ищем ключ там, где он реально лежит, а если не нашли —
+            // объясняем по-человечески вместо `os error 2`, из которого ничего не следует.
+            let path = crate::paths::resolve_identity(raw);
+            if !std::path::Path::new(&path).exists() {
+                return Err(crate::paths::missing_key_error(raw, &path));
+            }
+            let key = load_secret_key(&path, passphrase).map_err(|e| e.to_string())?;
             handle
                 .authenticate_publickey(&user, Arc::new(key))
                 .await

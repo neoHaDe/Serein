@@ -13,6 +13,7 @@ mod keygen;
 mod knownhosts;
 mod localfs;
 mod monitor;
+mod paths;
 mod proxycmd;
 mod pty;
 mod remoteedit;

@@ -33,8 +33,13 @@ pub fn import(content: &str, password: &str) -> Result<Value, String> {
     }
     let servers = payload.get("servers").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let snippets = payload.get("snippets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let mut keys_remapped = 0usize;
     for s in &servers {
-        store::servers_save(s.clone())?;
+        let (s, fixed) = remap_key_path(s.clone());
+        if fixed {
+            keys_remapped += 1;
+        }
+        store::servers_save(s)?;
     }
     for s in &snippets {
         store::snippets_save(s.clone())?;
@@ -42,7 +47,35 @@ pub fn import(content: &str, password: &str) -> Result<Value, String> {
     if let Some(settings) = payload.get("settings") {
         store::settings_set(settings.clone())?;
     }
-    Ok(json!({ "servers": servers.len(), "snippets": snippets.len() }))
+    Ok(json!({
+        "servers": servers.len(),
+        "snippets": snippets.len(),
+        "keysRemapped": keys_remapped,
+    }))
+}
+
+/// Подставить в профиль путь к ключу, который существует на этой системе.
+///
+/// Бэкап с Windows несёт абсолютный путь вида `C:\Users\…\.ssh\id_ed25519`. На Linux
+/// такого файла нет, и подключение падало на ровном месте. Правим только когда файл
+/// действительно нашёлся: переписать путь на другой, столь же несуществующий, — значит
+/// соврать пользователю и спрятать причину.
+fn remap_key_path(mut s: Value) -> (Value, bool) {
+    let Some(o) = s.as_object_mut() else {
+        return (s, false);
+    };
+    let Some(raw) = o.get("privateKeyPath").and_then(|v| v.as_str()).map(|x| x.to_string()) else {
+        return (s, false);
+    };
+    if raw.trim().is_empty() {
+        return (s, false);
+    }
+    let fixed = crate::paths::resolve_identity(&raw);
+    if fixed != raw && std::path::Path::new(&fixed).exists() {
+        o.insert("privateKeyPath".into(), json!(fixed));
+        return (s, true);
+    }
+    (s, false)
 }
 
 // Лёгкая ISO-метка без зависимости от chrono.

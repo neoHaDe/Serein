@@ -277,7 +277,15 @@ export const api = {
       if (!path) return { saved: false }
       return invoke('backup_export', { password, path })
     },
-    import: async (password: string): Promise<{ imported: boolean; servers?: number; snippets?: number }> => {
+    import: async (
+      password: string
+    ): Promise<{
+      imported: boolean
+      servers?: number
+      snippets?: number
+      /** Скольким серверам подставили путь к ключу под текущую систему. */
+      keysRemapped?: number
+    }> => {
       const sel = await openDialog({ title: 'Файл бэкапа', filters: [{ name: 'Serein backup', extensions: ['tbk'] }] })
       if (typeof sel !== 'string') return { imported: false }
       return invoke('backup_import', { password, path: sel })

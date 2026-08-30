@@ -88,7 +88,15 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
       } else if (action === 'import') {
         const r = await window.api.backup.import(password)
         if (r.imported) {
-          setMsg({ text: `Импортировано серверов: ${r.servers}, сниппетов: ${r.snippets}`, ok: true })
+          // Про переставленные пути к ключам говорим прямо: иначе непонятно, почему
+          // в профиле теперь другой путь, чем был на прежней машине.
+          const remapped = r.keysRemapped
+            ? `; путей к ключам поправлено под эту систему: ${r.keysRemapped}`
+            : ''
+          setMsg({
+            text: `Импортировано серверов: ${r.servers}, сниппетов: ${r.snippets}${remapped}`,
+            ok: true
+          })
         } else setMsg({ text: 'Отменено', ok: false })
       }
       setAction(null)
