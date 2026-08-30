@@ -752,7 +752,14 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
 
   const removeMany = async (items: SftpEntry[]): Promise<void> => {
     if (!items.length) return
-    const msg = items.length === 1 ? `Удалить «${items[0].name}»?` : `Удалить ${items.length} элементов?`
+    // Каталог удаляется вместе с содержимым, и об этом надо предупредить: одно дело
+    // согласиться на удаление папки, другое — узнать постфактум, что вместе с ней ушло
+    // всё, что внутри.
+    const dirs = items.filter((i) => i.type === 'dir').length
+    const what = items.length === 1 ? `«${items[0].name}»` : `${items.length} элементов`
+    const msg = dirs
+      ? `Удалить ${what} вместе со всем содержимым? Отменить будет нельзя.`
+      : `Удалить ${what}?`
     if (!confirm(msg)) return
     try {
       for (const item of items) {

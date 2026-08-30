@@ -455,14 +455,71 @@ pub async fn mkdir(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, p
     sftp.create_dir(path).await.map_err(|e| e.to_string())
 }
 
+/// Насколько глубоко готовы спускаться при удалении каталога.
+///
+/// Не «побольше на всякий случай»: ограничение защищает от петли из симлинков и от
+/// подсунутого дерева нелепой глубины. Тридцать уровней — заметно больше, чем встречается
+/// в реальных каталогах, и заведомо меньше, чем нужно, чтобы уйти в бесконечность.
+const MAX_REMOVE_DEPTH: usize = 30;
+
 pub async fn remove(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, path: &str, is_dir: bool) -> Result<(), String> {
     check_remote_path(path)?;
     let sftp = open(handle).await?;
     if is_dir {
-        sftp.remove_dir(path).await.map_err(|e| e.to_string())
+        remove_dir_all(&sftp, path).await
     } else {
         sftp.remove_file(path).await.map_err(|e| e.to_string())
     }
+}
+
+/// Удаляет каталог вместе с содержимым.
+///
+/// Раньше здесь был голый `remove_dir`, который в SFTP работает только на пустом каталоге.
+/// Любая попытка удалить папку с файлами из файлового менеджера заканчивалась протокольным
+/// «Failure: Failure» — сообщением, из которого пользователю не следует ровно ничего.
+///
+/// Симлинки удаляем как файлы и внутрь НЕ заходим: ссылка на `/etc` не повод снести `/etc`.
+async fn remove_dir_all(sftp: &SftpSession, root: &str) -> Result<(), String> {
+    // Обход без рекурсии: async-рекурсия требует боксинга на каждом уровне, а здесь
+    // достаточно собрать каталоги сверху вниз и удалить их снизу вверх.
+    let mut to_visit = vec![(root.to_string(), 0usize)];
+    let mut dirs: Vec<String> = Vec::new();
+
+    while let Some((dir, depth)) = to_visit.pop() {
+        if depth > MAX_REMOVE_DEPTH {
+            return Err(format!(
+                "Слишком глубокая вложенность в «{dir}» (больше {MAX_REMOVE_DEPTH} уровней) — удаление остановлено"
+            ));
+        }
+        let entries = sftp
+            .read_dir(&dir)
+            .await
+            .map_err(|e| format!("Не удалось прочитать «{dir}»: {e}"))?;
+        for entry in entries {
+            let name = entry.file_name();
+            if name == "." || name == ".." {
+                continue;
+            }
+            let full = join_remote(&dir, &name);
+            let ft = entry.file_type();
+            if ft.is_dir() && !ft.is_symlink() {
+                to_visit.push((full, depth + 1));
+            } else {
+                sftp.remove_file(&full)
+                    .await
+                    .map_err(|e| format!("Не удалось удалить «{full}»: {e}"))?;
+            }
+        }
+        dirs.push(dir);
+    }
+
+    // Снизу вверх: SFTP умеет удалять только пустые каталоги.
+    for dir in dirs.into_iter().rev() {
+        sftp.remove_dir(&dir)
+            .await
+            .map_err(|e| format!("Не удалось удалить каталог «{dir}»: {e}"))?;
+    }
+    Ok(())
 }
 
 pub async fn rename(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, from: &str, to: &str) -> Result<(), String> {
