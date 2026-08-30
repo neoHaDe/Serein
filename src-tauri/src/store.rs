@@ -8,8 +8,29 @@ use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+/// Имя переменной окружения, переопределяющей каталог профиля.
+pub const CONFIG_DIR_ENV: &str = "SEREIN_CONFIG_DIR";
+
 /// Каталог данных приложения. Старый `term-tauri` один раз переименовывается в `serein`.
+///
+/// `SEREIN_CONFIG_DIR` перекрывает выбор по умолчанию. Это нужно в трёх местах, и все
+/// три настоящие: тесты, которым нельзя писать в профиль живого пользователя; портативный
+/// запуск с флешки; закрытый контур, где профиль обязан лежать на заранее оговорённом
+/// пути. Читаем один раз за процесс — иначе половина приложения работала бы с одним
+/// каталогом, а половина с другим, если переменную поменяют на ходу.
 pub fn config_dir() -> PathBuf {
+    static OVERRIDE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    let chosen = OVERRIDE.get_or_init(|| {
+        std::env::var_os(CONFIG_DIR_ENV)
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty())
+    });
+    if let Some(dir) = chosen {
+        let _ = fs::create_dir_all(dir);
+        static ONCE_OVERRIDE: std::sync::Once = std::sync::Once::new();
+        ONCE_OVERRIDE.call_once(|| harden(dir));
+        return dir.clone();
+    }
     let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     let d = base.join("serein");
     let legacy = base.join("term-tauri");
