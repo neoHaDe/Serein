@@ -7,6 +7,7 @@ import { listen } from '@tauri-apps/api/event'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import type {
   ServerConfig,
+  MultiExecResult,
   AgentIdentitiesResult,
   HostKeyRequest,
   KnownHostEntry,
@@ -332,6 +333,17 @@ export const api = {
       invoke('workspace_service_action', { sessionId, name, action }),
     logs: (sessionId: string): Promise<{ ok: boolean; error?: string; text?: string }> =>
       invoke('workspace_logs', { sessionId })
+  },
+  multi: {
+    /**
+     * Одна команда на нескольких серверах. Полный список возвращается в конце,
+     * но результат каждого хоста приходит событием сразу — ждать самый медленный,
+     * чтобы увидеть первый, незачем.
+     */
+    exec: (serverIds: string[], command: string): Promise<MultiExecResult[]> =>
+      invoke('multi_exec', { serverIds, command }),
+    onResult: (cb: (p: { done: number; total: number; result: MultiExecResult }) => void) =>
+      sub<{ done: number; total: number; result: MultiExecResult }>('multi-exec-result', cb)
   },
   app: {
     /** Куда приложение реально пишет профиль и логи — видно в настройках. */

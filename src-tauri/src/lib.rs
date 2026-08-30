@@ -13,6 +13,7 @@ mod keygen;
 mod knownhosts;
 mod localfs;
 mod monitor;
+mod multihost;
 mod paths;
 mod proxycmd;
 mod pty;
@@ -156,6 +157,13 @@ fn app_install_kind() -> &'static str {
     }
 }
 
+/// Одна команда на нескольких серверах. Результат каждого хоста уходит событием
+/// сразу, как только готов; здесь возвращается общий список — для истории в окне.
+#[tauri::command]
+async fn multi_exec(app: AppHandle, server_ids: Vec<String>, command: String) -> Vec<Value> {
+    multihost::run(app, server_ids, command).await
+}
+
 #[tauri::command]
 fn settings_get() -> Value {
     store::settings_get()
@@ -239,6 +247,11 @@ fn localfs_copy_into(paths: Vec<String>, dest_dir: String) -> Result<u32, String
 }
 
 // ---------------- Сессии ----------------
+
+/// Цепочка «целевой сервер → jump-хосты» с расшифрованными секретами.
+pub(crate) fn resolve_chain_for(server_id: &str) -> Result<Vec<Value>, String> {
+    resolve_chain(server_id)
+}
 
 fn resolve_chain(server_id: &str) -> Result<Vec<Value>, String> {
     let mut chain = Vec::new();
@@ -1316,7 +1329,7 @@ pub fn run() {
             export_text_file,
             keygen_generate, keygen_save, keygen_install,
             servers_import_ssh_config, servers_import_putty,
-            app_platform, app_paths, app_install_kind,
+            app_platform, app_paths, app_install_kind, multi_exec,
             windows_nudge_group, windows_raise_group, windows_restore_minimized, windows_count_minimized,
             clipboard_write, clipboard_read
         ])

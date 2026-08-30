@@ -4137,3 +4137,109 @@ button.secondary:hover {
   word-break: break-all;
   user-select: text;
 }
+
+/* ── Команда на нескольких серверах ──────────────────────────────────────── */
+
+.modal-wide {
+  max-width: 720px;
+  width: 92vw;
+}
+
+/* Список серверов может быть длинным, а окно — нет: прокручиваем именно выбор,
+   чтобы поле команды и кнопки всегда оставались на виду. */
+.multi-pick {
+  max-height: 34vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 6px;
+  margin-top: 4px;
+}
+.multi-group + .multi-group {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+.multi-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 600;
+}
+.multi-item {
+  padding-left: 18px;
+}
+.multi-host {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.multi-results {
+  max-height: 30vh;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+.multi-result summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  padding: 5px 6px;
+  border-radius: var(--r-sm);
+}
+.multi-result summary:hover {
+  background: rgba(var(--fg-rgb), 0.05);
+}
+.multi-result-name {
+  font-weight: 600;
+}
+/* Состояние — цветом, а не только словом: в списке из десяти строк глаз ищет отличия. */
+.multi-result.done .multi-result-state {
+  color: var(--green);
+}
+.multi-result.failed .multi-result-state,
+.multi-result.skipped .multi-result-state {
+  color: var(--warn);
+}
+.multi-result-ms {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.multi-result pre {
+  margin: 0 0 8px 6px;
+  padding: 8px;
+  background: var(--bg);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+}
+
+/* Подтверждение перед запуском: единственное место, где одно нажатие меняет
+   сразу несколько машин, поэтому оно должно бросаться в глаза. */
+.multi-confirm {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r);
+  background: rgba(var(--warn-rgb), 0.12);
+  box-shadow: inset 0 0 0 1px rgba(var(--warn-rgb), 0.5);
+}
+.multi-confirm code {
+  font-family: var(--font-mono);
+  background: rgba(var(--shadow-rgb), 0.25);
+  padding: 1px 5px;
+  border-radius: var(--r-sm);
+}
+.multi-confirm-list {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}

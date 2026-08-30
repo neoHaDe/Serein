@@ -580,3 +580,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sftpSortCol: 'name',
   sftpSortDir: 'asc'
 }
+
+/** Итог выполнения команды на одном сервере в групповом прогоне. */
+export interface MultiExecResult {
+  serverId: string
+  name: string
+  /** `done` — команда отработала (код может быть любым), `failed` — не дошли, `skipped` — не стали. */
+  state: 'done' | 'failed' | 'skipped'
+  code?: number
+  stdout?: string
+  stderr?: string
+  ms?: number
+  error?: string
+}

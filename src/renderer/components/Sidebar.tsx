@@ -41,6 +41,8 @@ interface Props {
   onToggleGroup: (group: string) => void
   onNewGroup: () => void
   onOpenGroups: () => void
+  /** Выполнить одну команду сразу на нескольких серверах. */
+  onMultiExec: () => void
   /** Перетаскивание: сервер попал в группу на позицию `index` (в конец, если undefined). */
   onDropServer: (serverId: string, group: string, index?: number) => void
   /** Новый порядок групп целиком — сайдбар знает, что именно нарисовал. */
@@ -121,6 +123,7 @@ export function Sidebar({
   onToggleGroup,
   onNewGroup,
   onOpenGroups,
+  onMultiExec,
   onDropServer,
   onDropGroup
 }: Props): JSX.Element {
@@ -530,7 +533,8 @@ export function Sidebar({
       items: [
         { label: 'Новый сервер', onClick: onNew },
         { label: 'Новая группа', onClick: onNewGroup },
-        { label: 'Настройки групп', onClick: onOpenGroups, separated: true }
+        { label: 'Выполнить на нескольких…', onClick: onMultiExec, separated: true },
+        { label: 'Настройки групп', onClick: onOpenGroups }
       ]
     })
   }

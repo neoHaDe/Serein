@@ -30,6 +30,7 @@ import { applyUiTheme } from './themes'
 import { useWindowSnap } from './windowSnap'
 import { isWindowsPlatform } from './platform'
 import { openAuxWindow, sanitizeWindowLabel } from './auxWindows'
+import { MultiExecModal } from './components/MultiExecModal'
 import {
   auxWindowKey,
   flushAuxPersist,
@@ -134,6 +135,7 @@ export default function App(): JSX.Element {
   // Вопросы про ключ хоста копим очередью: цепочка jump-хостов может спросить несколько раз.
   const [hostKeyQueue, setHostKeyQueue] = useState<HostKeyRequest[]>([])
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [multiExec, setMultiExec] = useState(false)
   const [showPuttyImport, setShowPuttyImport] = useState(true)
   const { settings, update } = useSettings()
   useWindowSnap()
@@ -1194,6 +1196,7 @@ export default function App(): JSX.Element {
         onToggleGroup={toggleGroup}
         onNewGroup={createGroup}
         onOpenGroups={() => setShowGroups(true)}
+        onMultiExec={() => setMultiExec(true)}
         onDropServer={(id, group, index) => void dropServer(id, group, index)}
         onDropGroup={dropGroup}
       />
@@ -1391,6 +1394,8 @@ export default function App(): JSX.Element {
       {paletteOpen && <CommandPalette items={paletteItems} onClose={() => setPaletteOpen(false)} />}
 
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+
+      {multiExec && <MultiExecModal servers={servers} onClose={() => setMultiExec(false)} />}
 
       {showGroups && (
         <GroupsModal
