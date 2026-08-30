@@ -100,7 +100,7 @@ impl TunnelManager {
             // tcpip_forward требует &mut — лочим Handle на время вызова.
             let fwd_res = tokio::select! {
                 r = async {
-                    let mut h = handle.lock().await;
+                    let h = handle.lock().await;
                     h.tcpip_forward("127.0.0.1", remote_port).await
                 } => Some(r),
                 _ = &mut stop_rx => None,

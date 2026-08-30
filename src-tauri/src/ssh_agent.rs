@@ -2,7 +2,7 @@
 
 use base64::Engine;
 use byteorder::{BigEndian, ByteOrder};
-use russh_keys::agent::client::AgentClient;
+use russh::keys::agent::client::AgentClient;
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -175,7 +175,9 @@ pub async fn authenticate_with_agent(
         Some(want) => {
             let picked: Vec<_> = keys
                 .into_iter()
-                .filter(|k| format!("SHA256:{}", k.fingerprint()) == want)
+                // `Fingerprint` печатается уже с префиксом `SHA256:`, дописывать его
+                // руками, как раньше, больше не нужно — вышло бы `SHA256:SHA256:…`.
+                .filter(|k| k.public_key().fingerprint(Default::default()).to_string() == want)
                 .collect();
             if picked.is_empty() {
                 return Err(format!(
@@ -187,12 +189,24 @@ pub async fn authenticate_with_agent(
         None => keys,
     };
 
+    // Хеш подписи для RSA спрашиваем у сервера: `None` означал бы старый `ssh-rsa`
+    // на SHA-1. Для остальных типов ключей параметр игнорируется.
+    let hash = handle
+        .best_supported_rsa_hash()
+        .await
+        .map_err(|e| format!("Ошибка SSH-агента: {e}"))?
+        .flatten();
+
     for key in keys {
-        let (agent_back, ok) = handle.authenticate_future(user, key, agent).await;
-        agent = agent_back;
-        match ok {
-            Ok(true) => return Ok(true),
-            Ok(false) => continue,
+        // Агент больше не передаётся по значению туда-обратно: russh берёт его как
+        // подписывающего по изменяемой ссылке.
+        let public = key.public_key().into_owned();
+        match handle
+            .authenticate_publickey_with(user, public, hash, &mut agent)
+            .await
+        {
+            Ok(r) if r.success() => return Ok(true),
+            Ok(_) => continue,
             Err(e) => return Err(format!("Ошибка SSH-агента: {e}")),
         }
     }

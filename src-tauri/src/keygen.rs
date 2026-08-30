@@ -1,6 +1,11 @@
 //! Генерация SSH-ключей (порт keygen.ts) через crate ssh-key.
 
 use serde_json::{json, Value};
+// ssh-key берём тот, что уже внутри russh, а не отдельной зависимостью: иначе в дереве
+// оказывались два независимых крипто-стека (ssh-key 0.6 со своим `rsa` и ssh-key 0.7
+// внутри russh), и уязвимость в `rsa` приходила по двум путям вместо одного.
+use russh::keys::key::safe_rng;
+use russh::keys::ssh_key;
 use ssh_key::private::{Ed25519Keypair, RsaKeypair};
 use ssh_key::{LineEnding, PrivateKey};
 
@@ -11,7 +16,10 @@ pub fn generate(params: &Value) -> Result<Value, String> {
         .get("passphrase")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty());
-    let mut rng = rand::rngs::OsRng;
+    // Генератор берём у russh: наш `rand 0.8` и `rand_core`, которого ждёт ssh-key 0.7,
+    // несовместимы по трейтам, а разводить два источника случайности в крипто-коде —
+    // последнее, что стоит делать.
+    let mut rng = safe_rng();
 
     let mut key = if ktype == "rsa" {
         let bits = params.get("bits").and_then(|v| v.as_u64()).unwrap_or(4096) as usize;

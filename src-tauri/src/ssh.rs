@@ -4,11 +4,11 @@
 
 use crate::knownhosts;
 use crate::ssh_agent;
-use russh::client::{self, Handler, KeyboardInteractiveAuthResponse, Msg, Session};
-use russh::{Channel, ChannelId, ChannelMsg, CryptoVec};
-use russh_keys::{load_secret_key, PublicKeyBase64};
+use russh::client::{self, ChannelOpenHandle, Handler, KeyboardInteractiveAuthResponse, Msg, Session};
+use russh::keys::{load_secret_key, PrivateKeyWithHashAlg};
+use russh::{Channel, ChannelMsg};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
@@ -142,12 +142,12 @@ pub struct ClientHandler {
     host_key_ask: Option<HostKeyAsk>,
     remote_forwards: RemoteForwards,
     cancel: CancelRx,
-    /// Каналы agent forwarding → локальный ssh-agent.
-    agent_forward_channels: Arc<Mutex<HashSet<ChannelId>>>,
     agent_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
-#[async_trait::async_trait]
+// В russh 0.63 `Handler` объявлен через `impl Future` в самом трейте, а не через
+// `#[async_trait]`. Атрибут здесь теперь ломает сигнатуры: он переписывает время жизни
+// ссылок, и они перестают совпадать с объявлением.
 impl Handler for ClientHandler {
     type Error = russh::Error;
 
@@ -156,9 +156,15 @@ impl Handler for ClientHandler {
     /// при смене ключа выглядит как «непонятная ошибка сети».
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh_keys::key::PublicKey,
+        server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        let fp = knownhosts::fingerprint_from_b64(&server_public_key.public_key_base64());
+        // Сертификаты хостов мы не запрашиваем (`host_key_certificates` пуст), поэтому сюда
+        // приходит обычный ключ. Если сервер всё же прислал сертификат — доверять ему без
+        // списка удостоверяющих ключей нельзя, отказываем.
+        let russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } = server_public_key else {
+            return Ok(false);
+        };
+        let fp = knownhosts::fingerprint_from_b64(&base64_of(key));
         let status = knownhosts::status(&self.host_id, &fp);
 
         if status == knownhosts::HostKeyStatus::Trusted {
@@ -196,6 +202,7 @@ impl Handler for ClientHandler {
         connected_port: u32,
         _originator_address: &str,
         _originator_port: u32,
+        reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         let local_port = self
@@ -204,6 +211,13 @@ impl Handler for ClientHandler {
             .unwrap()
             .get(&connected_port)
             .copied();
+        // Канал теперь надо подтвердить явно: без accept он отклоняется при сбросе `reply`.
+        // Нет маршрута на этот порт — так и отклоняем, а не открываем «в никуда».
+        if local_port.is_none() {
+            reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await;
+            return Ok(());
+        }
+        reply.accept().await;
         if let Some(lp) = local_port {
             let cancel = self.cancel.clone();
             tokio::spawn(async move {
@@ -220,41 +234,58 @@ impl Handler for ClientHandler {
     }
 
     /// Проброс SSH-агента: сервер открыл канал auth-agent@openssh.com.
+    ///
+    /// Раньше russh отдавал только идентификатор канала, и запросы приходилось ловить в
+    /// колбэке `data`, храня набор «агентских» каналов сбоку. Теперь отдаётся сам канал —
+    /// обслуживаем его отдельной задачей, и весь этот учёт больше не нужен.
     async fn server_channel_open_agent_forward(
         &mut self,
-        channel: ChannelId,
+        channel: Channel<Msg>,
+        reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        self.agent_forward_channels.lock().unwrap().insert(channel);
+        reply.accept().await;
+        let lock = self.agent_lock.clone();
+        let cancel = self.cancel.clone();
+        tokio::spawn(async move {
+            let mut channel = channel;
+            loop {
+                let msg = tokio::select! {
+                    m = channel.wait() => m,
+                    _ = wait_cancel(cancel.clone()) => break,
+                };
+                match msg {
+                    Some(ChannelMsg::Data { data }) => {
+                        // Агент один на всё приложение: параллельные запросы к нему
+                        // перемешали бы ответы.
+                        let _guard = lock.lock().await;
+                        match ssh_agent::agent_roundtrip(&data[..]).await {
+                            Ok(answer) => {
+                                if channel.data(&answer[..]).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
+                    _ => {}
+                }
+            }
+            let _ = channel.close().await;
+        });
         Ok(())
     }
+}
 
-    /// Данные с канала agent forwarding → локальный ssh-agent → ответ обратно.
-    async fn data(
-        &mut self,
-        channel: ChannelId,
-        data: &[u8],
-        session: &mut Session,
-    ) -> Result<(), Self::Error> {
-        if !self.agent_forward_channels.lock().unwrap().contains(&channel) {
-            return Ok(());
-        }
-        let _guard = self.agent_lock.lock().await;
-        match ssh_agent::agent_roundtrip(data).await {
-            Ok(reply) => session.data(channel, CryptoVec::from(reply)),
-            Err(_) => session.close(channel),
-        }
-        Ok(())
-    }
-
-    async fn channel_close(
-        &mut self,
-        channel: ChannelId,
-        _session: &mut Session,
-    ) -> Result<(), Self::Error> {
-        self.agent_forward_channels.lock().unwrap().remove(&channel);
-        Ok(())
-    }
+/// Base64 открытого ключа сервера — в том же виде, в каком его пишет OpenSSH
+/// в `known_hosts`, чтобы отпечатки совпадали со старыми записями.
+fn base64_of(key: &russh::keys::PublicKey) -> String {
+    use russh::keys::ssh_encoding::Encode;
+    let mut blob = Vec::new();
+    key.key_data().encode(&mut blob).ok();
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(blob)
 }
 
 fn field<'a>(server: &'a Value, key: &str) -> Option<&'a str> {
@@ -316,9 +347,20 @@ async fn authenticate(
                 return Err(crate::paths::missing_key_error(raw, &path));
             }
             let key = load_secret_key(&path, passphrase).map_err(|e| e.to_string())?;
-            handle
-                .authenticate_publickey(&user, Arc::new(key))
+            // Для RSA хеш подписи теперь выбираем осознанно. `PrivateKeyWithHashAlg::new`
+            // с `None` означает старый `ssh-rsa` на SHA-1 — принимать это по умолчанию
+            // значило бы тихо ослабить авторизацию на любом современном сервере.
+            // Спрашиваем сервер, что он умеет, и берём лучшее; для не-RSA ключей
+            // параметр игнорируется.
+            let hash = handle
+                .best_supported_rsa_hash()
                 .await
+                .map_err(|e| e.to_string())?
+                .flatten();
+            handle
+                .authenticate_publickey(&user, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
+                .await
+                .map(|r| r.success())
                 .map_err(|e| e.to_string())
         }
         "agent" => {
@@ -332,6 +374,7 @@ async fn authenticate(
                     .authenticate_password(&user, pass)
                     .await
                     .map_err(|e| e.to_string())?
+                    .success()
                 {
                     return Ok(true);
                 }
@@ -345,7 +388,7 @@ async fn authenticate(
                 loop {
                     match resp {
                         KeyboardInteractiveAuthResponse::Success => return Ok(true),
-                        KeyboardInteractiveAuthResponse::Failure => return Ok(false),
+                        KeyboardInteractiveAuthResponse::Failure { .. } => return Ok(false),
                         KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
                             let pl: Vec<Value> = prompts
                                 .iter()
@@ -380,7 +423,6 @@ async fn connect_one(
         host_key_ask: ask.clone(),
         remote_forwards: rf,
         cancel,
-        agent_forward_channels: Arc::new(Mutex::new(HashSet::new())),
         agent_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
     let config = ssh_client_config(server);
@@ -472,8 +514,7 @@ pub async fn connect_chain(
             host_key_ask: ask.clone(),
             remote_forwards: remote_forwards.clone(),
             cancel: cancel_rx.clone(),
-            agent_forward_channels: Arc::new(Mutex::new(HashSet::new())),
-            agent_lock: Arc::new(tokio::sync::Mutex::new(())),
+                agent_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
         let mut nh = client::connect_stream(config, channel.into_stream(), handler)
             .await
@@ -596,8 +637,7 @@ pub async fn connect_client(chain: Vec<Value>) -> Result<SharedHandle, String> {
             host_key_ask: None,
             remote_forwards: remote_forwards.clone(),
             cancel: cancel_rx.clone(),
-            agent_forward_channels: Arc::new(Mutex::new(HashSet::new())),
-            agent_lock: Arc::new(tokio::sync::Mutex::new(())),
+                agent_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
         let mut nh = client::connect_stream(config, channel.into_stream(), handler)
             .await
