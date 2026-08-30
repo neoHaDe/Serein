@@ -56,6 +56,10 @@ In-place upgrade from any 1.x on Windows and from 1.2.5 on Linux. The AppImage i
 SHA-256:
 
 ```
+0d37bb6db697c1a0bcf98ab9311a256e1d19a2e08565d4700dd97f64cb97e690  Serein_1.2.6_x64-setup.exe
+8f31665532df34c55841b6bc4fe5b11611b159760b9a555dca9523bc2709a9a8  Serein_1.2.6_x64-portable.exe
+ad47a161a13e6d0cc3deb4a8288621742a29065ff68ef03be926ef2d85b92c6d  Serein_1.2.6_amd64.deb
+0bc5912981ed6b4d737be5e063f528983cf014be7a634220de1ef15a020110a5  Serein_1.2.6_amd64.AppImage
 ```
 
 ### Limitations
