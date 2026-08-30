@@ -1,11 +1,12 @@
-# Windows release: smoke on windows-latest. Linux port: separate job on ubuntu-22.04.
+# Одна ветка — master: Linux перестал быть отдельной линией после релиза 1.2.5.
+# Smoke на windows-latest и ubuntu-22.04, плюс проверка зависимостей на уязвимости.
 # Not in CI: tauri build, NSIS/AppImage, live SSH.
 
 name: CI
 
 on:
   push:
-    branches: [master, linux/port]
+    branches: [master]
   pull_request:
   workflow_dispatch:
 
