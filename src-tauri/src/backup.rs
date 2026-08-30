@@ -34,7 +34,19 @@ pub fn import(content: &str, password: &str) -> Result<Value, String> {
     let servers = payload.get("servers").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let snippets = payload.get("snippets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let mut keys_remapped = 0usize;
+    // Профиль может нести `proxyCommand` — произвольную команду, которую мы запустим
+    // на этой машине при подключении. Для своего бэкапа это нормально, для чужого —
+    // выполнение чужого кода. Собираем их, чтобы показать человеку, что именно приехало.
+    let mut proxy_commands: Vec<Value> = Vec::new();
     for s in &servers {
+        if let Some(cmd) = s.get("proxyCommand").and_then(|v| v.as_str()) {
+            if !cmd.trim().is_empty() {
+                proxy_commands.push(json!({
+                    "name": s.get("name").and_then(|v| v.as_str()).unwrap_or("без имени"),
+                    "command": cmd,
+                }));
+            }
+        }
         let (s, fixed) = remap_key_path(s.clone());
         if fixed {
             keys_remapped += 1;
@@ -51,6 +63,7 @@ pub fn import(content: &str, password: &str) -> Result<Value, String> {
         "servers": servers.len(),
         "snippets": snippets.len(),
         "keysRemapped": keys_remapped,
+        "proxyCommands": proxy_commands,
     }))
 }
 

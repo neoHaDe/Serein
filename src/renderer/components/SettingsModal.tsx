@@ -93,10 +93,22 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           const remapped = r.keysRemapped
             ? `; путей к ключам поправлено под эту систему: ${r.keysRemapped}`
             : ''
-          setMsg({
-            text: `Импортировано серверов: ${r.servers}, сниппетов: ${r.snippets}${remapped}`,
-            ok: true
-          })
+          const base = `Импортировано серверов: ${r.servers}, сниппетов: ${r.snippets}${remapped}`
+          // `proxyCommand` запускается на этой машине при подключении. Для своего бэкапа
+          // это обычная настройка, для присланного со стороны — чужой код. Молча принимать
+          // такое нельзя, запрещать тоже: показываем, что именно приехало.
+          const proxies = r.proxyCommands ?? []
+          if (proxies.length) {
+            const list = proxies.map((p) => `${p.name}: ${p.command}`).join('; ')
+            setMsg({
+              text:
+                `${base}. Внимание: у ${proxies.length} профилей задана команда-посредник, ` +
+                `она выполнится на этом компьютере при подключении — ${list}`,
+              ok: false
+            })
+          } else {
+            setMsg({ text: base, ok: true })
+          }
         } else setMsg({ text: 'Отменено', ok: false })
       }
       setAction(null)

@@ -285,6 +285,8 @@ export const api = {
       snippets?: number
       /** Скольким серверам подставили путь к ключу под текущую систему. */
       keysRemapped?: number
+      /** Профили с командой-посредником: она запускается на этой машине при подключении. */
+      proxyCommands?: { name: string; command: string }[]
     }> => {
       const sel = await openDialog({ title: 'Файл бэкапа', filters: [{ name: 'Serein backup', extensions: ['tbk'] }] })
       if (typeof sel !== 'string') return { imported: false }
