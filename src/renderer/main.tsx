@@ -6,7 +6,7 @@ import { SftpWindow } from './components/SftpWindow'
 import { WorkspaceWindow } from './components/workspaceWindow'
 import { DetachedTabWindow } from './components/DetachedTabWindow'
 import { api } from '../api'
-import { checkForUpdates } from './updater'
+import { checkForUpdatesOnStartup } from './updater'
 import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
@@ -43,8 +43,7 @@ createRoot(document.getElementById('root')!).render(
   </SettingsProvider>
 )
 
+// Только в главном окне: иначе четыре открепленных спросят про обновление четыре раза.
 if (!detachedLogs && !detachedSftp && !detachedWorkspace && !detachedTab) {
-  setTimeout(() => {
-    void checkForUpdates(true)
-  }, 3000)
+  checkForUpdatesOnStartup()
 }

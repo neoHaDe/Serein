@@ -23,3 +23,24 @@ export function appPlatform(): Promise<Platform> {
 export function isWindowsPlatform(): Promise<boolean> {
   return appPlatform().then((p) => p === 'windows')
 }
+
+/** Как приложение установлено: от этого зависит, можно ли обновиться на месте. */
+export type InstallKind = 'installer' | 'appimage' | 'package'
+
+let cachedKind: Promise<InstallKind> | null = null
+
+/**
+ * Windows — `installer`, Linux из AppImage — `appimage`, Linux из пакета — `package`.
+ * Как и с платформой, промис не отклоняется: неизвестность трактуем как пакет,
+ * то есть предлагаем скачать вручную вместо установки, которая всё равно не пройдёт.
+ */
+export function installKind(): Promise<InstallKind> {
+  if (!cachedKind) {
+    cachedKind = invoke<string>('app_install_kind')
+      .then((k): InstallKind =>
+        k === 'installer' || k === 'appimage' ? k : 'package'
+      )
+      .catch((): InstallKind => 'package')
+  }
+  return cachedKind
+}

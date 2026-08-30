@@ -131,6 +131,30 @@ fn app_paths() -> Value {
     })
 }
 
+/// Как приложение установлено — от этого зависит, можно ли обновиться на месте.
+///
+/// `installer` — Windows: апдейтер скачивает установщик и перезапускает приложение.
+/// `appimage` — Linux, запуск из AppImage: файл заменяется целиком, это единственная
+/// форма на Linux, которую умеет обновлять сам Tauri (переменную `APPIMAGE` выставляет
+/// среда выполнения AppImage).
+/// `package` — Linux из `.deb`: бинарь лежит в `/usr/bin` и принадлежит менеджеру пакетов,
+/// писать туда приложение не может и не должно. Обновление — через пакет.
+#[tauri::command]
+fn app_install_kind() -> &'static str {
+    #[cfg(windows)]
+    {
+        "installer"
+    }
+    #[cfg(not(windows))]
+    {
+        if std::env::var_os("APPIMAGE").is_some() {
+            "appimage"
+        } else {
+            "package"
+        }
+    }
+}
+
 #[tauri::command]
 fn settings_get() -> Value {
     store::settings_get()
@@ -1291,7 +1315,7 @@ pub fn run() {
             export_text_file,
             keygen_generate, keygen_save, keygen_install,
             servers_import_ssh_config, servers_import_putty,
-            app_platform, app_paths,
+            app_platform, app_paths, app_install_kind,
             windows_nudge_group, windows_raise_group, windows_restore_minimized, windows_count_minimized,
             clipboard_write, clipboard_read
         ])
