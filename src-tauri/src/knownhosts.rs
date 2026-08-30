@@ -6,6 +6,19 @@ use base64::Engine;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use std::sync::Mutex;
+
+/// Сериализует изменение файла отпечатков.
+///
+/// `remember` читает файл, добавляет запись и пишет обратно. Два подключения к новым
+/// хостам одновременно читают один и тот же снимок, и запись, сделанная первым, теряется.
+/// Это не теория: массовый прогон подключается в четыре потока, туннели восстанавливаются
+/// пачкой, вкладки открываются одновременно. Потерянная запись не опасна — хост просто
+/// спросят ещё раз, — но выглядит как «приложение не запоминает ключи».
+fn lock() -> &'static Mutex<()> {
+    static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 fn path() -> PathBuf {
     crate::store::config_dir().join("known_hosts.json")
@@ -58,6 +71,8 @@ pub fn status(host_id: &str, fp: &str) -> HostKeyStatus {
 
 /// Запоминает отпечаток (перезаписывая прежний, если пользователь подтвердил смену).
 pub fn remember(host_id: &str, fp: &str) {
+    // Читаем и пишем под замком: см. `lock()`.
+    let _guard = lock().lock().unwrap_or_else(|e| e.into_inner());
     let mut data = read();
     if let Some(o) = data.as_object_mut() {
         o.insert(host_id.to_string(), json!(fp));
@@ -86,6 +101,7 @@ pub fn list() -> Vec<Value> {
 }
 
 pub fn forget(host_id: &str) -> bool {
+    let _guard = lock().lock().unwrap_or_else(|e| e.into_inner());
     let mut data = read();
     let removed = data
         .as_object_mut()
@@ -141,6 +157,7 @@ pub fn import_openssh() -> Result<usize, String> {
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("Не удалось прочитать {}: {e}", path.display()))?;
 
+    let _guard = lock().lock().unwrap_or_else(|e| e.into_inner());
     let mut data = read();
     let mut added = 0usize;
     if let Some(o) = data.as_object_mut() {
