@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Манифест только для того, чтобы Windows дал ComCtl32 версии 6.
+
+  Зачем: wry (окно Tauri) импортирует SetWindowSubclass, RemoveWindowSubclass,
+  DefSubclassProc и TaskDialogIndirect — их экспортирует только шестая версия. Без
+  манифеста загрузчик подставляет comctl32 5.82 из System32, четырёх функций там нет,
+  и процесс умирает ещё до main с STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139).
+
+  Приложению манифест встраивает сам Tauri, а тестовому бинарю — некому. Из-за этого
+  ЛЮБОЙ тест, который хотя бы упоминает `tauri::AppHandle`, ронял весь тестовый бинарь
+  крейта — а `AppHandle` лежит внутри `ClientHandler`, то есть внутри SSH-слоя. Поэтому
+  `ssh.rs`, `tunnels.rs`, `sftp.rs`, `vault.rs` и `backup.rs` не были покрыты тестами
+  вовсе: не «руки не дошли», а физически не собиралось.
+
+  Подключается через `.cargo/config.toml`, чтобы попасть во все линкуемые артефакты,
+  включая тестовые.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>
