@@ -786,3 +786,94 @@ impl OpHub {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("рантайм")
+    }
+
+    /// Сторож блокера, из-за которого весь SSH-слой был непокрываем.
+    ///
+    /// `AppHandle` лежит внутри `ClientHandler`, а его упоминание тянет в бинарь GUI-импорты
+    /// wry, которым нужен comctl32 версии 6. Пока манифест не встраивался в тестовый бинарь,
+    /// это роняло ВСЕ тесты крейта ещё на загрузке (STATUS_ENTRYPOINT_NOT_FOUND) — не только
+    /// новый. Если тест снова начнёт падать, причина будет в `build.rs`, а не в самом тесте.
+    #[test]
+    fn tauri_types_do_not_break_the_test_binary() {
+        let none: Option<tauri::AppHandle> = None;
+        assert!(none.is_none());
+        assert!(std::mem::size_of::<ClientHandler>() > 0);
+    }
+
+    #[test]
+    fn port_defaults_to_22_and_survives_junk() {
+        assert_eq!(port_of(&json!({})), 22);
+        assert_eq!(port_of(&json!({ "port": 2222 })), 2222);
+        // Порт строкой (так приезжает из некоторых импортов) — не повод падать.
+        assert_eq!(port_of(&json!({ "port": "2222" })), 22);
+    }
+
+    #[test]
+    fn agent_forwarding_follows_the_auth_type() {
+        // Явный флаг.
+        assert!(wants_agent_forward(&json!({ "agentForward": true })));
+        // Авторизация агентом подразумевает проброс без отдельной галочки: иначе на
+        // втором хопе агента уже нет, и цепочка обрывается посреди пути.
+        assert!(wants_agent_forward(&json!({ "authType": "agent" })));
+        assert!(!wants_agent_forward(&json!({ "authType": "password" })));
+        assert!(!wants_agent_forward(&json!({})));
+    }
+
+    #[test]
+    fn empty_chain_is_rejected_before_any_network_call() {
+        match rt().block_on(connect_client(Vec::new())) {
+            Ok(_) => panic!("пустая цепочка не должна подключаться"),
+            Err(e) => assert!(e.contains("Пустая цепочка"), "{e}"),
+        }
+    }
+
+    #[test]
+    fn missing_host_is_a_readable_error() {
+        match rt().block_on(connect_client(vec![json!({ "username": "root" })])) {
+            Ok(_) => panic!("без host подключаться некуда"),
+            Err(e) => assert!(e.contains("host"), "{e}"),
+        }
+    }
+
+    #[test]
+    fn closed_port_fails_with_an_explanation_not_a_hang() {
+        // Порт 1 закрыт на любой машине. Проверяем, что стек доходит до сети и возвращает
+        // объяснимую ошибку, а не панику и не бесконечное ожидание.
+        let res = rt().block_on(connect_client(vec![
+            json!({ "host": "127.0.0.1", "port": 1, "username": "nobody", "connectTimeout": 5 }),
+        ]));
+        match res {
+            Ok(_) => panic!("на закрытый порт подключиться было нельзя"),
+            Err(e) => {
+                assert!(e.contains("127.0.0.1"), "в ошибке должен быть хост: {e}");
+                assert!(e.len() > 10, "ошибка должна что-то объяснять: {e}");
+            }
+        }
+    }
+
+    #[test]
+    fn cancel_flag_wakes_the_waiter() {
+        let (tx, rx) = watch::channel(false);
+        let woke = rt().block_on(async move {
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                let _ = tx.send(true);
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(2), wait_cancel(rx))
+                .await
+                .is_ok()
+        });
+        assert!(woke, "ожидание отмены должно завершаться, а не висеть");
+    }
+}
