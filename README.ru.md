@@ -130,9 +130,9 @@ Windows · без своего Chromium (системный WebView2) ·
 | Требование | Ответ |
 | --- | --- |
 | Система | Windows 10 x64 **22H2+** или Windows 11 x64; Linux x64 (`.deb` / AppImage). macOS пока нет |
-| WebView2 | уже есть в актуальном Windows; отдельно ставить не нужно |
+| Веб-рантайм | WebView2 на Windows (уже есть в системе); `webkit2gtk-4.1` на Linux (ставится вместе с `.deb`) |
 | Права | администратор для повседневной работы не нужен |
-| Сборка из исходников | Node **18.18+** (проверено на 24.16), Rust **stable** `x86_64-pc-windows-msvc` (проверено на 1.96.0), Tauri CLI **2.11.x** |
+| Сборка из исходников | Node **18.18+** (проверено на 24.16), Rust **stable** (`x86_64-pc-windows-msvc` / `x86_64-unknown-linux-gnu`), Tauri CLI **2.11.x**. Для Linux нужен ещё `libudev-dev` — см. [LINUX_MIGRATION.md](docs/LINUX_MIGRATION.md) |
 | SSH-агент | пароль, файл ключа, **SSH-агент** или keyboard-interactive |
 
 Матрица и smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
@@ -220,12 +220,17 @@ npm run smoke
 
 ## Данные и диагностика
 
-Профили, секреты, known_hosts, vault — в `%APPDATA%\serein\`
-(`servers.json`, `secrets.json`, `vault.json`, `known_hosts.json`, …).
+Профили, секреты, known_hosts, vault — в `%APPDATA%\serein\` на Windows и
+`~/.config/serein/` на Linux (`servers.json`, `secrets.json`, `vault.json`,
+`known_hosts.json`, …). **Настройки показывают текущий путь** — это первое, что стоит
+посмотреть, если список серверов вдруг пуст: запуск с другим `HOME` открывает другой профиль.
 
-Секреты в UI-слой не едут. Запись вывода терминала включается по сессии и ложится
-в `%APPDATA%\serein\logs` без ANSI; общего лог-файла приложения пока нет — для него
-смотри вывод `npm run tauri dev`.
+Секреты в UI-слой не едут. На Windows содержимое шифруется DPAPI и лежит в файле, на Linux —
+хранится в **связке ключей**, а в файле только ссылка `kr:{uuid}`. Поэтому секреты с Windows
+на Linux не переезжают, а там, где Secret Service не запущен, нужен мастер-пароль.
+
+Запись вывода терминала включается по сессии и ложится в подкаталог `logs` без ANSI; общего
+лог-файла приложения пока нет — для него смотри вывод `npm run tauri dev`.
 
 ---
 

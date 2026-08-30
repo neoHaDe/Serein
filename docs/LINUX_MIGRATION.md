@@ -63,7 +63,7 @@ signature is produced on the Windows release host, and it does not block bundlin
 
 - Linux keeps the payload in the **keyring**; `servers.json` only holds a `kr:{uuid}` handle.
 - **No Secret Service running** (headless, minimal desktop) means secrets are only stored
-  when a master password is set — the master-encrypted `mpk:` blob is safe to write to disk
+  when a master password is set — the master-encrypted `mk:` blob is safe to write to disk
   on its own. Without either, nothing is saved, exactly as on Windows without DPAPI.
 - **Windows DPAPI secrets do not migrate.** A backup restored from Windows brings the
   profiles across but not the passwords, and any `privateKeyPath` still points at `C:\…`.

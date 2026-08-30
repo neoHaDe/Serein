@@ -130,9 +130,9 @@ Target: install → first session in under two minutes.
 | Need | Answer |
 | --- | --- |
 | OS | Windows 10 x64 **22H2+** or Windows 11 x64; Linux x64 (`.deb` / AppImage). No macOS yet |
-| WebView2 | already on current Windows; nothing extra to install |
+| Web runtime | WebView2 on Windows (already there); `webkit2gtk-4.1` on Linux (pulled in by the `.deb`) |
 | Privileges | admin is not required for daily use |
-| Build from source | Node **18.18+** (tested on 24.16), Rust **stable** `x86_64-pc-windows-msvc` (tested on 1.96.0), Tauri CLI **2.11.x** |
+| Build from source | Node **18.18+** (tested on 24.16), Rust **stable** (`x86_64-pc-windows-msvc` / `x86_64-unknown-linux-gnu`), Tauri CLI **2.11.x**. Linux also needs `libudev-dev` — see [LINUX_MIGRATION.md](docs/LINUX_MIGRATION.md) |
 | SSH agent | password, key file, **SSH agent**, or keyboard-interactive |
 
 Matrix and smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
@@ -221,12 +221,18 @@ npm run smoke
 
 ## Data and diagnostics
 
-Profiles, secrets, known_hosts, vault live in `%APPDATA%\serein\`
-(`servers.json`, `secrets.json`, `vault.json`, `known_hosts.json`, …).
+Profiles, secrets, known_hosts, vault live in `%APPDATA%\serein\` on Windows and
+`~/.config/serein/` on Linux (`servers.json`, `secrets.json`, `vault.json`,
+`known_hosts.json`, …). **Settings shows the exact path in use** — worth checking when the
+server list looks empty, because a launcher with a different `HOME` opens a different profile.
 
-Secrets never go to the UI. Per-session terminal logs can be switched on and land in
-`%APPDATA%\serein\logs` with ANSI stripped; there is no application-wide log file yet —
-for that, use `npm run tauri dev` output.
+Secrets never go to the UI. On Windows the payload is encrypted with DPAPI and stored in the
+file; on Linux it lives in the **keyring** and the file only holds a `kr:{uuid}` handle — so
+Windows secrets do not travel to a Linux machine, and a master password is required where no
+Secret Service is running.
+
+Per-session terminal logs can be switched on and land in the `logs` subfolder with ANSI
+stripped; there is no application-wide log file yet — for that, use `npm run tauri dev` output.
 
 ---
 
