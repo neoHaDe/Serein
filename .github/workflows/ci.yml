@@ -84,3 +84,23 @@ jobs:
 
       - name: smoke
         run: npm run smoke:linux
+
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Единственная часть проверки, которая устаревает сама по себе: база уязвимостей
+      # пополняется, даже когда в коде ничего не меняется. Поэтому отдельной джобой,
+      # а не шагом внутри сборки.
+      #
+      # Ставим сам cargo-audit, а не готовое действие: тому нужны права на запись
+      # в issues и checks, а нам достаточно упасть с ненулевым кодом.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit
+        run: cargo audit --file src-tauri/Cargo.lock
