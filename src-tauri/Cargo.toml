@@ -43,6 +43,8 @@ sha2 = "0.10"
 rand = "0.8"
 ssh-key = { version = "0.6", features = ["ed25519", "rsa", "encryption", "std", "getrandom"] }
 open = "5"
+# Уже в дереве через aes-gcm и ssh-key — новой поверхности не добавляет.
+zeroize = "1"
 dunce = "1"
 
 [target.'cfg(not(windows))'.dependencies]

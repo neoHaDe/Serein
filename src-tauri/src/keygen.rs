@@ -44,17 +44,44 @@ fn ensure_nl(s: &str) -> String {
     }
 }
 
+/// Закрыть приватный ключ от всех, кроме владельца.
+///
+/// На unix это `0600` — как того и требует OpenSSH. На Windows прав у файла нет, есть
+/// список доступа, и он наследуется от каталога: ключ, сохранённый мимо профиля
+/// пользователя (общая папка, диск с данными), окажется читаем шире, чем нужно.
+/// Тот же OpenSSH под Windows потом откажется такой ключ использовать.
+///
+/// Правим через `icacls`: снимаем наследование и оставляем полный доступ только текущему
+/// пользователю. Аргументы передаём отдельными, без оболочки, — путь может содержать
+/// пробелы и любые символы.
+fn restrict_private_key(path: &str) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let Ok(user) = std::env::var("USERNAME") else { return };
+        let _ = std::process::Command::new("icacls")
+            .arg(path)
+            .arg("/inheritance:r")
+            .arg("/grant:r")
+            .arg(format!("{user}:F"))
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+    }
+}
+
 pub fn save_to(path: &str, key: &Value) -> Result<Value, String> {
     let private = key.get("privateKey").and_then(|v| v.as_str()).unwrap_or("");
     let public = key.get("publicKey").and_then(|v| v.as_str()).unwrap_or("");
     let pub_path = format!("{path}.pub");
     std::fs::write(path, ensure_nl(private)).map_err(|e| e.to_string())?;
     std::fs::write(&pub_path, ensure_nl(public)).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
+    restrict_private_key(path);
     Ok(json!({ "saved": true, "privatePath": path, "publicPath": pub_path }))
 }
 
