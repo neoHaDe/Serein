@@ -74,6 +74,36 @@ signature is produced on the Windows release host, and it does not block bundlin
 `~/.config/serein/` — `servers.json`, `settings.json`, `known_hosts.json`, and the rest,
 mirroring `%APPDATA%\serein` on Windows.
 
+## Auto-update
+
+Tauri can only update an **AppImage** on Linux. A `.deb` puts the binary in `/usr/bin/serein`,
+owned by dpkg — the app cannot write there and should not try. The updater detects this
+(`app_install_kind` looks for the `APPIMAGE` environment variable) and, for a package install,
+reports the new version and offers the release link instead of an install that would fail.
+
+The private signing key stays on the Windows release host. A Tauri signature is minisign over
+the artifact bytes, so it can be produced after the build — there is no reason to copy the key
+onto the build VM. Release procedure:
+
+```bash
+# on the Linux build host
+./scripts/build-linux.sh
+# copy Serein_<version>_amd64.AppImage to the Windows host, into
+#   src-tauri/target/release/bundle/appimage/
+
+# on the Windows host, after the Windows bundle is built
+npm run manifest -- 1.2.6 "заметки к релизу"
+```
+
+`scripts/make-update-manifest.mjs` signs whatever is not signed yet, writes `latest.json` with
+one entry per platform pointing at the GitHub release, and prints the `scp` line for the site.
+Both platforms must be signed with the **same** key: the public half is baked into the app and
+verifies updates on Windows and Linux alike.
+
+The manifest lives at `/mnt/material/site/updates/terminal/latest.json` on the home server and
+is served read-only from the site container; nginx already sends `no-cache` for it, so a replaced
+file takes effect immediately. Only the JSON goes to the site — binaries stay on GitHub.
+
 ## Known gaps
 
 - Drag-and-drop of files **out of** SFTP to the desktop is Windows-only (the `drag` crate).
