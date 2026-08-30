@@ -95,6 +95,14 @@ onto the build VM. Release procedure:
 npm run manifest -- 1.2.6 "заметки к релизу"
 ```
 
+If the signing step inside the script fails with exit code 2 and a bare `try '--help'`, the flags
+are fine — `npm run tauri -- signer sign …` mangles the arguments on Windows. Sign the file once by
+hand and re-run the script; it skips artifacts that already have a `.sig`:
+
+```bash
+npx tauri signer sign -f .tauri/terminal.key -p "<password>" <artifact>
+```
+
 `scripts/make-update-manifest.mjs` signs whatever is not signed yet, writes `latest.json` with
 one entry per platform pointing at the GitHub release, and prints the `scp` line for the site.
 Both platforms must be signed with the **same** key: the public half is baked into the app and
