@@ -35,11 +35,6 @@ pub fn derive_key_with(password: &str, salt: &[u8], k: Kdf) -> [u8; 32] {
     out
 }
 
-/// Прежний набор параметров. Оставлен для хранилищ, созданных старыми сборками.
-pub fn derive_key(password: &str, salt: &[u8]) -> [u8; 32] {
-    derive_key_with(password, salt, KDF_LEGACY)
-}
-
 fn rand_bytes(n: usize) -> Vec<u8> {
     let mut v = vec![0u8; n];
     rand::thread_rng().fill_bytes(&mut v);
@@ -156,6 +151,13 @@ fn open_packet(buf: &[u8], password: &str, k: Kdf) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    /// Быстрый набор параметров для проверок, где важна не стойкость,
+    /// а само поведение вывода ключа. Прогонять их на боевых 2^17 — держать
+    /// набор тестов медленным без всякой пользы.
+    fn key(pw: &str, salt: &[u8]) -> [u8; 32] {
+        derive_key_with(pw, salt, KDF_LEGACY)
+    }
+
     /// Пакеты, созданные прежними сборками, обязаны читаться и после подъёма стойкости.
     /// Иначе смена параметров молча превращает все бэкапы пользователя в мусор.
     #[test]
@@ -218,15 +220,15 @@ mod tests {
 
     #[test]
     fn aes_round_trip_with_explicit_key() {
-        let key = derive_key("pw", &[7u8; 16]);
+        let key = key("pw", &[7u8; 16]);
         let packed = aes_encrypt("hello", &key).expect("шифрование");
         assert_eq!(aes_decrypt(&packed, &key).expect("расшифровка"), "hello");
     }
 
     #[test]
     fn aes_decrypt_with_other_key_fails() {
-        let k1 = derive_key("pw", &[1u8; 16]);
-        let k2 = derive_key("pw", &[2u8; 16]);
+        let k1 = key("pw", &[1u8; 16]);
+        let k2 = key("pw", &[2u8; 16]);
         let packed = aes_encrypt("hello", &k1).expect("шифрование");
         assert!(aes_decrypt(&packed, &k2).is_err());
     }
@@ -235,16 +237,16 @@ mod tests {
     fn derive_key_is_deterministic_and_salt_sensitive() {
         // Та же пара (пароль, соль) — тот же ключ, иначе хранилище не откроется
         // после перезапуска. Разная соль — разный ключ, иначе соль бесполезна.
-        assert_eq!(derive_key("pw", &[9u8; 16]), derive_key("pw", &[9u8; 16]));
-        assert_ne!(derive_key("pw", &[9u8; 16]), derive_key("pw", &[8u8; 16]));
-        assert_ne!(derive_key("pw1", &[9u8; 16]), derive_key("pw2", &[9u8; 16]));
+        assert_eq!(key("pw", &[9u8; 16]), key("pw", &[9u8; 16]));
+        assert_ne!(key("pw", &[9u8; 16]), key("pw", &[8u8; 16]));
+        assert_ne!(key("pw1", &[9u8; 16]), key("pw2", &[9u8; 16]));
     }
 
     #[test]
     fn corrupted_package_fails_gracefully() {
         // Битый файл хранилища должен давать Err, а не панику: паника в Tauri
         // роняет команду целиком и пользователь видит пустое окно без объяснения.
-        let key = derive_key("pw", &[3u8; 16]);
+        let key = key("pw", &[3u8; 16]);
         for bad in ["", "не-base64!!", "AAAA", "***"] {
             assert!(aes_decrypt(bad, &key).is_err(), "должно быть Err на {:?}", bad);
         }
