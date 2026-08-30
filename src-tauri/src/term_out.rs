@@ -15,6 +15,13 @@ use tokio::sync::Notify;
 const BATCH_BYTES: usize = 48 * 1024;
 const BATCH_MS: u64 = 16;
 const MAX_PENDING: usize = 4 * 1024 * 1024;
+/// Сколько последнего вывода держим для повторного показа.
+///
+/// Экран терминала живёт внутри окна: вкладку открепили или вернули — окно другое,
+/// xterm новый и пустой, хотя сессия та же. Шелл сам себя не перерисует, так что
+/// последнее, что он напечатал, помним мы. 256 КБ — это заметно больше экрана даже
+/// на большом мониторе, но не столько, чтобы об этом думать.
+const REPLAY_BYTES: usize = 256 * 1024;
 
 struct State {
     buf: Vec<u8>,
@@ -126,6 +133,7 @@ impl TermOut {
                 self.emits.fetch_add(1, Ordering::Relaxed);
                 self.bytes.fetch_add(chunk.len() as u64, Ordering::Relaxed);
                 log_write(&id, &chunk);
+                replay_push(&id, &chunk);
                 let _ = app.emit("session-data", json!({ "id": id, "data": chunk }));
             }
             if stats && last_stats.elapsed() >= Duration::from_secs(2) {
@@ -180,6 +188,40 @@ fn take_utf8(buf: &mut Vec<u8>) -> String {
                 s
             }
         }
+    }
+}
+
+// ---------- Хвост вывода для нового окна ----------
+
+fn replays() -> &'static Mutex<HashMap<String, String>> {
+    static REPLAYS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    REPLAYS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn replay_push(id: &str, chunk: &str) {
+    let Ok(mut g) = replays().lock() else { return };
+    let buf = g.entry(id.to_string()).or_default();
+    buf.push_str(chunk);
+    if buf.len() > REPLAY_BYTES {
+        // Режем по границе символа: половина UTF-8 в начале — мусор на экране.
+        let cut = buf.len() - REPLAY_BYTES;
+        let start = (cut..buf.len()).find(|i| buf.is_char_boundary(*i)).unwrap_or(buf.len());
+        buf.drain(..start);
+    }
+}
+
+/// Что сессия уже напечатала — чтобы новый терминал не открывался пустым.
+pub fn replay(id: &str) -> String {
+    replays()
+        .lock()
+        .map(|g| g.get(id).cloned().unwrap_or_default())
+        .unwrap_or_default()
+}
+
+/// Сессия закончилась — держать её вывод больше незачем.
+pub fn replay_forget(id: &str) {
+    if let Ok(mut g) = replays().lock() {
+        g.remove(id);
     }
 }
 
@@ -367,6 +409,24 @@ mod tests {
         let mut out = String::new();
         strip_ansi_into(&mut st, "\x1b]0;заголовок\x07готово", &mut out);
         assert_eq!(out, "готово");
+    }
+
+    #[test]
+    fn replay_keeps_the_tail_and_never_splits_a_char() {
+        let id = "replay-test";
+        super::replay_forget(id);
+        // Гоним заведомо больше лимита, причём многобайтовыми символами: если резать
+        // по байтам, в начале останется хвост символа и терминал покажет «».
+        for _ in 0..40_000 {
+            super::replay_push(id, "щи");
+        }
+        let tail = super::replay(id);
+        assert!(tail.len() <= super::REPLAY_BYTES + 4, "{}", tail.len());
+        assert!(tail.len() > super::REPLAY_BYTES / 2);
+        assert!(tail.ends_with("щи"));
+        assert!(tail.chars().all(|c| c == 'щ' || c == 'и'));
+        super::replay_forget(id);
+        assert_eq!(super::replay(id), "");
     }
 
     #[test]

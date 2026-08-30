@@ -294,7 +294,28 @@ export function TerminalView({
         if (e.sessionStarted && e.sessionId === attach) return
         e.sessionStarted = true
         e.sessionId = attach
-        e.offData = bindWriter(attach, (data) => e.term.write(data))
+        // Подключаемся к уже живой сессии — экран у неё есть, а у нового xterm его нет:
+        // вкладка приехала из другого окна. Сначала проигрываем то, что уже было
+        // напечатано, и только потом отдаём живой поток, иначе свежие байты встанут
+        // перед историей. Подписываемся при этом сразу, чтобы ничего не потерять.
+        let replayed = false
+        const held: string[] = []
+        e.offData = bindWriter(attach, (data) => {
+          if (replayed) e.term.write(data)
+          else held.push(data)
+        })
+        const release = (): void => {
+          replayed = true
+          for (const d of held) e.term.write(d)
+          held.length = 0
+        }
+        window.api.session
+          .replay(attach)
+          .then((text) => {
+            if (text) e.term.write(text)
+          })
+          .catch(() => {})
+          .finally(release)
         onReady(paneId, attach)
         return
       }

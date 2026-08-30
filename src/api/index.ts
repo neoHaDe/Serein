@@ -117,6 +117,8 @@ export const api = {
       rows?: number
     }): Promise<string> => invoke('session_open_tcp', { p }),
     ping: (id: string): Promise<number | null> => invoke('session_ping', { id }),
+    /** Что сессия уже напечатала: новый терминал на живой сессии не должен быть пустым. */
+    replay: (id: string): Promise<string> => invoke('session_replay', { id }),
     monitor: (id: string): Promise<ServerMetrics> => invoke('session_monitor', { id }),
     logStatus: (id: string): Promise<boolean> => invoke('session_log_status', { id }),
     logToggle: (id: string, title: string): Promise<{ logging: boolean; path?: string }> =>

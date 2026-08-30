@@ -79,6 +79,7 @@ impl AppState {
         self.edit.stop_session(id);
         self.transfers.cancel_session(id);
         self.ops.cancel_prefix(&format!("{id}:"));
+        term_out::replay_forget(id);
         if let Some(tx) = self.ki.lock().unwrap().remove(id) {
             drop(tx);
         }
@@ -478,6 +479,15 @@ fn session_resize(state: State<'_, AppState>, p: Value) {
 #[tauri::command]
 fn session_close(app: AppHandle, state: State<'_, AppState>, id: String) {
     state.teardown(&app, &id, true);
+}
+
+/// Хвост вывода сессии.
+///
+/// Нужен, когда вкладка переезжает между окнами: сессия та же, а xterm новый и пустой —
+/// шелл ничего не перерисует, пока не нажмёшь Enter. Отдаём то, что уже было на экране.
+#[tauri::command]
+fn session_replay(id: String) -> String {
+    term_out::replay(&id)
 }
 
 #[tauri::command]
@@ -1311,7 +1321,7 @@ pub fn run() {
             layout_get, layout_set, aux_layout_get, aux_layout_set,
             localfs_home, localfs_parent, localfs_list, localfs_copy_into,
             session_open_local, session_open_ssh, session_write, session_resize, session_close,
-            session_ping, session_monitor, session_ki_respond,
+            session_ping, session_replay, session_monitor, session_ki_respond,
             session_log_status, session_log_toggle, ssh_agent_identities,
             session_hostkey_respond, knownhosts_list, knownhosts_forget, knownhosts_import,
             serial_ports, session_open_serial, serial_send_break, serial_set_signal,
