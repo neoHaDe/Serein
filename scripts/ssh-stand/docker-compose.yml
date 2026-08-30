@@ -1,0 +1,29 @@
+# Стенд из настоящих SSH-серверов для интеграционных тестов.
+#
+# Зачем два образа, а не один: Debian даёт обычный OpenSSH, Alpine — BusyBox-окружение,
+# где нет половины привычных утилит. Ровно на таких машинах (роутеры, встраиваемые
+# системы) и ломаются вещи, которые на Debian работают.
+#
+# Порты высокие и нестандартные, чтобы не столкнуться с настоящим sshd на хосте.
+name: serein-ssh-stand
+
+services:
+  debian:
+    build:
+      context: .
+      dockerfile: Dockerfile.debian
+    ports:
+      - "127.0.0.1:2201:22"
+    # Ключи хоста генерируются при старте контейнера: тесты проверяют в том числе
+    # поведение при первой встрече с незнакомым ключом, и для этого он должен быть новым.
+    volumes:
+      - ./.stand/authorized_keys:/keys/authorized_keys:ro
+
+  alpine:
+    build:
+      context: .
+      dockerfile: Dockerfile.alpine
+    ports:
+      - "127.0.0.1:2202:22"
+    volumes:
+      - ./.stand/authorized_keys:/keys/authorized_keys:ro

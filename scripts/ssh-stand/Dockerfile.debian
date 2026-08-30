@@ -1,0 +1,18 @@
+# Обычный OpenSSH на Debian — «нормальный» сервер, с которым всё должно работать.
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-server \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /run/sshd
+
+# Пользователь один, а способов войти два: пароль и ключ. Так одна машина закрывает
+# сразу две строки матрицы авторизации.
+RUN useradd -m -s /bin/bash probe && echo 'probe:probe-pass' | chpasswd
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 22
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/usr/sbin/sshd", "-D", "-e"]

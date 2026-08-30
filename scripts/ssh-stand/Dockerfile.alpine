@@ -1,0 +1,14 @@
+# BusyBox-окружение: здесь нет bash, а часть привычных утилит — урезанные апплеты.
+# Именно на таких машинах ломается то, что на Debian работает молча.
+FROM alpine:3.20
+
+RUN apk add --no-cache openssh-server \
+ && adduser -D -s /bin/sh probe \
+ && echo 'probe:probe-pass' | chpasswd
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 22
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/usr/sbin/sshd", "-D", "-e"]

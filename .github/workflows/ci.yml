@@ -86,6 +86,58 @@ jobs:
       - name: smoke
         run: npm run smoke:linux
 
+  # Матрица авторизации против настоящих SSH-серверов в Docker. Отдельной джобой, потому
+  # что это единственная часть CI, которой нужен Docker, и падать она должна отдельно от
+  # быстрых проверок — по красному крестику сразу видно, сеть это или компиляция.
+  ssh-stand:
+    name: SSH-стенд (интеграция)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libudev-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Поднять стенд
+        run: ./scripts/ssh-stand/up.sh
+
+      # Профиль уводим во временный каталог: тесты подтверждают ключи хостов, то есть
+      # пишут в профиль, и делать это в домашнем каталоге раннера незачем.
+      - name: Прогнать матрицу
+        env:
+          SEREIN_CONFIG_DIR: ${{ runner.temp }}/serein-profile
+          SEREIN_STAND_HOST: 127.0.0.1
+          SEREIN_STAND_DEBIAN_PORT: "2201"
+          SEREIN_STAND_ALPINE_PORT: "2202"
+          SEREIN_STAND_ALPINE_INTERNAL: alpine
+          SEREIN_STAND_USER: probe
+          SEREIN_STAND_PASSWORD: probe-pass
+        run: |
+          export SEREIN_STAND_KEY="$GITHUB_WORKSPACE/scripts/ssh-stand/.stand/id_ed25519"
+          cargo test --manifest-path src-tauri/Cargo.toml --test ssh_stand --locked -- --ignored
+
+      - name: Логи стенда при падении
+        if: failure()
+        run: docker compose -f scripts/ssh-stand/docker-compose.yml logs
+
+      - name: Погасить стенд
+        if: always()
+        run: ./scripts/ssh-stand/down.sh
+
   audit:
     name: cargo audit
     runs-on: ubuntu-22.04
