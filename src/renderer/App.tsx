@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import type { HostKeyRequest, KIPrompt, SavedAuxWindow, SerializedPane, SerializedTab, ServerConfig, WorkspaceTool } from '../shared/types'
+import type { SavedAuxWindow, SerializedPane, SerializedTab, ServerConfig, WorkspaceTool } from '../shared/types'
 import { paneKindOf, parseWorkspaceTool } from '../shared/types'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { PaneView } from './components/PaneView'
+import { useReconnect } from './hooks/useReconnect'
+import { useServerPrompts } from './hooks/useServerPrompts'
 import { ServerWorkspace } from './components/ServerWorkspace'
 import { ServerForm } from './components/ServerForm'
 import { SettingsModal } from './components/SettingsModal'
@@ -111,7 +113,6 @@ function findTabKeyBySession(tabs: Tab[], sessionId: string): string | undefined
   return undefined
 }
 
-const RECONNECT_MAX = 5
 
 export default function App(): JSX.Element {
   const [servers, setServers] = useState<ServerConfig[]>([])
@@ -125,9 +126,8 @@ export default function App(): JSX.Element {
   const [sftpWidth, setSftpWidth] = useState(380)
   const [sidebarWidth, setSidebarWidth] = useState(270)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [kiRequest, setKiRequest] = useState<{ id: string; prompts: KIPrompt[] } | null>(null)
+  const prompts = useServerPrompts()
   // Вопросы про ключ хоста копим очередью: цепочка jump-хостов может спросить несколько раз.
-  const [hostKeyQueue, setHostKeyQueue] = useState<HostKeyRequest[]>([])
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [multiExec, setMultiExec] = useState(false)
   const [showPuttyImport, setShowPuttyImport] = useState(true)
@@ -201,118 +201,18 @@ export default function App(): JSX.Element {
     reloadServers()
   }, [reloadServers])
 
-  // Обновление статуса/завершения сессий — патчим соответствующий лист по sessionId.
-  const clearReconnect = useCallback((paneId: string) => {
-    const timer = reconnectTimers.current.get(paneId)
-    if (timer) {
-      clearTimeout(timer)
-      reconnectTimers.current.delete(paneId)
-    }
-    reconnectAttempts.current.delete(paneId)
-  }, [])
-
-  const reconnectPane = useCallback((tabKey: string, paneId: string) => {
-    setTabs((prev) =>
-      prev.map((t) =>
-        t.key === tabKey
-          ? {
-              ...t,
-              root: updateLeaf(t.root, paneId, (l) => ({
-                gen: l.gen + 1,
-                status: 'connecting',
-                statusMsg: undefined,
-                sessionId: undefined
-              }))
-            }
-          : t
-      )
-    )
-  }, [])
-
-  const scheduleReconnect = useCallback(
-    (tabKey: string, paneId: string) => {
-      const prevTimer = reconnectTimers.current.get(paneId)
-      if (prevTimer) {
-        clearTimeout(prevTimer)
-        reconnectTimers.current.delete(paneId)
-      }
-      const n = (reconnectAttempts.current.get(paneId) ?? 0) + 1
-      if (n > RECONNECT_MAX) {
-        reconnectAttempts.current.delete(paneId)
-        setTabs((prev) =>
-          prev.map((t) =>
-            t.key === tabKey
-              ? {
-                  ...t,
-                  root: updateLeaf(t.root, paneId, {
-                    status: 'error',
-                    statusMsg: `Не удалось переподключить после ${RECONNECT_MAX} попыток`,
-                    sessionId: undefined
-                  })
-                }
-              : t
-          )
-        )
-        return
-      }
-      reconnectAttempts.current.set(paneId, n)
-      const delay = Math.min(15_000, 1000 * 2 ** (n - 1))
+  // Патч одной панели внутри вкладки. Единственный способ поменять состояние панели
+  // снаружи — через него, поэтому его же отдаём хуку переподключения.
+  const patchPane = useCallback(
+    (tabKey: string, paneId: string, patch: Parameters<typeof updateLeaf>[2]) => {
       setTabs((prev) =>
-        prev.map((t) =>
-          t.key === tabKey
-            ? {
-                ...t,
-                root: updateLeaf(t.root, paneId, {
-                  status: 'reconnecting',
-                  statusMsg: `Переподключение… попытка ${n}/${RECONNECT_MAX}`,
-                  sessionId: undefined
-                })
-              }
-            : t
-        )
-      )
-      const timer = setTimeout(() => {
-        reconnectTimers.current.delete(paneId)
-        reconnectPane(tabKey, paneId)
-      }, delay)
-      reconnectTimers.current.set(paneId, timer)
-    },
-    [reconnectPane]
-  )
-
-  const reconnectPaneManual = useCallback(
-    (tabKey: string, paneId: string) => {
-      const timer = reconnectTimers.current.get(paneId)
-      if (timer) {
-        clearTimeout(timer)
-        reconnectTimers.current.delete(paneId)
-      }
-      reconnectAttempts.current.delete(paneId)
-      reconnectPane(tabKey, paneId)
-    },
-    [reconnectPane]
-  )
-
-  const cancelReconnect = useCallback(
-    (tabKey: string, paneId: string) => {
-      clearReconnect(paneId)
-      setTabs((prev) =>
-        prev.map((t) =>
-          t.key === tabKey
-            ? {
-                ...t,
-                root: updateLeaf(t.root, paneId, {
-                  status: 'closed',
-                  statusMsg: 'Переподключение отменено',
-                  sessionId: undefined
-                })
-              }
-            : t
-        )
+        prev.map((t) => (t.key === tabKey ? { ...t, root: updateLeaf(t.root, paneId, patch) } : t))
       )
     },
-    [clearReconnect]
+    []
   )
+
+  const reconnect = useReconnect({ patchPane })
 
   const handleFail = useCallback(
     (paneId: string, message: string) => {
@@ -320,7 +220,7 @@ export default function App(): JSX.Element {
       if (!tab) return
       const attempts = reconnectAttempts.current.get(paneId) ?? 0
       if (settingsRef.current.autoReconnect && attempts > 0) {
-        scheduleReconnect(tab.key, paneId)
+        reconnect.schedule(tab.key, paneId)
         return
       }
       setTabs((prev) =>
@@ -331,16 +231,10 @@ export default function App(): JSX.Element {
         )
       )
     },
-    [scheduleReconnect]
+    [reconnect]
   )
 
-  useEffect(() => {
-    return window.api.session.onKi((p) => setKiRequest(p))
-  }, [])
 
-  useEffect(() => {
-    return window.api.session.onHostKey((p) => setHostKeyQueue((q) => [...q, p]))
-  }, [])
 
   useEffect(() => {
     const off = window.api.session.onStatus((p) => {
@@ -350,7 +244,7 @@ export default function App(): JSX.Element {
     })
     const offExit = window.api.session.onExit((p) => {
       void window.api.session.close(p.id)
-      let reconnect: { tabKey: string; paneId: string } | null = null
+      let toReconnect: { tabKey: string; paneId: string } | null = null
       for (const t of tabsRef.current) {
         const leaf = allLeaves(t.root).find((l) => l.sessionId === p.id)
         if (!leaf) continue
@@ -359,11 +253,11 @@ export default function App(): JSX.Element {
           leaf.kind === 'ssh' &&
           settingsRef.current.autoReconnect &&
           (leaf.status === 'connected' || leaf.status === 'connecting' || leaf.status === 'reconnecting')
-        if (canAuto) reconnect = { tabKey: t.key, paneId: leaf.id }
+        if (canAuto) toReconnect = { tabKey: t.key, paneId: leaf.id }
         break
       }
-      if (reconnect) {
-        scheduleReconnect(reconnect.tabKey, reconnect.paneId)
+      if (toReconnect) {
+        reconnect.schedule(toReconnect.tabKey, toReconnect.paneId)
         return
       }
       setTabs((prev) =>
@@ -381,7 +275,7 @@ export default function App(): JSX.Element {
       off()
       offExit()
     }
-  }, [scheduleReconnect])
+  }, [reconnect])
 
   const openServerTab = useCallback((server: ServerConfig) => {
     const leaf = makeLeaf(paneKindOf(server), server.name, server.id)
@@ -557,7 +451,7 @@ export default function App(): JSX.Element {
     const tab = tabsRef.current.find((t) => t.key === tabKey)
     const leaf = tab && findLeaf(tab.root, paneId)
     if (leaf?.sessionId) window.api.session.close(leaf.sessionId)
-    clearReconnect(paneId)
+    reconnect.clear(paneId)
     setTabs((prev) => {
       const next: Tab[] = []
       for (const t of prev) {
@@ -573,7 +467,7 @@ export default function App(): JSX.Element {
       setActiveKey((cur) => (next.some((t) => t.key === cur) ? cur : next.length ? next[next.length - 1].key : null))
       return next
     })
-  }, [clearReconnect])
+  }, [reconnect])
 
   const resizeSplit = useCallback((tabKey: string, splitId: string, sizes: [number, number]) => {
     setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, root: updateSplitSizes(t.root, splitId, sizes) } : t)))
@@ -694,7 +588,7 @@ export default function App(): JSX.Element {
     if (tab) {
       for (const l of allLeaves(tab.root)) {
         if (l.sessionId) window.api.session.close(l.sessionId)
-        clearReconnect(l.id)
+        reconnect.clear(l.id)
       }
     }
     setTabs((prev) => {
@@ -702,7 +596,7 @@ export default function App(): JSX.Element {
       setActiveKey((cur) => (cur !== key ? cur : next.length ? next[next.length - 1].key : null))
       return next
     })
-  }, [clearReconnect])
+  }, [reconnect])
 
   const renameTab = useCallback((key: string, title: string) => {
     setTabs((prev) => prev.map((t) => (t.key === key ? { ...t, title } : t)))
@@ -765,14 +659,14 @@ export default function App(): JSX.Element {
         return
       }
 
-      clearReconnect(leaf.id)
+      reconnect.clear(leaf.id)
       setTabs((prev) => {
         const next = prev.filter((t) => t.key !== key)
         setActiveKey((cur) => (cur !== key ? cur : next.length ? next[next.length - 1].key : null))
         return next
       })
     },
-    [clearReconnect]
+    [reconnect]
   )
 
   const startSidebarResize = useCallback(
@@ -1283,7 +1177,7 @@ export default function App(): JSX.Element {
                   panelTitle={panelTitle}
                   tool={tool}
                   onSelectTool={(t) => setWorkspace(tab.key, t)}
-                  onReconnect={() => sshLeaf && reconnectPaneManual(tab.key, sshLeaf.id)}
+                  onReconnect={() => sshLeaf && reconnect.now(tab.key, sshLeaf.id)}
                   onEditServer={() => {
                     const srv = servers.find((x) => x.id === sshLeaf?.serverId)
                     if (srv) setEditing(srv)
@@ -1307,8 +1201,8 @@ export default function App(): JSX.Element {
                       onFail={handleFail}
                       onInput={broadcastInput}
                       onClosePane={(pid) => closePane(tab.key, pid)}
-                      onReconnect={(pid) => reconnectPaneManual(tab.key, pid)}
-                      onCancelReconnect={(pid) => cancelReconnect(tab.key, pid)}
+                      onReconnect={(pid) => reconnect.now(tab.key, pid)}
+                      onCancelReconnect={(pid) => reconnect.cancel(tab.key, pid)}
                       onResizeSplit={(sid, sizes) => resizeSplit(tab.key, sid, sizes)}
                     />
                   }
@@ -1370,29 +1264,16 @@ export default function App(): JSX.Element {
         />
       )}
 
-      {hostKeyQueue.length > 0 && (
-        <HostKeyModal
-          request={hostKeyQueue[0]}
-          onAnswer={(accept) => {
-            const req = hostKeyQueue[0]
-            setHostKeyQueue((q) => q.slice(1))
-            void window.api.session.respondHostKey(req.requestId, accept)
-          }}
-        />
+      {prompts.hostKeyQueue.length > 0 && (
+        <HostKeyModal request={prompts.hostKeyQueue[0]} onAnswer={prompts.answerHostKey} />
       )}
 
-      {kiRequest && (
+      {prompts.ki && (
         <KiModal
-          sessionId={kiRequest.id}
-          prompts={kiRequest.prompts}
-          onSubmit={(answers) => {
-            void window.api.session.respondKi(kiRequest.id, answers)
-            setKiRequest(null)
-          }}
-          onCancel={() => {
-            void window.api.session.respondKi(kiRequest.id, [])
-            setKiRequest(null)
-          }}
+          sessionId={prompts.ki.id}
+          prompts={prompts.ki.prompts}
+          onSubmit={prompts.answerKi}
+          onCancel={prompts.cancelKi}
         />
       )}
     </div>
