@@ -178,6 +178,7 @@ export default function App(): JSX.Element {
         onNewGroup={ops.createGroup}
         onOpenGroups={() => setShowGroups(true)}
         onMultiExec={() => setMultiExec(true)}
+        onPatch={(id, patch) => void ops.patchServer(id, patch)}
         onDropServer={(id, group, index) => void ops.dropServer(id, group, index)}
         onDropGroup={ops.dropGroup}
       />

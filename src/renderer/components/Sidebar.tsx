@@ -2,6 +2,15 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { ServerConfig } from '../../shared/types'
 import { Icon } from './Icon'
 import { ContextMenu, type MenuItem } from './ContextMenu'
+import { ENVS, ENV_LABEL, filterServers } from '../serverFilter'
+import {
+  EMPTY_SELECTION,
+  clickSelect,
+  isSelected,
+  pruneSelection,
+  targetsFor,
+  type Selection
+} from '../selection'
 
 /** Цвет точки по агрегированному статусу подключения сервера. */
 const STATUS_DOT: Record<string, string> = {
@@ -43,6 +52,8 @@ interface Props {
   onOpenGroups: () => void
   /** Выполнить одну команду сразу на нескольких серверах. */
   onMultiExec: () => void
+  /** Точечная правка профиля из списка: избранное и метка среды. */
+  onPatch?: (id: string, patch: Partial<ServerConfig>) => void
   /** Перетаскивание: сервер попал в группу на позицию `index` (в конец, если undefined). */
   onDropServer: (serverId: string, group: string, index?: number) => void
   /** Новый порядок групп целиком — сайдбар знает, что именно нарисовал. */
@@ -50,6 +61,15 @@ interface Props {
 }
 
 /** Подпись под именем: у SSH — user@host, у COM-порта — порт и скорость. */
+/** Подсказка строки: к имени и адресу добавляются среда и теги, если они заданы. */
+function serverTooltip(s: ServerConfig): string {
+  const parts = [`${s.name} — ${serverSubtitle(s)}`]
+  if (s.env) parts.push(`Среда: ${ENV_LABEL[s.env]}`)
+  const tags = s.tags ?? []
+  if (tags.length > 0) parts.push(`Теги: ${tags.join(', ')}`)
+  return parts.join(' · ')
+}
+
 function serverSubtitle(s: ServerConfig): string {
   if (s.connection === 'serial') {
     const cfg = s.serial
@@ -124,10 +144,13 @@ export function Sidebar({
   onNewGroup,
   onOpenGroups,
   onMultiExec,
+  onPatch,
   onDropServer,
   onDropGroup
 }: Props): JSX.Element {
   const [filter, setFilter] = useState('')
+  /** Выделение для групповых действий. Правила — в selection.ts, там же тесты. */
+  const [sel, setSel] = useState<Selection>(EMPTY_SELECTION)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [drag, setDrag] = useState<Drag | null>(null)
   /** Смещение перетаскиваемого элемента за курсором, пиксели. */
@@ -151,15 +174,8 @@ export function Sidebar({
   const movedRef = useRef(false)
 
   const groups = useMemo(() => {
-    const q = filter.trim().toLowerCase()
-    const filtered = servers.filter(
-      (s) =>
-        !q ||
-        s.name.toLowerCase().includes(q) ||
-        s.host.toLowerCase().includes(q) ||
-        s.username.toLowerCase().includes(q) ||
-        (s.serial?.port ?? '').toLowerCase().includes(q)
-    )
+    // Разбор строки поиска (`tag:`, `env:`, `fav`) живёт в serverFilter — он покрыт тестами.
+    const filtered = filterServers(servers, filter)
 
     const map = new Map<string, ServerConfig[]>()
     // Пустые группы тоже показываем — иначе только что созданная сразу пропадала бы.
@@ -186,6 +202,18 @@ export function Sidebar({
 
   const groupsRef = useRef(groups)
   groupsRef.current = groups
+
+  /** Идентификаторы в том порядке, в каком строки сейчас нарисованы. */
+  const visibleIds = useMemo(
+    () => groups.flatMap(([, items]) => items.map((s) => s.id)),
+    [groups]
+  )
+
+  // Выделение чистим от исчезнувшего: сервер удалили или фильтр его спрятал. Иначе
+  // групповое действие тихо применилось бы к тому, чего пользователь уже не видит.
+  useEffect(() => {
+    setSel((prev) => pruneSelection(prev, visibleIds))
+  }, [visibleIds])
 
   // Высота строки сервера — из неё берётся размер подсказки «перетащите сюда».
   // Считаем по живому списку: она зависит от плотности интерфейса в настройках.
@@ -542,25 +570,73 @@ export function Sidebar({
   const openServerMenu = (e: React.MouseEvent, s: ServerConfig): void => {
     e.preventDefault()
     e.stopPropagation()
+    // Действие применяется ко всему выделению, только если щёлкнули внутри него.
+    // Правый клик по чужой строке — это работа с ней одной, а не с прошлым выбором.
+    const ids = targetsFor(sel, s.id)
+    const many = ids.length > 1
+    const suffix = many ? ` (${ids.length})` : ''
+    const forEach = (fn: (id: string) => void): (() => void) => () => ids.forEach(fn)
     const moveItems: MenuItem[] = groupOrder
-      .filter((g) => g !== (s.group?.trim() || UNGROUPED))
-      .map((g) => ({ label: `Перенести в «${g}»`, onClick: () => onDropServer(s.id, g) }))
+      .filter((g) => many || g !== (s.group?.trim() || UNGROUPED))
+      .map((g) => ({
+        label: `Перенести в «${g}»${suffix}`,
+        onClick: forEach((id) => onDropServer(id, g))
+      }))
+    // Метка среды переключается прямо из списка: она нужна раньше, чем кто-то полезет
+    // в форму — чтобы «прод» было видно до того, как в него что-нибудь выполнят.
+    const envItems: MenuItem[] = onPatch
+      ? [
+          ...ENVS.filter((e2) => many || e2 !== s.env).map((e2) => ({
+            label: `Пометить как ${ENV_LABEL[e2]}${suffix}`,
+            onClick: forEach((id) => onPatch(id, { env: e2 }))
+          })),
+          ...(many || s.env
+            ? [
+                {
+                  label: `Снять метку среды${suffix}`,
+                  onClick: forEach((id) => onPatch(id, { env: undefined }))
+                }
+              ]
+            : [])
+        ]
+      : []
     setMenu({
       x: e.clientX,
       y: e.clientY,
       items: [
-        { label: 'Подключиться', onClick: () => onConnect(s) },
-        { label: 'Изменить', onClick: () => onEdit(s) },
+        {
+          label: many ? `Подключиться ко всем${suffix}` : 'Подключиться',
+          onClick: () => ids.forEach((id) => {
+            const cfg = servers.find((x) => x.id === id)
+            if (cfg) onConnect(cfg)
+          })
+        },
+        ...(many ? [] : [{ label: 'Изменить', onClick: () => onEdit(s) }]),
+        ...(onPatch
+          ? [
+              {
+                label: (many || !s.favorite ? 'В избранное' : 'Убрать из избранного') + suffix,
+                onClick: forEach((id) => onPatch(id, { favorite: many ? true : !s.favorite }))
+              },
+              ...(many
+                ? [{ label: `Убрать из избранного${suffix}`, onClick: forEach((id) => onPatch(id, { favorite: undefined })) }]
+                : []),
+              ...envItems
+            ]
+          : []),
         ...moveItems,
         ...(s.group
           ? [{ label: 'Убрать из группы', onClick: () => onDropServer(s.id, UNGROUPED) }]
           : []),
         {
-          label: 'Удалить',
+          label: many ? `Удалить${suffix}` : 'Удалить',
           danger: true,
           separated: true,
           onClick: () => {
-            if (confirm(`Удалить сервер «${s.name}»?`)) onDelete(s.id)
+            const question = many
+              ? `Удалить серверы (${ids.length})? Действие необратимо.`
+              : `Удалить сервер «${s.name}»?`
+            if (confirm(question)) ids.forEach(onDelete)
           }
         }
       ]
@@ -652,7 +728,17 @@ export function Sidebar({
         className="server-list"
         onContextMenu={collapsed ? undefined : openPanelMenu}
       >
-        {!collapsed && emptyList && groupOrder.length === 0 && (
+        {/*
+          Пустой список и пустая выдача фильтра — разные вещи. Раньше на «env:prod» без
+          подходящих серверов выводилось «Серверов пока нет», и выглядело это так, будто
+          профили пропали.
+        */}
+        {!collapsed && emptyList && filter.trim() && (
+          <div className="hint">
+            Ничего не найдено. В поиске работают «tag:web», «env:prod» и «fav».
+          </div>
+        )}
+        {!collapsed && emptyList && !filter.trim() && groupOrder.length === 0 && (
           <div className="hint">Серверов пока нет. Нажмите «+» или кликните правой кнопкой.</div>
         )}
 
@@ -723,6 +809,7 @@ export function Sidebar({
                       data-index={idx}
                       className={
                         'server-item' +
+                        (isSelected(sel, s.id) ? ' selected' : '') +
                         (self ? ' row-drag' : '') +
                         (drag?.kind === 'server' && !self ? ' row-move' : '')
                       }
@@ -732,18 +819,27 @@ export function Sidebar({
                       onPointerDown={(e) =>
                         press(e, { kind: 'server', id: s.id, group, index: idx })
                       }
-                      onClick={
-                        collapsed
-                          ? () => {
-                              if (!movedRef.current) onConnect(s)
-                            }
-                          : undefined
-                      }
+                      onClick={(e) => {
+                        if (movedRef.current) return
+                        // Клик по кнопке строки (звезда, подключение, правка) — это её
+                        // действие, а не работа со списком: выделение он менять не должен.
+                        if ((e.target as HTMLElement).closest('button')) return
+                        if (collapsed) {
+                          onConnect(s)
+                          return
+                        }
+                        setSel((prev) =>
+                          clickSelect(prev, s.id, visibleIds, {
+                            ctrl: e.ctrlKey || e.metaKey,
+                            shift: e.shiftKey
+                          })
+                        )
+                      }}
                       onDoubleClick={() => {
                         if (!movedRef.current) onConnect(s)
                       }}
                       onContextMenu={(e) => openServerMenu(e, s)}
-                      title={`${s.name} — ${serverSubtitle(s)}`}
+                      title={serverTooltip(s)}
                     >
                       <span
                         className="dot-wrap"
@@ -765,10 +861,31 @@ export function Sidebar({
                       {!collapsed && (
                         <>
                           <div className="server-info">
-                            <div className="server-name">{s.name}</div>
+                            <div className="server-name">
+                              {s.favorite && (
+                                <span className="fav-mark" title="В избранном">
+                                  ★
+                                </span>
+                              )}
+                              <span className="server-name-text">{s.name}</span>
+                              {s.env && (
+                                <span className={`env-badge env-${s.env}`} title={`Среда: ${ENV_LABEL[s.env]}`}>
+                                  {ENV_LABEL[s.env]}
+                                </span>
+                              )}
+                            </div>
                             <div className="server-host">{serverSubtitle(s)}</div>
                           </div>
                           <div className="server-actions">
+                            {onPatch && (
+                              <button
+                                className={'mini' + (s.favorite ? ' fav-on' : '')}
+                                title={s.favorite ? 'Убрать из избранного' : 'В избранное'}
+                                onClick={() => onPatch(s.id, { favorite: !s.favorite })}
+                              >
+                                <Icon name="star" size={14} />
+                              </button>
+                            )}
                             <button className="mini" title="Подключиться" onClick={() => onConnect(s)}>
                               <Icon name="play" size={14} />
                             </button>
