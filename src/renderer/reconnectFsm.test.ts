@@ -80,3 +80,36 @@ describe('фаза сбоя решает, повторять ли', () => {
     expect(shouldScheduleReconnect('connect_fail', connecting, on)).toBe(true)
   })
 })
+
+describe('обрыв сессии: границы', () => {
+  // Эти проверки жили в `sessionRules.test.ts` поверх устаревшей обёртки. Обёртку убрали,
+  // а проверки нужны: это границы, на которых ошибка видна пользователю сразу.
+  const on = { autoReconnect: true }
+  const drop = { reason: 'drop' as const }
+  const live = { kind: 'ssh' as const, status: 'connected' as const }
+
+  it('не воскрешает сессию, закрытую пользователем', () => {
+    // Самый заметный из промахов: закрытая вкладка открывалась бы снова.
+    expect(shouldScheduleReconnect('session_drop', live, on, { reason: 'user' })).toBe(false)
+    expect(shouldScheduleReconnect('session_drop', live, on, {})).toBe(false)
+  })
+
+  it('не трогает не-SSH', () => {
+    // У локального терминала просто закончился процесс, у COM-порта и telnet нет
+    // понятия «то же соединение».
+    for (const kind of ['local', 'serial', 'telnet', 'raw'] as const) {
+      expect(shouldScheduleReconnect('session_drop', { kind, status: 'connected' }, on, drop)).toBe(false)
+    }
+  })
+
+  it('переподключает и то, что было на полпути', () => {
+    expect(shouldScheduleReconnect('session_drop', { kind: 'ssh', status: 'connecting' }, on, drop)).toBe(true)
+    expect(shouldScheduleReconnect('session_drop', { kind: 'ssh', status: 'reconnecting' }, on, drop)).toBe(true)
+  })
+
+  it('не повторяет хвост прошлой неудачи', () => {
+    // Панель уже в ошибке или закрыта — это не обрыв рабочего соединения.
+    expect(shouldScheduleReconnect('session_drop', { kind: 'ssh', status: 'error' }, on, drop)).toBe(false)
+    expect(shouldScheduleReconnect('session_drop', { kind: 'ssh', status: 'closed' }, on, drop)).toBe(false)
+  })
+})
