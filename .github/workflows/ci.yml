@@ -1,6 +1,9 @@
 # Одна ветка — master: Linux перестал быть отдельной линией после релиза 1.2.5.
-# Smoke на windows-latest и ubuntu-22.04, плюс проверка зависимостей на уязвимости.
-# Not in CI: tauri build, NSIS/AppImage, live SSH.
+# Not in CI: tauri build, NSIS/AppImage, подпись релиза.
+#
+# Джобы разделены по тому, что именно проверяют, а не по платформам «на всякий случай».
+# Раньше Windows и Linux делали одну и ту же работу целиком, и прогон занимал 17 минут при
+# минуте полезной. Что изменилось и почему — в комментариях у каждой джобы.
 
 name: CI
 
@@ -19,12 +22,21 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Инкрементальная сборка в CI — чистый вред: артефакты огромные, кэш от них пухнет, а
+  # выигрыша нет, потому что каждый прогон начинается с чистого каталога.
+  CARGO_INCREMENTAL: 0
+  # Отладочная информация в CI никому не нужна, а на Windows её генерация и линковка —
+  # заметная часть времени сборки. Сообщения паник от этого не страдают.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
 
 jobs:
-  smoke-windows:
-    name: smoke (Windows)
-    runs-on: windows-latest
-    timeout-minutes: 30
+  # Фронтенд не зависит от платформы, поэтому проверяется один раз на самом быстром
+  # раннере. Раньше `tsc` и `npm audit` гонялись ещё и на Windows — впустую.
+  frontend:
+    name: фронтенд (tsc, npm audit)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -33,14 +45,7 @@ jobs:
           node-version: "22"
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: npm ci
-        run: npm ci
+      - run: npm ci
 
       - name: tsc
         run: npm run typecheck
@@ -55,46 +60,48 @@ jobs:
         continue-on-error: true
         run: npm audit --audit-level=high
 
-      - name: cargo check
-        run: cargo check --manifest-path src-tauri/Cargo.toml --locked
-
-      - name: cargo test
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
-
-  smoke-linux:
-    name: smoke (Linux)
-    runs-on: ubuntu-22.04
+  rust:
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Tauri Linux deps
+      - name: Системные библиотеки Tauri
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libssl-dev \
-            patchelf \
             libudev-dev
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-
-      - uses: dtolnay/rust-toolchain@stable
+      # Версия задана явно и совпадает с `rust-toolchain.toml`. С `@stable` действие ставило
+      # одну версию, а rustup по файлу подтягивал другую — ключ кэша при этом плыл, и кэш
+      # попадал лишь частично («full match: false»), то есть почти всё пересобиралось заново.
+      - uses: dtolnay/rust-toolchain@1.96.0
 
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # Общий ключ со стендом: обе джобы собирают тот же крейт теми же зависимостями,
+          # и держать для них два разных кэша значит греть каждый по отдельности.
+          shared-key: serein-rust
+          cache-all-crates: true
 
-      - name: npm ci
-        run: npm ci
-
-      - name: smoke
-        run: npm run smoke:linux
+      # Только `cargo test`, без отдельного `cargo check`.
+      #
+      # Это была половина времени прогона: `check` компилирует всё дерево ради проверки, а
+      # следом `test` компилирует его же заново под тестовый профиль. Ошибку компиляции
+      # `cargo test` ловит ничуть не хуже — просто на шаг позже.
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
 
   # Матрица авторизации против настоящих SSH-серверов в Docker. Отдельной джобой, потому
   # что это единственная часть CI, которой нужен Docker, и падать она должна отдельно от
@@ -106,7 +113,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Tauri Linux deps
+      - name: Системные библиотеки Tauri
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -116,14 +123,22 @@ jobs:
             libssl-dev \
             libudev-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.96.0
 
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: serein-rust
+          cache-all-crates: true
+
+      # Сначала собираем тесты, потом поднимаем стенд: сборка идёт минуты, стенд — секунды,
+      # и в таком порядке контейнеры живут ровно столько, сколько нужно. Фокусов с запуском
+      # в фоне не делаем: экономия там минута, а способов тихо разъехаться — несколько.
+      - name: Собрать тесты
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test ssh_stand --test sftp_stand --locked --no-run
 
       - name: Поднять стенд
-        run: ./scripts/ssh-stand/up.sh
+        run: bash ./scripts/ssh-stand/up.sh
 
       # Профиль уводим во временный каталог: тесты подтверждают ключи хостов, то есть
       # пишут в профиль, и делать это в домашнем каталоге раннера незачем.
@@ -148,7 +163,7 @@ jobs:
 
       - name: Погасить стенд
         if: always()
-        run: ./scripts/ssh-stand/down.sh
+        run: bash ./scripts/ssh-stand/down.sh
 
   audit:
     name: cargo audit
