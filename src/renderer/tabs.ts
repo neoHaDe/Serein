@@ -7,8 +7,18 @@ import type {
   WorkspaceTool
 } from '../shared/types'
 import { paneKindOf, parseWorkspaceTool } from '../shared/types'
+import type { ReattachSftpPayload, ReattachWorkspacePayload } from './reattach'
 import type { PaneLeaf, PaneNode } from './paneTree'
-import { allLeaves, deserializePane, findLeaf, firstLeaf, makeLeaf, removeLeaf } from './paneTree'
+import {
+  allLeaves,
+  deserializePane,
+  findLeaf,
+  firstLeaf,
+  makeLeaf,
+  removeLeaf,
+  serializePane,
+  splitLeaf
+} from './paneTree'
 
 /**
  * Вкладка и правила её восстановления после перезапуска.
@@ -293,4 +303,184 @@ export function reorderTabs(tabs: Tab[], fromKey: string, toKey: string): Tab[] 
   const [moved] = next.splice(from, 1)
   next.splice(to, 0, moved)
   return next
+}
+
+/** Новая вкладка подключения к серверу. */
+export function makeServerTab(server: ServerConfig): Tab {
+  const leaf = makeLeaf(paneKindOf(server), server.name, server.id)
+  return {
+    key: uid(),
+    title: server.name,
+    kind: 'terminal',
+    root: leaf,
+    activePaneId: leaf.id,
+    sftpOpen: false,
+    workspace: 'terminal'
+  }
+}
+
+/** Новая вкладка локального терминала. */
+export function makeLocalTab(): Tab {
+  const leaf = makeLeaf('local', 'Локальный терминал')
+  return {
+    key: uid(),
+    title: 'Локальный терминал',
+    kind: 'terminal',
+    root: leaf,
+    activePaneId: leaf.id,
+    sftpOpen: false,
+    workspace: 'terminal'
+  }
+}
+
+/** Уже открытый редактор этого файла на этой сессии. */
+export function findEditorTab(tabs: Tab[], sessionId: string, remotePath: string): Tab | undefined {
+  return tabs.find(
+    (t) => t.kind === 'editor' && t.editor?.sessionId === sessionId && t.editor?.remotePath === remotePath
+  )
+}
+
+/** Новая вкладка встроенного редактора удалённого файла. */
+export function makeEditorTab(sessionId: string, remotePath: string): Tab {
+  const fileName = remotePath.split('/').pop() || remotePath
+  const leaf = makeLeaf('local', fileName)
+  return {
+    key: uid(),
+    title: fileName,
+    kind: 'editor',
+    root: leaf,
+    activePaneId: leaf.id,
+    sftpOpen: false,
+    workspace: 'terminal',
+    editor: { sessionId, remotePath }
+  }
+}
+
+/**
+ * Разделить активную панель: в новой — выбранный сервер или локальный терминал.
+ *
+ * Вид панели берём из профиля: иначе сервер с COM-портом или telnet открылся бы как SSH
+ * и падал на первом шаге подключения.
+ */
+export function planSplitPane(
+  tab: Tab,
+  servers: ServerConfig[],
+  dir: 'row' | 'col',
+  choice: SplitChoice
+): Tab {
+  const cur = findLeaf(tab.root, tab.activePaneId)
+  if (!cur) return tab
+  let fresh: PaneLeaf
+  if (choice.kind === 'local') {
+    fresh = makeLeaf('local', 'Локальный терминал')
+  } else {
+    const srv = servers.find((x) => x.id === choice.serverId)
+    fresh = makeLeaf(srv ? paneKindOf(srv) : 'ssh', choice.title, choice.serverId)
+  }
+  return { ...tab, root: splitLeaf(tab.root, cur.id, dir, fresh), activePaneId: fresh.id }
+}
+
+export type DetachBlockReason = 'not-terminal' | 'multi-pane' | 'not-connected' | 'no-server'
+
+export type DetachCheck =
+  | { ok: true; leaf: PaneLeaf & { sessionId: string } }
+  | { ok: false; reason: DetachBlockReason }
+
+/** Можно ли открепить вкладку в отдельное окно. */
+export function canDetachTab(tab: Tab): DetachCheck {
+  if (tab.kind !== 'terminal') return { ok: false, reason: 'not-terminal' }
+  const leaves = allLeaves(tab.root)
+  if (leaves.length > 1) return { ok: false, reason: 'multi-pane' }
+  const leaf = leaves[0]
+  if (!leaf?.sessionId || leaf.status !== 'connected') return { ok: false, reason: 'not-connected' }
+  if (leaf.kind === 'ssh' && !leaf.serverId) return { ok: false, reason: 'no-server' }
+  return { ok: true, leaf: { ...leaf, sessionId: leaf.sessionId } }
+}
+
+export function toggleSftpOnTab(tabs: Tab[], key: string): Tab[] {
+  return tabs.map((t) => {
+    if (t.key !== key) return t
+    if (t.sftpOpen) return { ...t, sftpOpen: false }
+    return { ...t, sftpOpen: true, workspace: 'terminal' }
+  })
+}
+
+export function openSftpOnTab(tabs: Tab[], key: string): Tab[] {
+  return tabs.map((t) => (t.key === key ? { ...t, sftpOpen: true, workspace: 'terminal' } : t))
+}
+
+export function setTabWorkspace(tabs: Tab[], key: string, tool: WorkspaceTool): Tab[] {
+  return tabs.map((t) => (t.key === key ? { ...t, workspace: tool } : t))
+}
+
+/** Что сохранить в раскладке для восстановления терминальных вкладок. */
+export function tabsForLayoutPersist(tabs: Tab[]): SerializedTab[] {
+  return tabs
+    .filter((t) => t.kind === 'terminal')
+    .map((t) => ({
+      title: t.title,
+      root: serializePane(t.root),
+      sftpOpen: t.sftpOpen,
+      workspace: t.workspace
+    }))
+}
+
+/** Следующая вкладка для горячей клавиши переключения. */
+export function nextTabKey(tabs: Tab[], activeKey: string | null, dir: 1 | -1): string | null {
+  if (tabs.length < 2) return null
+  const idx = tabs.findIndex((t) => t.key === activeKey)
+  const base = idx < 0 ? 0 : idx
+  return tabs[(base + dir + tabs.length) % tabs.length].key
+}
+
+/** Следующая панель внутри вкладки для горячей клавиши фокуса. */
+export function nextActivePaneId(tab: Tab, dir: 1 | -1): string | null {
+  if (tab.kind !== 'terminal') return null
+  const leaves = allLeaves(tab.root)
+  if (leaves.length < 2) return null
+  const idx = leaves.findIndex((l) => l.id === tab.activePaneId)
+  const base = idx < 0 ? 0 : idx
+  return leaves[(base + dir + leaves.length) % leaves.length].id
+}
+
+export type ReattachWorkspacePlan =
+  | { action: 'focus'; key: string; workspace: WorkspaceTool }
+  | { action: 'insert'; payload: ReattachRequest }
+
+/** Куда положить панель рабочего места, вернувшуюся из откреплённого окна. */
+export function planReattachWorkspace(tabs: Tab[], p: ReattachWorkspacePayload): ReattachWorkspacePlan {
+  const existing = findTabKeyBySession(tabs, p.sessionId)
+  if (existing) return { action: 'focus', key: existing, workspace: p.tool }
+  return {
+    action: 'insert',
+    payload: {
+      sessionId: p.sessionId,
+      serverId: p.serverId,
+      title: p.title,
+      workspace: p.tool,
+      sftpOpen: false,
+      kind: 'ssh'
+    }
+  }
+}
+
+export type ReattachSftpPlan =
+  | { action: 'focus'; key: string }
+  | { action: 'insert'; payload: ReattachRequest }
+
+/** Куда положить SFTP, вернувшийся из откреплённого окна. */
+export function planReattachSftp(tabs: Tab[], p: ReattachSftpPayload, serverName?: string): ReattachSftpPlan {
+  const existing = findTabKeyBySession(tabs, p.sessionId)
+  if (existing) return { action: 'focus', key: existing }
+  return {
+    action: 'insert',
+    payload: {
+      sessionId: p.sessionId,
+      serverId: p.serverId,
+      title: serverName ?? 'SSH',
+      workspace: 'terminal',
+      sftpOpen: true,
+      kind: 'ssh'
+    }
+  }
 }

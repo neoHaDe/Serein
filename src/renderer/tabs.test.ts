@@ -5,12 +5,24 @@ import { allLeaves, makeLeaf, splitLeaf } from './paneTree'
 import type { Tab } from './tabs'
 import {
   broadcastTargets,
+  canDetachTab,
   closePaneIn,
+  makeLocalTab,
+  makeServerTab,
+  nextActivePaneId,
+  nextTabKey,
+  openSftpOnTab,
   planReattach,
+  planReattachSftp,
+  planReattachWorkspace,
   planRestore,
+  planSplitPane,
   reorderTabs,
-  sshLeafForTools
+  setTabWorkspace,
+  sshLeafForTools,
+  toggleSftpOnTab
 } from './tabs'
+import { applyDropServerOrder, mergeGroupNames, planDropServer, planMoveGroup } from './serverGroups'
 
 /**
  * Первые тесты на фронтенде вообще. Взяты именно за восстановление запуска: логика тут
@@ -287,5 +299,162 @@ describe('reorderTabs', () => {
     expect(reorderTabs(tabs, 'a', 'a')).toBe(tabs)
     expect(reorderTabs(tabs, 'нет', 'a')).toBe(tabs)
     expect(reorderTabs(tabs, 'a', 'нет')).toBe(tabs)
+  })
+})
+
+describe('makeServerTab / makeLocalTab', () => {
+  it('создаёт терминальную вкладку под сервер', () => {
+    const tab = makeServerTab(server('srv-1', 'home'))
+    expect(tab.kind).toBe('terminal')
+    expect(tab.title).toBe('home')
+    expect(tab.workspace).toBe('terminal')
+    expect(allLeaves(tab.root)[0].serverId).toBe('srv-1')
+  })
+
+  it('создаёт локальную вкладку без serverId', () => {
+    const tab = makeLocalTab()
+    expect(tab.title).toBe('Локальный терминал')
+    expect(allLeaves(tab.root)[0].kind).toBe('local')
+  })
+})
+
+describe('planSplitPane', () => {
+  it('добавляет локальную панель при split', () => {
+    const tab = makeLocalTab()
+    const next = planSplitPane(tab, [], 'row', { kind: 'local' })
+    expect(allLeaves(next.root)).toHaveLength(2)
+    expect(next.activePaneId).not.toBe(tab.activePaneId)
+  })
+
+  it('берёт вид панели из профиля сервера', () => {
+    const tab = makeServerTab({ ...server('s1'), connection: 'telnet' } as ServerConfig)
+    const next = planSplitPane(tab, [{ ...server('s1'), connection: 'telnet' } as ServerConfig], 'col', {
+      kind: 'ssh',
+      serverId: 's1',
+      title: 'tel'
+    })
+    const added = allLeaves(next.root).find((l) => l.id === next.activePaneId)
+    expect(added?.kind).toBe('telnet')
+  })
+})
+
+describe('canDetachTab', () => {
+  it('разрешает одну подключённую SSH-панель', () => {
+    const tab = tabWith('одна', ['s1'])
+    const leaf = allLeaves(tab.root)[0]
+    leaf.status = 'connected'
+    expect(canDetachTab(tab).ok).toBe(true)
+  })
+
+  it('блокирует несколько панелей', () => {
+    const tab = tabWith('две', ['s1', 's2'])
+    expect(canDetachTab(tab)).toEqual({ ok: false, reason: 'multi-pane' })
+  })
+
+  it('блокирует неподключённую панель', () => {
+    const tab = makeServerTab(server('s1'))
+    expect(canDetachTab(tab)).toEqual({ ok: false, reason: 'not-connected' })
+  })
+})
+
+describe('toggleSftpOnTab / openSftpOnTab / setTabWorkspace', () => {
+  it('toggle открывает и закрывает SFTP', () => {
+    const tab = tabWith('a', ['1'])
+    const open = toggleSftpOnTab([tab], 'a')
+    expect(open[0].sftpOpen).toBe(true)
+    expect(toggleSftpOnTab(open, 'a')[0].sftpOpen).toBe(false)
+  })
+
+  it('open всегда открывает SFTP', () => {
+    const tab = tabWith('a', ['1'])
+    expect(openSftpOnTab([tab], 'a')[0].sftpOpen).toBe(true)
+    expect(openSftpOnTab(openSftpOnTab([tab], 'a'), 'a')[0].sftpOpen).toBe(true)
+  })
+
+  it('setTabWorkspace меняет инструмент только у нужной вкладки', () => {
+    const tabs = [tabWith('a', ['1']), tabWith('b', ['2'])]
+    const next = setTabWorkspace(tabs, 'b', 'docker')
+    expect(next[0].workspace).toBe('terminal')
+    expect(next[1].workspace).toBe('docker')
+  })
+})
+
+describe('nextTabKey / nextActivePaneId', () => {
+  it('переключает вкладки по кругу', () => {
+    const tabs = [tabWith('a', ['1']), tabWith('b', ['2'])]
+    expect(nextTabKey(tabs, 'a', 1)).toBe('b')
+    expect(nextTabKey(tabs, 'b', 1)).toBe('a')
+  })
+
+  it('переключает панели внутри вкладки', () => {
+    const tab = tabWith('a', ['1', '2'])
+    const first = tab.activePaneId
+    const second = nextActivePaneId(tab, 1)!
+    expect(second).not.toBe(first)
+    expect(nextActivePaneId({ ...tab, activePaneId: second }, 1)).toBe(first)
+  })
+})
+
+describe('planReattachWorkspace / planReattachSftp', () => {
+  it('workspace: фокус на существующей вкладке', () => {
+    const tabs = planReattach([], {
+      sessionId: 's1',
+      serverId: 'srv',
+      title: 'h',
+      workspace: 'terminal',
+      sftpOpen: false,
+      kind: 'ssh'
+    }).tabs
+    expect(planReattachWorkspace(tabs, { sessionId: 's1', title: 'h', tool: 'docker' })).toEqual({
+      action: 'focus',
+      key: tabs[0].key,
+      workspace: 'docker'
+    })
+  })
+
+  it('sftp: вставка новой вкладки, если сессии ещё нет', () => {
+    expect(
+      planReattachSftp([], { sessionId: 's1', serverId: 'srv' }, 'home').action
+    ).toBe('insert')
+  })
+})
+
+describe('serverGroups', () => {
+  it('mergeGroupNames объединяет настройки и серверы без дублей', () => {
+    expect(
+      mergeGroupNames(['prod'], [
+        server('a'),
+        { ...server('b'), group: 'stage' } as ServerConfig,
+        { ...server('c'), group: 'prod' } as ServerConfig
+      ])
+    ).toEqual(['prod', 'stage'])
+  })
+
+  it('planDropServer вставляет сервер в группу', () => {
+    const servers = [
+      { ...server('a'), group: 'g', order: 0 } as ServerConfig,
+      { ...server('b'), group: 'g', order: 1 } as ServerConfig,
+      { ...server('c'), group: 'other', order: 0 } as ServerConfig
+    ]
+    expect(planDropServer(servers, 'c', 'g', 0)).toEqual([
+      { id: 'c', group: 'g', order: 0 },
+      { id: 'a', group: 'g', order: 1 },
+      { id: 'b', group: 'g', order: 2 }
+    ])
+  })
+
+  it('applyDropServerOrder обновляет только затронутые серверы', () => {
+    const servers = [
+      { ...server('a'), group: 'g', order: 0 } as ServerConfig,
+      { ...server('b'), group: 'other', order: 0 } as ServerConfig
+    ]
+    const next = applyDropServerOrder(servers, [{ id: 'a', group: 'g', order: 2 }])
+    expect(next[0].order).toBe(2)
+    expect(next[1].order).toBe(0)
+  })
+
+  it('planMoveGroup меняет порядок групп', () => {
+    expect(planMoveGroup(['a', 'b', 'c'], [], 'b', -1)).toEqual(['b', 'a', 'c'])
+    expect(planMoveGroup(['a', 'b'], [], 'a', -1)).toBeNull()
   })
 })
