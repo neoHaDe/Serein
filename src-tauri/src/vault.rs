@@ -67,12 +67,56 @@ pub fn unlock(password: &str) -> bool {
     }
 }
 
+/// Минимальная длина мастер-пароля.
+///
+/// Двенадцать, а не «восемь плюс спецсимвол». Требования к составу — заглавные, цифры,
+/// знаки — на практике дают `P@ssw0rd1`: формально проходит, подбирается мгновенно.
+/// Длина работает лучше, и NIST SP 800-63B прямо рекомендует не навязывать состав, а
+/// проверять по списку заведомо плохих. Здесь ровно это: длина плюс короткий список.
+///
+/// Ограничения сверху нет: длинная парольная фраза — это то, что мы хотим поощрять.
+const MIN_MASTER_LEN: usize = 12;
+
+/// Пароли, которые подбирают первыми. Список короткий намеренно: полный словарь утечек
+/// сюда не поместится, а смысл — отсечь очевидное, не создавая иллюзии полной проверки.
+const WORST: &[&str] = &[
+    "password", "пароль", "123456789012", "qwertyuiop", "qwerty123456",
+    "administrator", "changeme", "letmein12345", "iloveyou1234", "welcome12345",
+];
+
+/// Годится ли пароль в мастер-пароль.
+///
+/// Проверяем при включении, а не при разблокировке: у тех, кто уже включил мастер-пароль
+/// раньше, ничего не должно перестать открываться из-за смены правил.
+pub fn check_master_password(password: &str) -> Result<(), String> {
+    // Считаем символы, а не байты: «пароль» — шесть символов и двенадцать байт, и по
+    // байтам такая проверка прошла бы, чего мы точно не хотим.
+    let chars = password.chars().count();
+    if chars < MIN_MASTER_LEN {
+        return Err(format!(
+            "Мастер-паролем закрыты все сохранённые доступы, поэтому он должен быть длиннее: минимум {MIN_MASTER_LEN} символов (сейчас {chars}). Требований к спецсимволам нет — длинная фраза из нескольких слов подходит лучше короткой мешанины."
+        ));
+    }
+    let lower = password.to_lowercase();
+    if WORST.iter().any(|w| lower == *w) {
+        return Err("Этот пароль есть в списке самых подбираемых. Возьмите фразу, которую не угадать.".into());
+    }
+    // Один символ на всю длину: формально длинно, по стойкости — ничто.
+    let mut uniq: Vec<char> = password.chars().collect();
+    uniq.sort_unstable();
+    uniq.dedup();
+    if uniq.len() < 4 {
+        return Err("Слишком мало разных символов — такой пароль перебирается почти мгновенно.".into());
+    }
+    Ok(())
+}
+
 pub fn enable(password: &str) -> Value {
     if is_enabled() {
         return json!({ "ok": false, "error": "Мастер-пароль уже включён" });
     }
-    if password.len() < 4 {
-        return json!({ "ok": false, "error": "Пароль слишком короткий (мин. 4 символа)" });
+    if let Err(why) = check_master_password(password) {
+        return json!({ "ok": false, "error": why });
     }
     // Вынимаем секреты при текущем (пустом) ключе, затем перешифровываем с мастер-слоем.
     let plain = crate::store::export_all_secrets();
@@ -126,4 +170,43 @@ pub fn disable(password: &str) -> Value {
     }
     let _ = std::fs::remove_file(vault_path());
     json!({ "ok": true })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_master_password, MIN_MASTER_LEN};
+
+    #[test]
+    fn short_passwords_are_refused_with_the_reason() {
+        // Прежний минимум — четыре символа — защищал все SSH-доступы примерно ничем.
+        let err = check_master_password("qwerty").expect_err("шесть символов мало");
+        assert!(err.contains(&MIN_MASTER_LEN.to_string()), "{err}");
+        assert!(err.contains("6"), "в тексте должна быть текущая длина: {err}");
+    }
+
+    #[test]
+    fn length_is_counted_in_characters_not_bytes() {
+        // «пароль» — шесть символов, но двенадцать байт. По байтам проверка прошла бы.
+        assert!(check_master_password("пароль").is_err());
+        // Одиннадцать кириллических символов — всё ещё мало, хотя байт заметно больше.
+        assert!(check_master_password("паролькоро").is_err());
+    }
+
+    #[test]
+    fn long_passphrase_passes_without_composition_rules() {
+        // Ровно то, что мы хотим поощрять: длинная фраза без цифр и знаков.
+        check_master_password("корова летит над амстердамом").expect("фраза должна проходить");
+    }
+
+    #[test]
+    fn worst_known_passwords_are_refused_even_when_long_enough() {
+        assert!(check_master_password("123456789012").is_err());
+        assert!(check_master_password("QwErTyUiOp").is_err(), "регистр не должен помогать");
+    }
+
+    #[test]
+    fn repeating_one_character_is_not_length() {
+        assert!(check_master_password("ааааааааааааааааа").is_err());
+        assert!(check_master_password("aaaaaaaaaaaaaaaa").is_err());
+    }
 }
