@@ -12,6 +12,7 @@ import {
   uid
 } from './tabs'
 import { shouldAutoReconnect } from './sessionRules'
+import { aggregateServerStatuses } from './serverStatus'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { PaneView } from './components/PaneView'
@@ -427,29 +428,8 @@ export default function App(): JSX.Element {
     return allLeaves(tab.root).filter((l) => l.sessionId).length
   }, [tabs, activeKey])
 
-  // Живой статус подключения по серверу (агрегируем по всем вкладкам/панелям).
-  const serverStatuses = useMemo(() => {
-    const rank: Record<string, number> = { connected: 4, reconnecting: 3, connecting: 2, error: 1 }
-    const out: Record<string, 'connected' | 'connecting' | 'reconnecting' | 'error'> = {}
-    for (const t of tabs) {
-      for (const l of allLeaves(t.root)) {
-        if (l.kind !== 'ssh' || !l.serverId) continue
-        const st =
-          l.status === 'connected'
-            ? 'connected'
-            : l.status === 'reconnecting'
-              ? 'reconnecting'
-              : l.status === 'error'
-                ? 'error'
-                : l.status === 'connecting'
-                  ? 'connecting'
-                  : null
-        if (!st) continue
-        if (!out[l.serverId] || rank[st] > rank[out[l.serverId]]) out[l.serverId] = st
-      }
-    }
-    return out
-  }, [tabs])
+  // Живой статус подключения по серверу: агрегируем по всем вкладкам и панелям.
+  const serverStatuses = useMemo(() => aggregateServerStatuses(tabs), [tabs])
 
   const closeTab = useCallback((key: string) => {
     const tab = tabsRef.current.find((t) => t.key === key)
