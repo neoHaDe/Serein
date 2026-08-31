@@ -5,6 +5,7 @@ import { sshLeafForTools } from './tabs'
 
 const WORKSPACE_TOOLS: { id: WorkspaceTool; label: string }[] = [
   { id: 'terminal', label: 'Terminal' },
+  { id: 'overview', label: 'Overview' },
   { id: 'docker', label: 'Docker' },
   { id: 'logs', label: 'Logs' },
   { id: 'processes', label: 'Processes' },

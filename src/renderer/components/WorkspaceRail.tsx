@@ -6,6 +6,7 @@ import { Icon } from './Icon'
 
 const ITEMS: { id: WorkspaceTool; label: string; icon: IconName }[] = [
   { id: 'terminal', label: 'Terminal', icon: 'terminal' },
+  { id: 'overview', label: 'Overview', icon: 'monitor' },
   { id: 'docker', label: 'Docker', icon: 'docker' },
   { id: 'logs', label: 'Logs', icon: 'logs' },
   { id: 'processes', label: 'Processes', icon: 'list' },

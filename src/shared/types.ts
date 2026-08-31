@@ -398,6 +398,16 @@ export interface ServerMetrics {
   diskPct: number
   uptimeSec: number
   error?: string
+  os?: string
+  kernel?: string
+  procCount?: number
+  netIface?: string
+  netRxBytes?: number
+  netTxBytes?: number
+  failedServices?: number
+  dockerAvailable?: boolean
+  dockerRunning?: number
+  dockerStopped?: number
 }
 
 /** Содержимое удалённого файла для встроенного редактора. */
@@ -511,6 +521,7 @@ export type SerializedPane = SerializedLeaf | SerializedSplit
 /** Инструмент в рельсе workspace SSH-вкладки. */
 export const WORKSPACE_TOOLS = [
   'terminal',
+  'overview',
   'docker',
   'logs',
   'processes',
@@ -521,7 +532,7 @@ export type WorkspaceTool = (typeof WORKSPACE_TOOLS)[number]
 
 export function parseWorkspaceTool(v: unknown, _sftpOpen?: boolean): WorkspaceTool {
   if (typeof v === 'string') {
-    if (v === 'resources') return 'processes'
+    if (v === 'resources') return 'overview'
     if (v === 'files') return 'terminal'
     if ((WORKSPACE_TOOLS as readonly string[]).includes(v)) {
       return v as WorkspaceTool

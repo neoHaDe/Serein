@@ -8,6 +8,7 @@ import { HostLogsPanel } from './HostLogsPanel'
 import { ProcessPanel } from './ProcessPanel'
 import { ServicePanel } from './ServicePanel'
 import { TunnelPanel } from './TunnelPanel'
+import { ServerOverviewPanel } from './ServerOverviewPanel'
 
 /**
  * Рабочее пространство сервера: рельс инструментов, терминал, файлы и панели.
@@ -124,6 +125,14 @@ export function ServerWorkspace(props: ServerWorkspaceProps): JSX.Element {
       {showRail && tool !== 'terminal' && (
         <div className="ws-body" style={paneStack}>
           {!sessionId && <div className="ws-waiting">Нет активного SSH-соединения</div>}
+          {sessionId && tool === 'overview' && (
+            <ServerOverviewPanel
+              sessionId={sessionId}
+              panelTitle={panelTitle}
+              onDetached={onDetached}
+              onGoTool={onSelectTool}
+            />
+          )}
           {sessionId && tool === 'docker' && (
             <DockerPanel
               sessionId={sessionId}

@@ -13,10 +13,12 @@ import { HostLogsPanel } from './HostLogsPanel'
 import { ProcessPanel } from './ProcessPanel'
 import { ServicePanel } from './ServicePanel'
 import { TunnelPanel } from './TunnelPanel'
+import { ServerOverviewPanel } from './ServerOverviewPanel'
 
 export type DetachableWorkspaceTool = Exclude<WorkspaceTool, 'terminal'>
 
 const TOOL_TITLE: Record<DetachableWorkspaceTool, string> = {
+  overview: 'Overview',
   docker: 'Docker',
   logs: 'Logs',
   processes: 'Processes',
@@ -52,6 +54,8 @@ function panelForTool(
   server: ServerConfig | undefined
 ): JSX.Element {
   switch (tool) {
+    case 'overview':
+      return <ServerOverviewPanel sessionId={sessionId} fill />
     case 'docker':
       return <DockerPanel sessionId={sessionId} serverId={server?.id} docked fill onClose={() => void getCurrentWindow().close()} />
     case 'logs':

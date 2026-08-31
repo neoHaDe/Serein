@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { WorkspaceProcess } from '../../shared/types'
 import { Icon } from './Icon'
-import { MonitorMetrics } from './MonitorMetrics'
 import { WsDetachButton } from './WsDetachButton'
 import { openDetachedWorkspace } from './workspaceWindow'
 
@@ -73,7 +72,6 @@ export function ProcessPanel({
           </button>
         </div>
       </div>
-      <MonitorMetrics sessionId={sessionId} variant="dashboard" />
       <div className="ws-toolbar">
         <input
           className="search"

@@ -4030,6 +4030,69 @@ button.secondary:hover {
     flex: 1 1 40%;
   }
 }
+
+.srv-overview-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+.srv-overview-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: rgba(var(--surface-rgb), 0.6);
+  border: 1px solid rgba(var(--border-rgb), 0.5);
+  min-width: 0;
+}
+.srv-overview-card.tone-ok { border-color: rgba(var(--green-rgb), 0.35); }
+.srv-overview-card.tone-warn { border-color: rgba(var(--warn-rgb), 0.45); }
+.srv-overview-card.tone-bad { border-color: rgba(var(--danger-rgb), 0.45); }
+.srv-overview-k {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.srv-overview-v {
+  font-size: 13px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+.srv-overview-v.srv-overview-net {
+  font-size: 12px;
+}
+.srv-overview-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+.srv-overview-link {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+.srv-overview-link:hover {
+  text-decoration: underline;
+}
+.mon-os {
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-panel.srv-overview {
+  overflow: auto;
+}
+
 .ws-panel.fill {
   flex: 1;
   min-height: 0;
