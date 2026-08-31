@@ -136,3 +136,36 @@ mod tests {
         assert!(e.to_string().contains("15"));
     }
 }
+
+/// Ошибка команды открытия сессии — с фазой, а не одной строкой.
+///
+/// Фаза нужна фронтенду, чтобы решить, повторять ли попытку. Повторять сетевой сбой
+/// осмысленно, а неверный пароль — нет: он правильным не станет, зато пять попыток подряд
+/// дают шесть неудачных аутентификаций за полминуты — порог типичного `fail2ban` и
+/// блокировки доменной учётной записи.
+#[derive(Debug, serde::Serialize)]
+pub struct OpenError {
+    pub message: String,
+    pub phase: Option<&'static str>,
+}
+
+impl From<SereinError> for OpenError {
+    fn from(e: SereinError) -> Self {
+        Self {
+            message: e.to_string(),
+            phase: e.phase().map(SessionPhase::as_str),
+        }
+    }
+}
+
+impl From<String> for OpenError {
+    fn from(message: String) -> Self {
+        Self { message, phase: None }
+    }
+}
+
+impl From<&str> for OpenError {
+    fn from(message: &str) -> Self {
+        Self { message: message.to_string(), phase: None }
+    }
+}

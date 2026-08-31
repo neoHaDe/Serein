@@ -54,3 +54,29 @@ describe('sessionClosedMessage', () => {
     ).toContain('во время сессии')
   })
 })
+
+describe('фаза сбоя решает, повторять ли', () => {
+  const on = { autoReconnect: true }
+  const connecting = { kind: 'ssh' as const, status: 'connecting' as const }
+
+  it('не повторяет неверный пароль', () => {
+    // Пять попыток с задержками 1–2–4–8–15 с — это шесть неудачных аутентификаций за
+    // полминуты: порог типичного fail2ban и блокировки доменной учётной записи.
+    expect(shouldScheduleReconnect('connect_fail', connecting, on, undefined, 'auth')).toBe(false)
+  })
+
+  it('не повторяет отклонённый ключ хоста', () => {
+    expect(shouldScheduleReconnect('connect_fail', connecting, on, undefined, 'hostkey')).toBe(false)
+  })
+
+  it('повторяет сетевые сбои', () => {
+    // Тут повтор и правда лечит: хост мог моргнуть.
+    expect(shouldScheduleReconnect('connect_fail', connecting, on, undefined, 'connect')).toBe(true)
+    expect(shouldScheduleReconnect('connect_fail', connecting, on, undefined, 'jump')).toBe(true)
+  })
+
+  it('без фазы ведёт себя как раньше', () => {
+    // Старые пути (serial, telnet, неизвестная ошибка) фазу не присылают.
+    expect(shouldScheduleReconnect('connect_fail', connecting, on)).toBe(true)
+  })
+})

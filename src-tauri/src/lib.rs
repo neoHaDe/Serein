@@ -438,7 +438,7 @@ fn telnet_command(state: State<'_, AppState>, id: String, name: String) -> Resul
 }
 
 #[tauri::command]
-async fn session_open_ssh(window: tauri::Window, app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
+async fn session_open_ssh(window: tauri::Window, app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, crate::error::OpenError> {
     let server_id = p.get("serverId").and_then(|v| v.as_str()).ok_or("Не задан serverId")?;
     let chain = resolve_chain(server_id)?;
     let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u32;
@@ -448,9 +448,8 @@ async fn session_open_ssh(window: tauri::Window, app: AppHandle, state: State<'_
     let host_keys = state.host_keys.clone();
 
     let sess =
-        ssh::connect_chain(app.clone(), id.clone(), chain, cols, rows, ki, host_keys)
-            .await
-            .map_err(|e| e.to_string())?;
+        // Фазу сбоя не схлопываем в строку: по ней фронтенд решает, повторять ли попытку.
+        ssh::connect_chain(app.clone(), id.clone(), chain, cols, rows, ki, host_keys).await?;
     let sess = Arc::new(sess);
     // Автозапуск туннелей + команда на подключении.
     let server = store::server_with_secrets(server_id);

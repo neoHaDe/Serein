@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AppSettings, SavedAuxWindow, ServerConfig, WorkspaceTool } from '../../shared/types'
+import type { AppSettings, SavedAuxWindow, ServerConfig, SessionFailurePhase, WorkspaceTool } from '../../shared/types'
 import {
   markAuxPersistReady,
   seedAuxLive,
@@ -119,12 +119,12 @@ export function useTabs({
   const reconnect = useReconnect({ patchPane })
 
   const handleFail = useCallback(
-    (paneId: string, message: string) => {
+    (paneId: string, message: string, phase?: SessionFailurePhase) => {
       const tab = tabsRef.current.find((t) => allLeaves(t.root).some((l) => l.id === paneId))
       if (!tab) return
       const leaf = allLeaves(tab.root).find((l) => l.id === paneId)
       if (!leaf) return
-      if (shouldScheduleReconnect('connect_fail', leaf, settingsRef.current)) {
+      if (shouldScheduleReconnect('connect_fail', leaf, settingsRef.current, undefined, phase)) {
         reconnect.schedule(tab.key, paneId)
         return
       }

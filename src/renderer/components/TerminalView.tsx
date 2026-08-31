@@ -5,7 +5,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
 import { useSettings } from '../SettingsContext'
 import { getTheme } from '../themes'
-import type { PaneKind } from '../../shared/types'
+import type { PaneKind, SessionFailurePhase } from '../../shared/types'
 import { errText } from '../errText'
 
 interface Props {
@@ -19,7 +19,7 @@ interface Props {
   active: boolean
   focused: boolean
   onReady: (paneId: string, sessionId: string) => void
-  onFail?: (paneId: string, message: string) => void
+  onFail?: (paneId: string, message: string, phase?: SessionFailurePhase) => void
   onInput?: (fromSessionId: string, data: string) => void
 }
 
@@ -341,8 +341,10 @@ export function TerminalView({
         })
         .catch((err: unknown) => {
           const msg = errText(err)
+          // Фаза приходит из бэкенда рядом с текстом: по ней решают, повторять ли попытку.
+          const phase = (err as { phase?: SessionFailurePhase } | null)?.phase
           e.term.writeln(`\r\n\x1b[31mОшибка подключения: ${msg}\x1b[0m`)
-          onFailRef.current?.(paneId, msg)
+          onFailRef.current?.(paneId, msg, phase)
         })
     }
 
