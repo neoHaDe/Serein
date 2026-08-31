@@ -1,4 +1,5 @@
 import type {
+  PaneKind,
   SavedAuxWindow,
   SerializedPane,
   SerializedTab,
@@ -6,7 +7,7 @@ import type {
   WorkspaceTool
 } from '../shared/types'
 import { paneKindOf, parseWorkspaceTool } from '../shared/types'
-import type { PaneNode } from './paneTree'
+import type { PaneLeaf, PaneNode } from './paneTree'
 import { allLeaves, deserializePane, firstLeaf, makeLeaf } from './paneTree'
 
 /**
@@ -134,4 +135,71 @@ export function planRestore(input: RestoreInput): Tab[] {
   }
 
   return out
+}
+
+/** Вкладка, в которой живёт эта сессия. */
+export function findTabKeyBySession(tabs: Tab[], sessionId: string): string | undefined {
+  for (const t of tabs) {
+    if (t.kind !== 'terminal') continue
+    for (const l of allLeaves(t.root)) {
+      if (l.sessionId === sessionId) return t.key
+    }
+  }
+  return undefined
+}
+
+/** Что вернуть в главное окно из откреплённого. */
+export interface ReattachRequest {
+  sessionId: string
+  serverId?: string
+  title: string
+  workspace: WorkspaceTool
+  sftpOpen: boolean
+  kind: PaneKind
+}
+
+/**
+ * Куда положить возвращаемую вкладку.
+ *
+ * Два случая, и различать их обязательно. Обычно вкладки в главном окне уже нет — она
+ * уехала вместе с окном, и её надо создать заново. Но бывает и наоборот: из откреплённого
+ * окна вернули не всю вкладку, а только панель (Docker, логи, файлы), и вкладка с этой
+ * сессией никуда не девалась. Тогда создавать вторую нельзя — получилось бы две вкладки
+ * на одну сессию, и любая из них при закрытии унесла бы её у соседа.
+ */
+export function planReattach(
+  tabs: Tab[],
+  req: ReattachRequest
+): { tabs: Tab[]; activeKey: string } {
+  const existing = findTabKeyBySession(tabs, req.sessionId)
+  if (existing) {
+    return {
+      tabs: tabs.map((t) =>
+        t.key === existing
+          ? { ...t, workspace: req.workspace, sftpOpen: req.sftpOpen, title: req.title }
+          : t
+      ),
+      activeKey: existing
+    }
+  }
+
+  const leaf = makeLeaf(req.kind, req.title, req.serverId)
+  // Сессия уже поднята и живёт — вкладка создаётся сразу подключённой, без нового коннекта.
+  const root: PaneLeaf = { ...leaf, sessionId: req.sessionId, status: 'connected' }
+  const key = uid()
+  return {
+    tabs: [
+      ...tabs,
+      {
+        key,
+        title: req.title,
+        kind: 'terminal',
+        root,
+        activePaneId: root.id,
+        sftpOpen: req.sftpOpen,
+        workspace: req.workspace
+      }
+    ],
+    activeKey: key
+  }
 }

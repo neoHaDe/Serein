@@ -3,7 +3,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { SavedAuxWindow, ServerConfig, WorkspaceTool } from '../shared/types'
 import { paneKindOf } from '../shared/types'
 import type { Tab, SplitChoice } from './tabs'
-import { planRestore, uid } from './tabs'
+import { findTabKeyBySession, planReattach, planRestore, uid } from './tabs'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { PaneView } from './components/PaneView'
@@ -59,15 +59,6 @@ function sshLeafForTools(tab: Tab): PaneLeaf | undefined {
   return leaves.find((l) => l.status === 'connected') ?? leaves[0]
 }
 
-function findTabKeyBySession(tabs: Tab[], sessionId: string): string | undefined {
-  for (const t of tabs) {
-    if (t.kind !== 'terminal') continue
-    for (const l of allLeaves(t.root)) {
-      if (l.sessionId === sessionId) return t.key
-    }
-  }
-  return undefined
-}
 
 
 export default function App(): JSX.Element {
@@ -279,34 +270,11 @@ export default function App(): JSX.Element {
   }, [openEditorTab])
 
   const reattachTabFromAux = useCallback((p: ReattachTabPayload) => {
-    const existing = findTabKeyBySession(tabsRef.current, p.sessionId)
-    if (existing) {
-      setTabs((prev) =>
-        prev.map((t) =>
-          t.key === existing ? { ...t, workspace: p.workspace, sftpOpen: p.sftpOpen, title: p.title } : t
-        )
-      )
-      setActiveKey(existing)
-      void takeOverSession(p.sessionId)
-      return
-    }
+    // Сессию забираем себе в любом случае: окно, которое её вернуло, сейчас закроется.
     void takeOverSession(p.sessionId)
-    const leaf = makeLeaf(p.kind, p.title, p.serverId)
-    const root: PaneLeaf = { ...leaf, sessionId: p.sessionId, status: 'connected' }
-    const key = uid()
-    setTabs((prev) => [
-      ...prev,
-      {
-        key,
-        title: p.title,
-        kind: 'terminal',
-        root,
-        activePaneId: root.id,
-        sftpOpen: p.sftpOpen,
-        workspace: p.workspace
-      }
-    ])
-    setActiveKey(key)
+    const next = planReattach(tabsRef.current, p)
+    setTabs(next.tabs)
+    setActiveKey(next.activeKey)
   }, [])
 
   const reattachWorkspaceFromAux = useCallback(

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SavedAuxWindow, SerializedTab, ServerConfig } from '../shared/types'
-import { planRestore } from './tabs'
+import { planReattach, planRestore } from './tabs'
 
 /**
  * Первые тесты на фронтенде вообще. Взяты именно за восстановление запуска: логика тут
@@ -94,5 +94,49 @@ describe('planRestore', () => {
       servers: []
     })
     expect(tabs).toHaveLength(0)
+  })
+})
+
+describe('planReattach', () => {
+  const req = {
+    sessionId: 'сессия-1',
+    serverId: 'srv-1',
+    title: 'home-srv',
+    workspace: 'terminal' as const,
+    sftpOpen: false,
+    kind: 'ssh' as const
+  }
+
+  it('создаёт вкладку, если её нет', () => {
+    const { tabs, activeKey } = planReattach([], req)
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0].key).toBe(activeKey)
+    // Сессия уже живёт — вкладка обязана появиться сразу подключённой, иначе интерфейс
+    // покажет «отключено» и полезет открывать второе соединение.
+    expect(tabs[0].root).toMatchObject({ sessionId: 'сессия-1', status: 'connected' })
+  })
+
+  it('не заводит вторую вкладку на ту же сессию', () => {
+    // Вернули не всю вкладку, а только панель: вкладка с этой сессией никуда не девалась.
+    // Две вкладки на одну сессию — это когда закрытие любой уносит её у соседа.
+    const first = planReattach([], req).tabs
+    const { tabs, activeKey } = planReattach(first, { ...req, workspace: 'docker' })
+    expect(tabs).toHaveLength(1)
+    expect(activeKey).toBe(first[0].key)
+    expect(tabs[0].workspace).toBe('docker')
+  })
+
+  it('переносит на существующую вкладку заголовок и файловый менеджер', () => {
+    const first = planReattach([], req).tabs
+    const { tabs } = planReattach(first, { ...req, title: 'новое имя', sftpOpen: true })
+    expect(tabs[0].title).toBe('новое имя')
+    expect(tabs[0].sftpOpen).toBe(true)
+  })
+
+  it('не трогает чужие вкладки', () => {
+    const other = planReattach([], { ...req, sessionId: 'другая', title: 'другая' }).tabs
+    const { tabs } = planReattach(other, req)
+    expect(tabs).toHaveLength(2)
+    expect(tabs[0].title).toBe('другая')
   })
 })
