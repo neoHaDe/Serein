@@ -50,6 +50,9 @@ jobs:
       - name: tsc
         run: npm run typecheck
 
+      - name: тесты фронтенда
+        run: npm test
+
       # Прод-зависимости — блокирующе: то, что уезжает пользователю, обязано быть чистым.
       - name: npm audit (прод)
         run: npm audit --omit=dev --audit-level=high
