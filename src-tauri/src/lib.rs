@@ -16,6 +16,7 @@ mod monitor;
 mod multihost;
 mod paths;
 mod proxycmd;
+mod schema;
 mod pty;
 mod remoteedit;
 mod serial;
@@ -1307,6 +1308,17 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            // Схему профиля приводим к текущей до того, как что-либо его прочитает.
+            // Ошибка здесь означает профиль от более новой версии: продолжать нельзя —
+            // первая же запись выбросит поля, которых мы не знаем.
+            if let Err(e) = schema::migrate(&store::config_dir()) {
+                use tauri_plugin_dialog::DialogExt;
+                let _ = app.dialog()
+                    .message(&e)
+                    .title("Serein — профиль несовместим")
+                    .blocking_show();
+                return Err(e.into());
+            }
             app.manage(AppState::new());
             #[cfg(windows)]
             if let Some(w) = app.get_webview_window("main") {
