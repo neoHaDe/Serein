@@ -25,14 +25,15 @@ pub const KDF_LEGACY: Kdf = Kdf { log_n: 14, r: 8, p: 1 };
 /// украденного файла дорожает восьмикратно — а это единственное, ради чего KDF и нужен.
 pub const KDF_CURRENT: Kdf = Kdf { log_n: 17, r: 8, p: 1 };
 
-pub fn derive_key_with(password: &str, salt: &[u8], k: Kdf) -> [u8; 32] {
+pub fn derive_key_with(password: &str, salt: &[u8], k: Kdf) -> Result<[u8; 32], String> {
     let mut out = [0u8; 32];
     // Мусорные параметры из чужого файла не должны ронять приложение — откатываемся
     // на прежний набор: хуже, чем хотелось, но лучше, чем паника в чужом коде.
-    let params = Params::new(k.log_n, k.r, k.p, 32)
-        .unwrap_or_else(|_| Params::new(14, 8, 1, 32).expect("scrypt params"));
-    scrypt(password.as_bytes(), salt, &params, &mut out).expect("scrypt");
-    out
+    let params = Params::new(k.log_n, k.r, k.p, 32).or_else(|_| Params::new(14, 8, 1, 32))
+        .map_err(|_| "Недопустимые параметры scrypt".to_string())?;
+    scrypt(password.as_bytes(), salt, &params, &mut out)
+        .map_err(|_| "Не удалось вывести ключ (scrypt)".to_string())?;
+    Ok(out)
 }
 
 fn rand_bytes(n: usize) -> Vec<u8> {
@@ -84,7 +85,7 @@ const V2_MAGIC: &[u8; 4] = b"SRN2";
 pub fn encrypt_with_password(plaintext: &str, password: &str) -> Result<String, String> {
     let k = KDF_CURRENT;
     let salt = rand_bytes(16);
-    let key = derive_key_with(password, &salt, k);
+    let key = derive_key_with(password, &salt, k)?;
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
     let iv = rand_bytes(12);
     let ct = cipher
@@ -131,7 +132,7 @@ fn open_packet(buf: &[u8], password: &str, k: Kdf) -> Result<String, String> {
     let iv = &buf[16..28];
     let tag = &buf[28..44];
     let body = &buf[44..];
-    let key = derive_key_with(password, salt, k);
+    let key = derive_key_with(password, salt, k)?;
     let mut ct = Vec::new();
     ct.extend_from_slice(body);
     ct.extend_from_slice(tag);
@@ -155,7 +156,7 @@ mod tests {
     /// а само поведение вывода ключа. Прогонять их на боевых 2^17 — держать
     /// набор тестов медленным без всякой пользы.
     fn key(pw: &str, salt: &[u8]) -> [u8; 32] {
-        derive_key_with(pw, salt, KDF_LEGACY)
+        derive_key_with(pw, salt, KDF_LEGACY).expect("scrypt в тесте")
     }
 
     /// Пакеты, созданные прежними сборками, обязаны читаться и после подъёма стойкости.
@@ -165,7 +166,7 @@ mod tests {
         // Собираем пакет ровно так, как это делала прежняя версия: без метки и параметров.
         let secret = "секрет из старого бэкапа";
         let salt = rand_bytes(16);
-        let key = derive_key_with("pass", &salt, KDF_LEGACY);
+        let key = derive_key_with("pass", &salt, KDF_LEGACY).expect("scrypt в тесте");
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
         let iv = rand_bytes(12);
         let ct = cipher.encrypt(Nonce::from_slice(&iv), secret.as_bytes()).unwrap();

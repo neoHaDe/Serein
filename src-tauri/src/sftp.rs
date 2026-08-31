@@ -101,7 +101,7 @@ impl SlotPool {
     async fn acquire(&self) -> SlotGuard {
         loop {
             {
-                let mut n = self.active.lock().unwrap();
+                let mut n = crate::sync::lock(&self.active);
                 let cap = self.limit.load(Ordering::Relaxed).clamp(1, TRANSFER_MAX);
                 if *n < cap {
                     *n += 1;
@@ -229,16 +229,14 @@ impl TransferHub {
     /// None — такой файл уже в очереди или качается.
     pub fn start(&self, id: &str, session_id: &str, key: String) -> Option<Arc<XferCtrl>> {
         {
-            let mut dup = self.dup.lock().unwrap();
+            let mut dup = crate::sync::lock(&self.dup);
             if !dup.insert(key.clone()) {
                 return None;
             }
         }
         let ctrl = XferCtrl::new(key);
-        self.running.lock().unwrap().insert(id.to_string(), ctrl.clone());
-        self.by_session
-            .lock()
-            .unwrap()
+        crate::sync::lock(&self.running).insert(id.to_string(), ctrl.clone());
+        crate::sync::lock(&self.by_session)
             .entry(session_id.to_string())
             .or_default()
             .push(id.to_string());
@@ -246,7 +244,7 @@ impl TransferHub {
     }
 
     pub fn cancel(&self, id: &str) -> bool {
-        match self.running.lock().unwrap().get(id) {
+        match crate::sync::lock(&self.running).get(id) {
             Some(c) => {
                 c.cancel();
                 true
@@ -256,7 +254,7 @@ impl TransferHub {
     }
 
     pub fn pause(&self, id: &str) -> bool {
-        match self.running.lock().unwrap().get(id) {
+        match crate::sync::lock(&self.running).get(id) {
             Some(c) if c.is_live() => {
                 c.pause();
                 true
@@ -266,7 +264,7 @@ impl TransferHub {
     }
 
     pub fn resume(&self, id: &str) -> bool {
-        match self.running.lock().unwrap().get(id) {
+        match crate::sync::lock(&self.running).get(id) {
             Some(c) if c.is_live() => {
                 c.resume();
                 true
@@ -276,8 +274,8 @@ impl TransferHub {
     }
 
     pub fn finish(&self, id: &str) {
-        if let Some(c) = self.running.lock().unwrap().remove(id) {
-            self.dup.lock().unwrap().remove(&c.key);
+        if let Some(c) = crate::sync::lock(&self.running).remove(id) {
+            crate::sync::lock(&self.dup).remove(&c.key);
         }
     }
 
@@ -286,13 +284,10 @@ impl TransferHub {
     }
 
     pub fn cancel_session(&self, session_id: &str) {
-        let ids = self
-            .by_session
-            .lock()
-            .unwrap()
+        let ids = crate::sync::lock(&self.by_session)
             .remove(session_id)
             .unwrap_or_default();
-        let running = self.running.lock().unwrap();
+        let running = crate::sync::lock(&self.running);
         for id in ids {
             if let Some(c) = running.get(&id) {
                 c.cancel();

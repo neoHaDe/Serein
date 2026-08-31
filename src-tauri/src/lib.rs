@@ -7,6 +7,7 @@ mod dnd;
 mod docker;
 mod docker_compose;
 mod dpapi;
+mod error;
 mod importers;
 mod os_secrets;
 mod ownership;
@@ -26,6 +27,7 @@ mod ssh_agent;
 mod ssh_algos;
 pub mod ssh;
 pub mod store;
+mod sync;
 mod telnet;
 mod term_out;
 mod tunnels;
@@ -72,7 +74,7 @@ impl AppState {
         }
     }
     fn ssh(&self, id: &str) -> Option<Arc<ssh::SshSession>> {
-        match self.sessions.lock().unwrap().get(id) {
+        match crate::sync::lock(&self.sessions).get(id) {
             Some(Session::Ssh(s)) => Some(s.clone()),
             _ => None,
         }
@@ -86,10 +88,10 @@ impl AppState {
         self.ops.cancel_prefix(&format!("{id}:"));
         term_out::replay_forget(id);
         self.owners.release(id);
-        if let Some(tx) = self.ki.lock().unwrap().remove(id) {
+        if let Some(tx) = crate::sync::lock(&self.ki).remove(id) {
             drop(tx);
         }
-        if let Some(s) = self.sessions.lock().unwrap().remove(id) {
+        if let Some(s) = crate::sync::lock(&self.sessions).remove(id) {
             match s {
                 Session::Local(l) => l.close(),
                 Session::Serial(p) => p.close(),
@@ -167,8 +169,21 @@ fn app_install_kind() -> &'static str {
 /// Одна команда на нескольких серверах. Результат каждого хоста уходит событием
 /// сразу, как только готов; здесь возвращается общий список — для истории в окне.
 #[tauri::command]
-async fn multi_exec(app: AppHandle, server_ids: Vec<String>, command: String) -> Vec<Value> {
-    multihost::run(app, server_ids, command).await
+async fn multi_exec(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    server_ids: Vec<String>,
+    command: String,
+) -> Result<Vec<Value>, String> {
+    let cancel = state.ops.begin("multi-exec");
+    let out = multihost::run(app, server_ids, command, cancel).await;
+    state.ops.finish("multi-exec");
+    Ok(out)
+}
+
+#[tauri::command]
+fn multi_exec_cancel(state: State<'_, AppState>) {
+    state.ops.cancel("multi-exec");
 }
 
 #[tauri::command]
@@ -293,7 +308,7 @@ fn session_open_local(window: tauri::Window, app: AppHandle, state: State<'_, Ap
     let shell = pty::resolve_shell(&pref);
     let id = uuid::Uuid::new_v4().to_string();
     let sess = pty::open_local(app.clone(), id.clone(), shell, cwd, cols, rows)?;
-    state.sessions.lock().unwrap().insert(id.clone(), Session::Local(sess));
+    crate::sync::lock(&state.sessions).insert(id.clone(), Session::Local(sess));
     // Владельцем становится окно, которое сессию открыло: закрыть её сможет только оно.
     state.owners.claim(&id, window.label());
     emit_connected(&app, id.clone());
@@ -324,7 +339,7 @@ fn session_open_serial(window: tauri::Window, app: AppHandle, state: State<'_, A
 
     let id = uuid::Uuid::new_v4().to_string();
     let sess = serial::open_serial(app.clone(), id.clone(), &cfg)?;
-    state.sessions.lock().unwrap().insert(id.clone(), Session::Serial(sess));
+    crate::sync::lock(&state.sessions).insert(id.clone(), Session::Serial(sess));
 
     // Первой строкой показываем параметры линии: с COM-портом молчащий экран
     // неотличим от неверной скорости, и это первое, что надо проверить.
@@ -341,7 +356,7 @@ fn session_open_serial(window: tauri::Window, app: AppHandle, state: State<'_, A
 /// BREAK на линию — им сетевое железо переводят в recovery.
 #[tauri::command]
 fn serial_send_break(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    match state.sessions.lock().unwrap().get(&id) {
+    match crate::sync::lock(&state.sessions).get(&id) {
         Some(Session::Serial(p)) => p.send_break(),
         _ => Err("Это не сессия COM-порта".into()),
     }
@@ -349,7 +364,7 @@ fn serial_send_break(state: State<'_, AppState>, id: String) -> Result<(), Strin
 
 #[tauri::command]
 fn serial_set_signal(state: State<'_, AppState>, id: String, line: String, on: bool) -> Result<(), String> {
-    match state.sessions.lock().unwrap().get(&id) {
+    match crate::sync::lock(&state.sessions).get(&id) {
         Some(Session::Serial(p)) => p.set_signal(&line, on),
         _ => Err("Это не сессия COM-порта".into()),
     }
@@ -394,7 +409,7 @@ fn session_open_tcp(window: tauri::Window, app: AppHandle, state: State<'_, AppS
 
     let id = uuid::Uuid::new_v4().to_string();
     let sess = telnet::open_tcp(app.clone(), id.clone(), mode, &host, port, eol, cols, rows)?;
-    state.sessions.lock().unwrap().insert(id.clone(), Session::Tcp(sess));
+    crate::sync::lock(&state.sessions).insert(id.clone(), Session::Tcp(sess));
 
     // Как и у COM-порта: молчащий экран не отличить от неверного порта, поэтому
     // первой строкой пишем, куда именно подключились.
@@ -413,7 +428,7 @@ fn session_open_tcp(window: tauri::Window, app: AppHandle, state: State<'_, AppS
 /// На сетевом железе это единственный способ прервать зависшую команду.
 #[tauri::command]
 fn telnet_command(state: State<'_, AppState>, id: String, name: String) -> Result<(), String> {
-    match state.sessions.lock().unwrap().get(&id) {
+    match crate::sync::lock(&state.sessions).get(&id) {
         Some(Session::Tcp(t)) => t.send_command(&name),
         _ => Err("Это не telnet-сессия".into()),
     }
@@ -430,7 +445,9 @@ async fn session_open_ssh(window: tauri::Window, app: AppHandle, state: State<'_
     let host_keys = state.host_keys.clone();
 
     let sess =
-        ssh::connect_chain(app.clone(), id.clone(), chain, cols, rows, ki, host_keys).await?;
+        ssh::connect_chain(app.clone(), id.clone(), chain, cols, rows, ki, host_keys)
+            .await
+            .map_err(|e| e.to_string())?;
     let sess = Arc::new(sess);
     // Автозапуск туннелей + команда на подключении.
     let server = store::server_with_secrets(server_id);
@@ -447,7 +464,7 @@ async fn session_open_ssh(window: tauri::Window, app: AppHandle, state: State<'_
             let _ = sess.tx.send(ssh::SshCmd::Write(format!("{cmd}\r").into_bytes()));
         }
     }
-    state.sessions.lock().unwrap().insert(id.clone(), Session::Ssh(sess));
+    crate::sync::lock(&state.sessions).insert(id.clone(), Session::Ssh(sess));
     // Владельцем становится окно, которое сессию открыло: закрыть её сможет только оно.
     state.owners.claim(&id, window.label());
     emit_connected(&app, id.clone());
@@ -456,7 +473,7 @@ async fn session_open_ssh(window: tauri::Window, app: AppHandle, state: State<'_
 
 #[tauri::command]
 fn session_write(state: State<'_, AppState>, id: String, data: String) {
-    if let Some(s) = state.sessions.lock().unwrap().get(&id) {
+    if let Some(s) = crate::sync::lock(&state.sessions).get(&id) {
         match s {
             Session::Local(l) => l.write(&data),
             Session::Serial(p) => p.write(&data),
@@ -476,7 +493,7 @@ fn session_resize(state: State<'_, AppState>, p: Value) {
     if cols < 20 || rows < 5 {
         return;
     }
-    if let Some(s) = state.sessions.lock().unwrap().get(&id) {
+    if let Some(s) = crate::sync::lock(&state.sessions).get(&id) {
         match s {
             Session::Local(l) => l.resize(cols as u16, rows as u16),
             // У последовательного порта нет размера окна — ресайз игнорируем.
@@ -533,7 +550,7 @@ async fn session_ping(state: State<'_, AppState>, id: String) -> Result<Option<u
 /// Ответ пользователя на вопрос о ключе хоста (доверять или нет).
 #[tauri::command]
 fn session_hostkey_respond(state: State<'_, AppState>, request_id: String, accept: bool) {
-    if let Some(tx) = state.host_keys.lock().unwrap().remove(&request_id) {
+    if let Some(tx) = crate::sync::lock(&state.host_keys).remove(&request_id) {
         let _ = tx.send(accept);
     }
 }
@@ -664,7 +681,7 @@ async fn workspace_logs(state: State<'_, AppState>, session_id: String) -> Resul
 
 #[tauri::command]
 fn session_ki_respond(state: State<'_, AppState>, id: String, answers: Vec<String>) {
-    if let Some(tx) = state.ki.lock().unwrap().remove(&id) {
+    if let Some(tx) = crate::sync::lock(&state.ki).remove(&id) {
         let _ = tx.send(answers);
     }
 }
@@ -1382,7 +1399,7 @@ pub fn run() {
             export_text_file,
             keygen_generate, keygen_save, keygen_install,
             servers_import_ssh_config, servers_import_putty,
-            app_platform, app_paths, app_install_kind, multi_exec,
+            app_platform, app_paths, app_install_kind, multi_exec, multi_exec_cancel,
             windows_nudge_group, windows_raise_group, windows_restore_minimized, windows_count_minimized,
             clipboard_write, clipboard_read
         ])

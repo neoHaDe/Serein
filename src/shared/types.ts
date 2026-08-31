@@ -219,7 +219,11 @@ export interface SessionExit {
   error?: string
   /** user — сами закрыли вкладку/панель; drop — обрыв канала. */
   reason?: 'user' | 'drop'
+  /** На каком шаге SSH произошёл сбой (если известно). */
+  phase?: SessionFailurePhase
 }
+
+export type SessionFailurePhase = 'connect' | 'auth' | 'jump' | 'shell' | 'hostkey'
 
 export interface SessionStatus {
   id: string

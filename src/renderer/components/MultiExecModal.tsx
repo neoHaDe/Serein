@@ -87,6 +87,11 @@ export function MultiExecModal({ servers, onClose }: Props): JSX.Element {
 
   const chosen = servers.filter((s) => picked.has(s.id))
 
+  const stop = (): void => {
+    void window.api.multi.cancel()
+    setRunning(false)
+  }
+
   const start = async (): Promise<void> => {
     setConfirming(false)
     setRunning(true)
@@ -200,7 +205,12 @@ export function MultiExecModal({ servers, onClose }: Props): JSX.Element {
         )}
 
         <div className="modal-actions">
-          <button onClick={onClose}>{results.length ? 'Закрыть' : 'Отмена'}</button>
+          <button onClick={onClose}>{results.length && !running ? 'Закрыть' : 'Отмена'}</button>
+          {running && (
+            <button className="danger" onClick={stop}>
+              Остановить
+            </button>
+          )}
           {confirming ? (
             <button className="primary" onClick={() => void start()}>
               Да, выполнить

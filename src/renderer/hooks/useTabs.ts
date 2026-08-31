@@ -10,7 +10,7 @@ import { handOverSession, takeOverSession } from '../detachedSessions'
 import { bindingLookup, comboFromEvent } from '../keybindings'
 import { allLeaves, findLeaf, updateLeaf, updateLeafBySession, updateSplitSizes } from '../paneTree'
 import type { ReattachSftpPayload, ReattachTabPayload, ReattachWorkspacePayload } from '../reattach'
-import { shouldAutoReconnect } from '../sessionRules'
+import { shouldScheduleReconnect, sessionClosedMessage } from '../reconnectFsm'
 import type { SplitChoice, Tab } from '../tabs'
 import {
   broadcastTargets,
@@ -122,7 +122,9 @@ export function useTabs({
     (paneId: string, message: string) => {
       const tab = tabsRef.current.find((t) => allLeaves(t.root).some((l) => l.id === paneId))
       if (!tab) return
-      if (settingsRef.current.autoReconnect) {
+      const leaf = allLeaves(tab.root).find((l) => l.id === paneId)
+      if (!leaf) return
+      if (shouldScheduleReconnect('connect_fail', leaf, settingsRef.current)) {
         reconnect.schedule(tab.key, paneId)
         return
       }
@@ -149,7 +151,7 @@ export function useTabs({
       for (const t of tabsRef.current) {
         const leaf = allLeaves(t.root).find((l) => l.sessionId === p.id)
         if (!leaf) continue
-        if (shouldAutoReconnect(p, leaf, settingsRef.current)) {
+        if (shouldScheduleReconnect('session_drop', leaf, settingsRef.current, p)) {
           toReconnect = { tabKey: t.key, paneId: leaf.id }
         }
         break
@@ -163,7 +165,7 @@ export function useTabs({
           ...t,
           root: updateLeafBySession(t.root, p.id, {
             status: 'closed',
-            statusMsg: p.error ?? 'Сессия завершена',
+            statusMsg: sessionClosedMessage(p),
             sessionId: undefined
           })
         }))

@@ -212,7 +212,7 @@ async fn main() {
         let h = match ssh::connect_client(chain.clone()).await {
             Ok(h) => h,
             Err(e) => {
-                rec("ssh_shell", false, json!({ "error": e }));
+                rec("ssh_shell", false, json!({ "error": e.to_string() }));
                 std::process::exit(1);
             }
         };
@@ -238,7 +238,7 @@ async fn main() {
     let mut h = match ssh::connect_client(chain.clone()).await {
         Ok(h) => h,
         Err(e) => {
-            rec("ssh_shell", false, json!({ "error": e }));
+            rec("ssh_shell", false, json!({ "error": e.to_string() }));
             std::process::exit(1);
         }
     };
@@ -374,7 +374,7 @@ async fn main() {
     h = match ssh::connect_client(chain.clone()).await {
         Ok(x) => x,
         Err(e) => {
-            rec("ssh_reconnect", false, json!({ "error": e, "after": "before_files" }));
+            rec("ssh_reconnect", false, json!({ "error": e.to_string(), "after": "before_files" }));
             return;
         }
     };

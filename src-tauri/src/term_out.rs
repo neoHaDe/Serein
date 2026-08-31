@@ -60,7 +60,7 @@ impl TermOut {
         if bytes.is_empty() {
             return;
         }
-        let mut g = self.st.lock().expect("term_out");
+        let mut g = crate::sync::lock(&self.st);
         if g.closed {
             return;
         }
@@ -100,7 +100,7 @@ impl TermOut {
         let mut last_stats = Instant::now();
         loop {
             let (empty, closed) = {
-                let g = self.st.lock().expect("term_out");
+                let g = crate::sync::lock(&self.st);
                 (g.buf.is_empty(), g.closed)
             };
             if empty && closed {
@@ -112,7 +112,7 @@ impl TermOut {
             }
             let deadline = tokio::time::Instant::now() + Duration::from_millis(BATCH_MS);
             loop {
-                let n = self.st.lock().expect("term_out").buf.len();
+                let n = crate::sync::lock(&self.st).buf.len();
                 if n >= BATCH_BYTES || n == 0 {
                     break;
                 }
@@ -148,7 +148,7 @@ impl TermOut {
     }
 
     fn take(&self) -> (String, u64) {
-        let mut g = self.st.lock().expect("term_out");
+        let mut g = crate::sync::lock(&self.st);
         let dropped = std::mem::take(&mut g.dropped);
         let s = take_utf8(&mut g.buf);
         (s, dropped)

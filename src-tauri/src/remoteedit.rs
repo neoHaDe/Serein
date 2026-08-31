@@ -56,7 +56,7 @@ impl EditManager {
         emit(&app, &session_id, &remote, "opened", None);
 
         let running = Arc::new(AtomicBool::new(true));
-        self.watchers.lock().unwrap().insert(key(&session_id, &remote), running.clone());
+        crate::sync::lock(&self.watchers).insert(key(&session_id, &remote), running.clone());
 
         let mut last = mtime_of(&local);
         tokio::spawn(async move {
@@ -80,14 +80,14 @@ impl EditManager {
     }
 
     pub fn stop(&self, app: &AppHandle, session_id: &str, remote: &str) {
-        if let Some(r) = self.watchers.lock().unwrap().remove(&key(session_id, remote)) {
+        if let Some(r) = crate::sync::lock(&self.watchers).remove(&key(session_id, remote)) {
             r.store(false, Ordering::Relaxed);
         }
         emit(app, session_id, remote, "stopped", None);
     }
 
     pub fn stop_session(&self, session_id: &str) {
-        let mut w = self.watchers.lock().unwrap();
+        let mut w = crate::sync::lock(&self.watchers);
         let keys: Vec<String> = w
             .keys()
             .filter(|k| k.starts_with(&format!("{session_id}\u{0}")))

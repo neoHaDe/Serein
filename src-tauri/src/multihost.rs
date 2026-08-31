@@ -76,8 +76,11 @@ fn failed(server_id: &str, name: &str, why: String, ms: u128) -> Value {
     })
 }
 
+/// Сколько секунд ждём exec на одном хосте в массовом прогоне.
+const HOST_EXEC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Выполнить команду на одном сервере: подключение, exec, разрыв.
-async fn run_one(server_id: String, command: String) -> Value {
+async fn run_one(server_id: String, command: String, cancel: ssh::CancelRx) -> Value {
     let name = store::servers_list()
         .into_iter()
         .find(|s| s.get("id").and_then(|v| v.as_str()) == Some(&server_id))
@@ -100,9 +103,9 @@ async fn run_one(server_id: String, command: String) -> Value {
     let started = Instant::now();
     let handle = match ssh::connect_client(chain).await {
         Ok(h) => h,
-        Err(e) => return failed(&server_id, &name, e, started.elapsed().as_millis()),
+        Err(e) => return failed(&server_id, &name, e.to_string(), started.elapsed().as_millis()),
     };
-    match ssh::exec(&handle, &command, None).await {
+    match ssh::exec_timed(&handle, &command, Some(cancel), HOST_EXEC_TIMEOUT).await {
         Ok((code, out, err)) => json!({
             "serverId": server_id,
             "name": name,
@@ -119,7 +122,12 @@ async fn run_one(server_id: String, command: String) -> Value {
 /// Прогнать команду по списку серверов. Результат каждого хоста уходит событием
 /// `multi-exec-result` сразу, как только готов, — на десяти машинах ждать общего конца
 /// незачем, да и видно, кто отвечает медленно.
-pub async fn run(app: AppHandle, server_ids: Vec<String>, command: String) -> Vec<Value> {
+pub async fn run(
+    app: AppHandle,
+    server_ids: Vec<String>,
+    command: String,
+    cancel: ssh::CancelRx,
+) -> Vec<Value> {
     use futures::stream::{FuturesUnordered, StreamExt};
 
     let command = command.trim().to_string();
@@ -134,7 +142,7 @@ pub async fn run(app: AppHandle, server_ids: Vec<String>, command: String) -> Ve
 
     for _ in 0..CONCURRENCY.min(total) {
         if let Some(id) = queue.next() {
-            running.push(run_one(id, command.clone()));
+            running.push(run_one(id, command.clone(), cancel.clone()));
         }
     }
     while let Some(res) = running.next().await {
@@ -144,7 +152,7 @@ pub async fn run(app: AppHandle, server_ids: Vec<String>, command: String) -> Ve
         );
         results.push(res);
         if let Some(id) = queue.next() {
-            running.push(run_one(id, command.clone()));
+            running.push(run_one(id, command.clone(), cancel.clone()));
         }
     }
     results
@@ -182,8 +190,9 @@ mod tests {
             .enable_all()
             .build()
             .expect("рантайм");
+        let (_tx, rx) = tokio::sync::watch::channel(false);
         let started = Instant::now();
-        let res = rt.block_on(run_one("нет-такого-сервера".into(), "uptime".into()));
+        let res = rt.block_on(run_one("нет-такого-сервера".into(), "uptime".into(), rx));
         assert_eq!(res["state"], "skipped");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(3),

@@ -50,7 +50,7 @@ fn kdf_of(cfg: &Value) -> crypto::Kdf {
 
 fn key_from(password: &str, salt_b64: &str, kdf: crypto::Kdf) -> Option<[u8; 32]> {
     let salt = STANDARD.decode(salt_b64).ok()?;
-    Some(crypto::derive_key_with(password, &salt, kdf))
+    crypto::derive_key_with(password, &salt, kdf).ok()
 }
 
 pub fn unlock(password: &str) -> bool {
@@ -127,7 +127,10 @@ pub fn enable(password: &str) -> Value {
         s
     };
     let kdf = crypto::KDF_CURRENT;
-    let key = crypto::derive_key_with(password, &salt, kdf);
+    let key = match crypto::derive_key_with(password, &salt, kdf) {
+        Ok(k) => k,
+        Err(e) => return json!({ "ok": false, "error": e }),
+    };
     vaultkey::set(Some(key));
     if let Err(e) = crate::store::import_all_secrets(&plain) {
         return json!({ "ok": false, "error": e });

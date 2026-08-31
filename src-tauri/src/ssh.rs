@@ -40,7 +40,7 @@ impl HostKeyAsk {
     pub async fn confirm(&self, host: &str, fingerprint: &str, kind: &str, previous: &str) -> bool {
         let request_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
-        self.bridge.lock().unwrap().insert(request_id.clone(), tx);
+        crate::sync::lock(&self.bridge).insert(request_id.clone(), tx);
         let _ = self.app.emit(
             "session-hostkey",
             json!({
@@ -115,7 +115,7 @@ impl SshSession {
         }
         self.alive.store(false, Ordering::Relaxed);
         let _ = self.cancel.send(true);
-        self.remote_forwards.lock().unwrap().clear();
+        crate::sync::lock(&self.remote_forwards).clear();
         let _ = self.tx.send(SshCmd::Close);
         let handle = self.handle.clone();
         let jumps = self.jump_handles.clone();
@@ -205,10 +205,7 @@ impl Handler for ClientHandler {
         reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        let local_port = self
-            .remote_forwards
-            .lock()
-            .unwrap()
+        let local_port = crate::sync::lock(&self.remote_forwards)
             .get(&connected_port)
             .copied();
         // Канал теперь надо подтвердить явно: без accept он отклоняется при сбросе `reply`.
@@ -296,6 +293,23 @@ fn port_of(server: &Value) -> u16 {
     server.get("port").and_then(|v| v.as_u64()).unwrap_or(22) as u16
 }
 
+fn host_label(server: &Value) -> String {
+    let host = field(server, "host").unwrap_or("?");
+    let port = port_of(server);
+    if port == 22 {
+        host.to_string()
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
+fn auth_rejected(server: &Value) -> crate::error::SereinError {
+    crate::error::SereinError::AuthRejected {
+        host: host_label(server),
+        auth_type: field(server, "authType").unwrap_or("password").to_string(),
+    }
+}
+
 /// Окно и keepalive под длинные SFTP. `maximum_packet_size` 32 КиБ — как у OpenSSH;
 /// SFTP-чанк в `sftp.rs` режется под этот лимит, иначе DATA не влезает в SSH-пакет.
 pub(crate) fn ssh_client_config(server: &Value) -> Arc<client::Config> {
@@ -311,7 +325,7 @@ pub(crate) fn ssh_client_config(server: &Value) -> Arc<client::Config> {
 
 async fn request_ki(app: &AppHandle, ki: &KiBridge, id: &str, prompts: Vec<Value>) -> Vec<String> {
     let (tx, rx) = oneshot::channel();
-    ki.lock().unwrap().insert(id.to_string(), tx);
+    crate::sync::lock(ki).insert(id.to_string(), tx);
     let _ = app.emit("session-ki", json!({ "id": id, "prompts": prompts }));
     rx.await.unwrap_or_default()
 }
@@ -331,60 +345,54 @@ async fn authenticate(
     app: Option<&AppHandle>,
     ki: &KiBridge,
     id: Option<&str>,
-) -> Result<bool, String> {
+) -> crate::error::Result<bool> {
     let user = field(server, "username").unwrap_or("root").to_string();
     let auth_type = field(server, "authType").unwrap_or("password");
 
     match auth_type {
         "key" => {
-            let raw = field(server, "privateKeyPath").ok_or("Не задан путь к ключу")?;
+            let raw = field(server, "privateKeyPath")
+                .ok_or_else(|| crate::error::SereinError::Config("Не задан путь к ключу".into()))?;
             let passphrase = field(server, "passphrase");
-            // Путь мог приехать вместе с бэкапом из другой системы: `C:\Users\…\.ssh\id_ed25519`
-            // на Linux не существует. Ищем ключ там, где он реально лежит, а если не нашли —
-            // объясняем по-человечески вместо `os error 2`, из которого ничего не следует.
             let path = crate::paths::resolve_identity(raw);
             if !std::path::Path::new(&path).exists() {
-                return Err(crate::paths::missing_key_error(raw, &path));
+                return Err(crate::error::SereinError::Config(crate::paths::missing_key_error(
+                    raw, &path,
+                )));
             }
-            let key = load_secret_key(&path, passphrase).map_err(|e| e.to_string())?;
-            // Для RSA хеш подписи теперь выбираем осознанно. `PrivateKeyWithHashAlg::new`
-            // с `None` означает старый `ssh-rsa` на SHA-1 — принимать это по умолчанию
-            // значило бы тихо ослабить авторизацию на любом современном сервере.
-            // Спрашиваем сервер, что он умеет, и берём лучшее; для не-RSA ключей
-            // параметр игнорируется.
+            let key = load_secret_key(&path, passphrase)
+                .map_err(|e| crate::error::SereinError::Protocol(e.to_string()))?;
             let hash = handle
                 .best_supported_rsa_hash()
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(|e| crate::error::SereinError::Protocol(e.to_string()))?
                 .flatten();
             handle
                 .authenticate_publickey(&user, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
                 .await
                 .map(|r| r.success())
-                .map_err(|e| e.to_string())
+                .map_err(|e| crate::error::SereinError::Protocol(e.to_string()))
         }
-        "agent" => {
-            ssh_agent::authenticate_with_agent(handle, &user, field(server, "agentKey")).await
-        }
+        "agent" => ssh_agent::authenticate_with_agent(handle, &user, field(server, "agentKey"))
+            .await
+            .map_err(crate::error::SereinError::Protocol),
         _ => {
-            // password (+ фолбэк на keyboard-interactive/2FA для целевого сервера).
             let pass = field(server, "password").unwrap_or("");
             if !pass.is_empty() {
                 if handle
                     .authenticate_password(&user, pass)
                     .await
-                    .map_err(|e| e.to_string())?
+                    .map_err(|e| crate::error::SereinError::Protocol(e.to_string()))?
                     .success()
                 {
                     return Ok(true);
                 }
             }
-            // keyboard-interactive (2FA/OTP) — только для целевого сервера.
             if let Some(sid) = id {
                 let mut resp = handle
                     .authenticate_keyboard_interactive_start(&user, None)
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| crate::error::SereinError::Protocol(e.to_string()))?;
                 loop {
                     match resp {
                         KeyboardInteractiveAuthResponse::Success => return Ok(true),
@@ -395,13 +403,15 @@ async fn authenticate(
                                 .map(|p| json!({ "prompt": p.prompt, "echo": p.echo }))
                                 .collect();
                             let Some(app) = app else {
-                                return Err("keyboard-interactive недоступен без UI".into());
+                                return Err(crate::error::SereinError::Config(
+                                    "keyboard-interactive недоступен без UI".into(),
+                                ));
                             };
                             let answers = request_ki(app, ki, sid, pl).await;
                             resp = handle
                                 .authenticate_keyboard_interactive_respond(answers)
                                 .await
-                                .map_err(|e| e.to_string())?;
+                                .map_err(|e| crate::error::SereinError::Protocol(e.to_string()))?;
                         }
                     }
                 }
@@ -416,8 +426,10 @@ async fn connect_one(
     rf: RemoteForwards,
     cancel: CancelRx,
     ask: Option<HostKeyAsk>,
-) -> Result<client::Handle<ClientHandler>, String> {
-    let host = field(server, "host").ok_or("Не задан host")?;
+) -> crate::error::Result<client::Handle<ClientHandler>> {
+    let host = field(server, "host")
+        .ok_or_else(|| crate::error::SereinError::Config("Не задан host".into()))?;
+    let label = host_label(server);
     let handler = ClientHandler {
         host_id: knownhosts::host_id(host, port_of(server)),
         host_key_ask: ask.clone(),
@@ -426,9 +438,6 @@ async fn connect_one(
         agent_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
     let config = ssh_client_config(server);
-    // Таймаут подключения: к офлайн/firewall-хосту (DROP без TCP-reset) connect иначе
-    // виснет надолго. russh отдаёт ошибку Result (не EventEmitter, как ssh2 в Electron),
-    // поэтому "двойного error" тут нет — достаточно ограничить ожидание и вернуть Err.
     let secs = server
         .get("connectTimeout")
         .and_then(|v| v.as_u64())
@@ -436,24 +445,29 @@ async fn connect_one(
         .unwrap_or(15);
     let timeout = std::time::Duration::from_secs(secs);
 
-    // ProxyCommand: вместо TCP берём stdin/stdout внешней программы. Таймаут тот же —
-    // посредник может молчать так же, как недоступный хост.
     if let Some(cmd) = field(server, "proxyCommand").map(str::trim).filter(|c| !c.is_empty()) {
         let user = field(server, "username").unwrap_or("root");
-        let stream = crate::proxycmd::spawn(cmd, host, port_of(server), user)?;
+        let stream = crate::proxycmd::spawn(cmd, host, port_of(server), user)
+            .map_err(crate::error::SereinError::Config)?;
         let fut = client::connect_stream(config, stream, handler);
         return match tokio::time::timeout(timeout, fut).await {
-            Ok(r) => r.map_err(|e| format!("Подключение к {host} через прокси-команду не удалось: {e}")),
-            Err(_) => Err(format!(
-                "Подключение к {host} через прокси-команду: таймаут {secs}с (посредник не отвечает?)"
-            )),
+            Ok(r) => r.map_err(|e| crate::error::SereinError::ConnectFailed {
+                host: label.clone(),
+                detail: format!("через прокси-команду: {e}"),
+                phase: crate::error::SessionPhase::Connect,
+            }),
+            Err(_) => Err(crate::error::SereinError::ConnectTimeout { host: label, secs }),
         };
     }
 
     let fut = client::connect(config, (host, port_of(server)), handler);
     match tokio::time::timeout(timeout, fut).await {
-        Ok(r) => r.map_err(|e| format!("Подключение к {host} не удалось: {e}")),
-        Err(_) => Err(format!("Подключение к {host}: таймаут {secs}с (хост недоступен?)")),
+        Ok(r) => r.map_err(|e| crate::error::SereinError::ConnectFailed {
+            host: label.clone(),
+            detail: e.to_string(),
+            phase: crate::error::SessionPhase::Connect,
+        }),
+        Err(_) => Err(crate::error::SereinError::ConnectTimeout { host: label, secs }),
     }
 }
 
@@ -466,9 +480,9 @@ pub async fn connect_chain(
     rows: u32,
     ki: KiBridge,
     host_keys: HostKeyBridge,
-) -> Result<SshSession, String> {
+) -> crate::error::Result<SshSession> {
     if chain.is_empty() {
-        return Err("Пустая цепочка хостов".into());
+        return Err(crate::error::SereinError::EmptyChain);
     }
     let target = chain[0].clone();
     let mut jump_handles: Vec<Arc<client::Handle<ClientHandler>>> = Vec::new();
@@ -483,7 +497,7 @@ pub async fn connect_chain(
     });
 
     // Самый дальний хоп (конец цепочки) — прямое подключение.
-    let far = chain.last().unwrap();
+    let far = &chain[chain.len() - 1];
     let mut handle = connect_one(far, remote_forwards.clone(), cancel_rx.clone(), ask.clone()).await?;
     let far_is_target = chain.len() == 1;
     if !authenticate(
@@ -495,18 +509,22 @@ pub async fn connect_chain(
     )
     .await?
     {
-        return Err("Аутентификация отклонена сервером".into());
+        return Err(auth_rejected(far));
     }
 
     // Идём внутрь к цели: на каждом шаге пробрасываем direct-tcpip и подключаемся поверх.
     let mut cur = handle;
     for i in (0..chain.len() - 1).rev() {
         let next = &chain[i];
-        let nhost = field(next, "host").ok_or("Не задан host промежуточного хоста")?;
+        let nhost = field(next, "host")
+            .ok_or_else(|| crate::error::SereinError::Config("Не задан host промежуточного хоста".into()))?;
         let channel = cur
             .channel_open_direct_tcpip(nhost, port_of(next) as u32, "127.0.0.1", 0)
             .await
-            .map_err(|e| format!("ProxyJump к {nhost} не удался: {e}"))?;
+            .map_err(|e| crate::error::SereinError::ProxyJump {
+                host: nhost.to_string(),
+                detail: e.to_string(),
+            })?;
         jump_handles.push(Arc::new(cur));
         let config = ssh_client_config(next);
         let handler = ClientHandler {
@@ -518,7 +536,10 @@ pub async fn connect_chain(
         };
         let mut nh = client::connect_stream(config, channel.into_stream(), handler)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| crate::error::SereinError::ProxyJump {
+                host: nhost.to_string(),
+                detail: e.to_string(),
+            })?;
         let is_target = i == 0;
         if !authenticate(
             &mut nh,
@@ -529,24 +550,29 @@ pub async fn connect_chain(
         )
         .await?
         {
-            return Err("Аутентификация отклонена сервером".into());
+            return Err(auth_rejected(next));
         }
         cur = nh;
     }
 
-    // cur — целевой клиент. Открываем shell.
+    let target_label = host_label(&target);
+    let shell_err = |detail: String| crate::error::SereinError::ConnectFailed {
+        host: target_label.clone(),
+        detail,
+        phase: crate::error::SessionPhase::Shell,
+    };
     let mut channel = cur
         .channel_open_session()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| shell_err(e.to_string()))?;
     channel
         .request_pty(false, "xterm-256color", cols, rows, 0, 0, &[])
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| shell_err(e.to_string()))?;
     if wants_agent_forward(&target) {
-        channel.agent_forward(true).await.map_err(|e| e.to_string())?;
+        channel.agent_forward(true).await.map_err(|e| shell_err(e.to_string()))?;
     }
-    channel.request_shell(true).await.map_err(|e| e.to_string())?;
+    channel.request_shell(true).await.map_err(|e| shell_err(e.to_string()))?;
 
     let handle: SharedHandle = Arc::new(tokio::sync::Mutex::new(cur));
     let (tx, mut rx) = mpsc::unbounded_channel::<SshCmd>();
@@ -590,7 +616,8 @@ pub async fn connect_chain(
                 "code": 0,
                 "signal": null,
                 "reason": if is_drop { "drop" } else { "user" },
-                "error": is_drop.then_some("Соединение разорвано"),
+                "phase": crate::error::SessionPhase::Shell.as_str(),
+                "error": is_drop.then(|| "Соединение разорвано сервером".to_string()),
             }),
         );
         if let Some(st) = app2.try_state::<crate::AppState>() {
@@ -611,26 +638,30 @@ pub async fn connect_chain(
 }
 
 /// Подключение без PTY/shell — для exec/SFTP (bench и служебные каналы).
-pub async fn connect_client(chain: Vec<Value>) -> Result<SharedHandle, String> {
+pub async fn connect_client(chain: Vec<Value>) -> crate::error::Result<SharedHandle> {
     if chain.is_empty() {
-        return Err("Пустая цепочка хостов".into());
+        return Err(crate::error::SereinError::EmptyChain);
     }
     let dummy_ki: KiBridge = Arc::new(Mutex::new(HashMap::new()));
     let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
     let (_cancel_tx, cancel_rx) = watch::channel(false);
-    let far = chain.last().unwrap();
+    let far = &chain[chain.len() - 1];
     let mut handle = connect_one(far, remote_forwards.clone(), cancel_rx.clone(), None).await?;
     if !authenticate(&mut handle, far, None, &dummy_ki, None).await? {
-        return Err("Аутентификация отклонена сервером".into());
+        return Err(auth_rejected(far));
     }
     let mut cur = handle;
     for i in (0..chain.len() - 1).rev() {
         let next = &chain[i];
-        let nhost = field(next, "host").ok_or("Не задан host промежуточного хоста")?;
+        let nhost = field(next, "host")
+            .ok_or_else(|| crate::error::SereinError::Config("Не задан host промежуточного хоста".into()))?;
         let channel = cur
             .channel_open_direct_tcpip(nhost, port_of(next) as u32, "127.0.0.1", 0)
             .await
-            .map_err(|e| format!("ProxyJump к {nhost} не удался: {e}"))?;
+            .map_err(|e| crate::error::SereinError::ProxyJump {
+                host: nhost.to_string(),
+                detail: e.to_string(),
+            })?;
         let config = ssh_client_config(next);
         let handler = ClientHandler {
             host_id: knownhosts::host_id(nhost, port_of(next)),
@@ -641,9 +672,12 @@ pub async fn connect_client(chain: Vec<Value>) -> Result<SharedHandle, String> {
         };
         let mut nh = client::connect_stream(config, channel.into_stream(), handler)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| crate::error::SereinError::ProxyJump {
+                host: nhost.to_string(),
+                detail: e.to_string(),
+            })?;
         if !authenticate(&mut nh, next, None, &dummy_ki, None).await? {
-            return Err("Аутентификация отклонена сервером".into());
+            return Err(auth_rejected(next));
         }
         cur = nh;
     }
@@ -748,10 +782,35 @@ pub async fn exec_with(
     ))
 }
 
+/// Лимит по умолчанию для удалённых exec без явной отмены (multihost, ping и т.п.).
+pub const DEFAULT_EXEC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Exec с общим таймаутом поверх отмены по каналу.
+pub async fn exec_timed(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    command: &str,
+    cancel: Option<CancelRx>,
+    limit: std::time::Duration,
+) -> Result<(i32, String, String), String> {
+    match tokio::time::timeout(limit, exec(handle, command, cancel)).await {
+        Ok(r) => r,
+        Err(_) => Err(crate::error::SereinError::Timeout {
+            op: format!("exec «{command}»"),
+        }
+        .to_string()),
+    }
+}
+
 /// Round-trip exec "true" в миллисекундах.
 pub async fn ping(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>) -> Option<u32> {
     let t = std::time::Instant::now();
-    let _ = exec(handle, "true", None).await;
+    let _ = exec_timed(
+        handle,
+        "true",
+        None,
+        std::time::Duration::from_secs(5),
+    )
+    .await;
     Some(t.elapsed().as_millis() as u32)
 }
 
@@ -763,22 +822,22 @@ pub struct OpHub {
 impl OpHub {
     pub fn begin(&self, key: &str) -> CancelRx {
         let (tx, rx) = watch::channel(false);
-        self.tx.lock().unwrap().insert(key.to_string(), tx);
+        crate::sync::lock(&self.tx).insert(key.to_string(), tx);
         rx
     }
 
     pub fn cancel(&self, key: &str) {
-        if let Some(tx) = self.tx.lock().unwrap().get(key) {
+        if let Some(tx) = crate::sync::lock(&self.tx).get(key) {
             let _ = tx.send(true);
         }
     }
 
     pub fn finish(&self, key: &str) {
-        self.tx.lock().unwrap().remove(key);
+        crate::sync::lock(&self.tx).remove(key);
     }
 
     pub fn cancel_prefix(&self, prefix: &str) {
-        let guard = self.tx.lock().unwrap();
+        let guard = crate::sync::lock(&self.tx);
         for (k, tx) in guard.iter() {
             if k.starts_with(prefix) {
                 let _ = tx.send(true);
@@ -834,7 +893,7 @@ mod tests {
     fn empty_chain_is_rejected_before_any_network_call() {
         match rt().block_on(connect_client(Vec::new())) {
             Ok(_) => panic!("пустая цепочка не должна подключаться"),
-            Err(e) => assert!(e.contains("Пустая цепочка"), "{e}"),
+            Err(e) => assert!(e.to_string().contains("Пустая цепочка"), "{e}"),
         }
     }
 
@@ -842,7 +901,7 @@ mod tests {
     fn missing_host_is_a_readable_error() {
         match rt().block_on(connect_client(vec![json!({ "username": "root" })])) {
             Ok(_) => panic!("без host подключаться некуда"),
-            Err(e) => assert!(e.contains("host"), "{e}"),
+            Err(e) => assert!(e.to_string().contains("host"), "{e}"),
         }
     }
 
@@ -856,8 +915,9 @@ mod tests {
         match res {
             Ok(_) => panic!("на закрытый порт подключиться было нельзя"),
             Err(e) => {
-                assert!(e.contains("127.0.0.1"), "в ошибке должен быть хост: {e}");
-                assert!(e.len() > 10, "ошибка должна что-то объяснять: {e}");
+                let msg = e.to_string();
+                assert!(msg.contains("127.0.0.1"), "в ошибке должен быть хост: {msg}");
+                assert!(msg.len() > 10, "ошибка должна что-то объяснять: {msg}");
             }
         }
     }

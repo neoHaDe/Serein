@@ -31,9 +31,7 @@ fn emit(app: &AppHandle, session_id: &str, tunnel_id: &str, active: bool, error:
 
 impl TunnelManager {
     pub fn list_status(&self, session_id: &str) -> Vec<Value> {
-        self.active
-            .lock()
-            .unwrap()
+        crate::sync::lock(&self.active)
             .get(session_id)
             .map(|m| {
                 m.iter()
@@ -46,7 +44,7 @@ impl TunnelManager {
     }
 
     pub fn close(&self, session_id: &str, tunnel_id: &str, app: &AppHandle) {
-        if let Some(map) = self.active.lock().unwrap().get_mut(session_id) {
+        if let Some(map) = crate::sync::lock(&self.active).get_mut(session_id) {
             if let Some(mut t) = map.remove(tunnel_id) {
                 if let Some(stop) = t.stop.take() {
                     let _ = stop.send(());
@@ -57,7 +55,7 @@ impl TunnelManager {
     }
 
     pub fn close_session(&self, session_id: &str, app: &AppHandle) {
-        if let Some(mut map) = self.active.lock().unwrap().remove(session_id) {
+        if let Some(mut map) = crate::sync::lock(&self.active).remove(session_id) {
             for (tid, mut t) in map.drain() {
                 if let Some(stop) = t.stop.take() {
                     let _ = stop.send(());
@@ -85,7 +83,7 @@ impl TunnelManager {
 
         let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
         {
-            let mut guard = self.active.lock().unwrap();
+            let mut guard = crate::sync::lock(&self.active);
             let m = guard.entry(session_id.clone()).or_default();
             m.insert(
                 tunnel_id.clone(),
@@ -96,7 +94,7 @@ impl TunnelManager {
         // ---- Remote (-R remotePort:127.0.0.1:localPort) ----
         if ttype == "remote" {
             let remote_port = cfg.get("remotePort").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            remote_forwards.lock().unwrap().insert(remote_port, local_port);
+            crate::sync::lock(&remote_forwards).insert(remote_port, local_port);
             // tcpip_forward требует &mut — лочим Handle на время вызова.
             let fwd_res = tokio::select! {
                 r = async {
@@ -108,7 +106,7 @@ impl TunnelManager {
             };
             match fwd_res {
                 None => {
-                    remote_forwards.lock().unwrap().remove(&remote_port);
+                    crate::sync::lock(&remote_forwards).remove(&remote_port);
                     {
                         let h = handle.lock().await;
                         let _ = h.cancel_tcpip_forward("127.0.0.1", remote_port).await;
@@ -116,7 +114,7 @@ impl TunnelManager {
                     return Err("Отменено".into());
                 }
                 Some(Err(e)) => {
-                    remote_forwards.lock().unwrap().remove(&remote_port);
+                    crate::sync::lock(&remote_forwards).remove(&remote_port);
                     let msg = format!("Remote-форвард не удался: {e}");
                     self.set_error(&session_id, &tunnel_id, &msg);
                     emit(&app, &session_id, &tunnel_id, false, Some(&msg));
@@ -124,7 +122,7 @@ impl TunnelManager {
                 }
                 Some(Ok(_)) => {
                     if !self.mark_active(&session_id, &tunnel_id) {
-                        remote_forwards.lock().unwrap().remove(&remote_port);
+                        crate::sync::lock(&remote_forwards).remove(&remote_port);
                         {
                             let h = handle.lock().await;
                             let _ = h.cancel_tcpip_forward("127.0.0.1", remote_port).await;
@@ -144,7 +142,7 @@ impl TunnelManager {
                             let g = h2.lock().await;
                             let _ = g.cancel_tcpip_forward("127.0.0.1", remote_port).await;
                         }
-                        rf.lock().unwrap().remove(&remote_port);
+                        crate::sync::lock(&rf).remove(&remote_port);
                     });
                     return Ok(());
                 }
@@ -216,7 +214,7 @@ impl TunnelManager {
     }
 
     fn mark_active(&self, session_id: &str, tunnel_id: &str) -> bool {
-        let mut guard = self.active.lock().unwrap();
+        let mut guard = crate::sync::lock(&self.active);
         if let Some(t) = guard.get_mut(session_id).and_then(|m| m.get_mut(tunnel_id)) {
             t.active = true;
             true
@@ -226,7 +224,7 @@ impl TunnelManager {
     }
 
     fn set_error(&self, session_id: &str, tunnel_id: &str, err: &str) {
-        let mut guard = self.active.lock().unwrap();
+        let mut guard = crate::sync::lock(&self.active);
         let m = guard.entry(session_id.to_string()).or_default();
         m.insert(tunnel_id.to_string(), TunnelEntry { stop: None, active: false, error: Some(err.to_string()) });
     }

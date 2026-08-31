@@ -28,11 +28,11 @@ impl Drop for MasterKey {
 }
 
 pub fn get() -> Option<MasterKey> {
-    MASTER_KEY.lock().unwrap().map(MasterKey)
+    crate::sync::lock(&MASTER_KEY).map(MasterKey)
 }
 
 pub fn set(key: Option<[u8; 32]>) {
-    let mut guard = MASTER_KEY.lock().unwrap();
+    let mut guard = crate::sync::lock(&MASTER_KEY);
     // Прежний ключ затираем на месте, до замены: иначе он останется в памяти
     // и после блокировки хранилища.
     if let Some(old) = guard.as_mut() {
