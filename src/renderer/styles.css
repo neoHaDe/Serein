@@ -1354,6 +1354,17 @@ html.aux-win #root {
   align-items: center;
   gap: 7px;
 }
+.sftp-backend-badge {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--warn);
+  border: 1px solid rgba(var(--warn-rgb), 0.45);
+  background: rgba(var(--warn-rgb), 0.12);
+}
 .sftp-icon {
   display: inline-flex;
   align-items: center;

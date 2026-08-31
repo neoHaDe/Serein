@@ -16,8 +16,8 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::sync::Notify;
 
-const CANCELLED: &str = "Передача отменена";
-const PAUSED: &str = "paused";
+pub(crate) const CANCELLED: &str = "Передача отменена";
+pub(crate) const PAUSED: &str = "paused";
 /// Параллельных файлов по умолчанию (роадмап 3.2).
 const TRANSFER_SLOTS: usize = 4;
 /// Верхняя граница пула — не открывать безлимит каналов.
@@ -40,7 +40,7 @@ impl XferCtrl {
         })
     }
 
-    fn is_live(&self) -> bool {
+    pub(crate) fn is_live(&self) -> bool {
         self.live.load(Ordering::Relaxed)
     }
 
@@ -180,7 +180,7 @@ async fn wait_if_paused(
     Ok(())
 }
 
-fn dup_key(session_id: &str, direction: &str, local: &str, remote: &str) -> String {
+pub(crate) fn dup_key(session_id: &str, direction: &str, local: &str, remote: &str) -> String {
     format!(
         "{session_id}|{direction}|{}|{remote}",
         local.replace('\\', "/")
@@ -327,6 +327,11 @@ async fn open_stream(
     Ok(channel.into_stream())
 }
 
+/// Проверка доступности SFTP-подсистемы на соединении.
+pub async fn probe(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>) -> bool {
+    open(handle).await.is_ok()
+}
+
 /// Открывает новый SFTP-канал поверх SSH-соединения.
 pub async fn open(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>) -> Result<SftpSession, String> {
     let stream = open_stream(handle).await?;
@@ -345,7 +350,7 @@ async fn open_raw(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>) ->
     Ok(raw)
 }
 
-fn join_remote(dir: &str, name: &str) -> String {
+pub(crate) fn join_remote(dir: &str, name: &str) -> String {
     if dir.ends_with('/') {
         format!("{dir}{name}")
     } else {
@@ -904,7 +909,7 @@ pub async fn copy_file_down(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_transfer(
+pub(crate) fn emit_transfer(
     app: &AppHandle,
     id: &str,
     session_id: &str,

@@ -309,6 +309,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
   const [renameValue, setRenameValue] = useState('')
   const [showHidden, setShowHidden] = useState(false)
   const [filter, setFilter] = useState('')
+  const [fileBackend, setFileBackend] = useState<'sftp' | 'scp' | null>(null)
   const [chmodEntry, setChmodEntry] = useState<SftpEntry | null>(null)
   const [chmodMode, setChmodMode] = useState(0o644)
   const { zoom, ref: zoomRef, reset } = useCtrlWheelZoom('serein.sftp.zoom')
@@ -369,6 +370,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
         const res = await window.api.sftp.list(sessionId, target)
         setPath(res.path)
         setEntries(res.entries)
+        if (res.backend) setFileBackend(res.backend)
         if (!silent) {
           setSelRemote([])
           setAnchorRemote(null)
@@ -1003,10 +1005,16 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
       <div className={'sftp-header' + (detached ? ' aux-win-header' : '')}>
         {detached ? (
           <AuxDrag>
-            <strong><Icon name="folder" size={15} /> SFTP</strong>
+            <strong>
+              <Icon name="folder" size={15} /> SFTP
+              {fileBackend === 'scp' && <span className="sftp-backend-badge">SCP</span>}
+            </strong>
           </AuxDrag>
         ) : (
-          <strong><Icon name="folder" size={15} /> SFTP</strong>
+          <strong>
+            <Icon name="folder" size={15} /> SFTP
+            {fileBackend === 'scp' && <span className="sftp-backend-badge">SCP</span>}
+          </strong>
         )}
         <div className="aux-win-actions">
           <button className="mini" title="Масштаб" onClick={reset}>{Math.round(zoom * 100)}%</button>

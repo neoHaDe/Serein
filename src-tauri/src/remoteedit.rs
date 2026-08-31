@@ -2,8 +2,7 @@
 //! Скачиваем во временный файл, открываем в редакторе ОС, следим за mtime и
 //! заливаем обратно при изменении, эмитя статус в renderer.
 
-use crate::sftp;
-use crate::ssh::ClientHandler;
+use crate::remote_fs;
 use russh::client;
 use serde_json::json;
 use std::collections::HashMap;
@@ -37,7 +36,8 @@ impl EditManager {
     pub async fn open(
         &self,
         app: AppHandle,
-        handle: Arc<tokio::sync::Mutex<client::Handle<ClientHandler>>>,
+        handle: Arc<tokio::sync::Mutex<client::Handle<crate::ssh::ClientHandler>>>,
+        remote_fs: Arc<Mutex<remote_fs::SessionFs>>,
         session_id: String,
         remote: String,
     ) -> Result<(), String> {
@@ -51,7 +51,7 @@ impl EditManager {
         let local = dir.join(&base);
         let local_str = local.to_string_lossy().to_string();
 
-        sftp::download_file(&handle, &remote, &local_str).await?;
+        remote_fs::download_file(&remote_fs, &handle, &remote, &local_str).await?;
         open::that(&local).map_err(|e| format!("Не удалось открыть редактор: {e}"))?;
         emit(&app, &session_id, &remote, "opened", None);
 
@@ -59,6 +59,7 @@ impl EditManager {
         crate::sync::lock(&self.watchers).insert(key(&session_id, &remote), running.clone());
 
         let mut last = mtime_of(&local);
+        let remote_fs_w = remote_fs.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
@@ -69,7 +70,7 @@ impl EditManager {
                 if cur != last && cur.is_some() {
                     last = cur;
                     emit(&app, &session_id, &remote, "uploading", None);
-                    match sftp::put_file(&handle, &local_str, &remote).await {
+                    match remote_fs::put_file(&remote_fs_w, &handle, &local_str, &remote).await {
                         Ok(_) => emit(&app, &session_id, &remote, "synced", None),
                         Err(e) => emit(&app, &session_id, &remote, "error", Some(&e)),
                     }

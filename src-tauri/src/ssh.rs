@@ -105,6 +105,8 @@ pub struct SshSession {
     /// false после shutdown — SFTP/exec не крутятся до таймаута.
     pub alive: Arc<AtomicBool>,
     pub cancel: watch::Sender<bool>,
+    /// SFTP или SCP — определяется при первой файловой операции.
+    pub remote_fs: Arc<Mutex<crate::remote_fs::SessionFs>>,
 }
 
 impl SshSession {
@@ -634,6 +636,7 @@ pub async fn connect_chain(
         user_closed,
         alive,
         cancel: cancel_tx,
+        remote_fs: Arc::new(Mutex::new(crate::remote_fs::SessionFs::new())),
     })
 }
 

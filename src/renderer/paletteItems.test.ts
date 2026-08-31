@@ -32,6 +32,7 @@ describe('buildPaletteItems', () => {
       openLocal: vi.fn(),
       openSettings: vi.fn(),
       openKeyGen: vi.fn(),
+      openTools: vi.fn(),
       newServer: vi.fn(),
       setWorkspace: vi.fn(),
       focusTab: vi.fn()
@@ -51,6 +52,7 @@ describe('buildPaletteItems', () => {
       openLocal: vi.fn(),
       openSettings: vi.fn(),
       openKeyGen: vi.fn(),
+      openTools: vi.fn(),
       newServer: vi.fn(),
       setWorkspace: vi.fn(),
       focusTab: vi.fn()

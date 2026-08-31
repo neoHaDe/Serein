@@ -23,16 +23,18 @@ import { useSettings } from './SettingsContext'
 import { applyUiTheme } from './themes'
 import { useWindowSnap } from './windowSnap'
 import { isWindowsPlatform } from './platform'
-import { MultiExecModal } from './components/MultiExecModal'
+import { buildPaletteItems } from './paletteItems'
 import { flushAuxPersist, listenAuxGeoEvents } from './auxLayout'
 import { allLeaves, findLeaf, type PaneLeaf } from './paneTree'
 import { sshLeafForTools } from './tabs'
-import { buildPaletteItems } from './paletteItems'
+import { MultiExecModal } from './components/MultiExecModal'
+import { ToolsModal } from './components/ToolsModal'
 
 export default function App(): JSX.Element {
   const [editing, setEditing] = useState<ServerConfig | null | undefined>(undefined)
   const [showSettings, setShowSettings] = useState(false)
   const [showKeyGen, setShowKeyGen] = useState(false)
+  const [showTools, setShowTools] = useState(false)
   const [showGroups, setShowGroups] = useState(false)
   const [sftpWidth, setSftpWidth] = useState(380)
   const [sidebarWidth, setSidebarWidth] = useState(270)
@@ -145,6 +147,7 @@ export default function App(): JSX.Element {
         openLocal: tabsApi.openLocalTab,
         openSettings: () => setShowSettings(true),
         openKeyGen: () => setShowKeyGen(true),
+        openTools: () => setShowTools(true),
         newServer: () => setEditing(null),
         setWorkspace: tabsApi.setWorkspace,
         focusTab: tabsApi.setActiveKey
@@ -364,6 +367,8 @@ export default function App(): JSX.Element {
       {showKeyGen && (
         <KeyGenModal connectedSessions={tabsApi.connectedSessions} onClose={() => setShowKeyGen(false)} />
       )}
+
+      {showTools && <ToolsModal onClose={() => setShowTools(false)} />}
 
       {prompts.hostKeyQueue.length > 0 && (
         <HostKeyModal request={prompts.hostKeyQueue[0]} onAnswer={prompts.answerHostKey} />

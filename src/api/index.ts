@@ -354,6 +354,16 @@ export const api = {
     onResult: (cb: (p: { done: number; total: number; result: MultiExecResult }) => void) =>
       sub<{ done: number; total: number; result: MultiExecResult }>('multi-exec-result', cb)
   },
+  tools: {
+    portTest: (host: string, port: number, timeoutMs?: number): Promise<Record<string, unknown>> =>
+      invoke('tools_port_test', { host, port, timeoutMs }),
+    dnsLookup: (name: string): Promise<Record<string, unknown>> => invoke('tools_dns_lookup', { name }),
+    tlsCert: (host: string, port?: number): Promise<Record<string, unknown>> =>
+      invoke('tools_tls_cert', { host, port }),
+    subnet: (input: string): Promise<Record<string, unknown>> => invoke('tools_subnet', { input }),
+    hash: (algo: string, text: string): Promise<Record<string, unknown>> => invoke('tools_hash', { algo, text }),
+    jwtDecode: (token: string): Promise<Record<string, unknown>> => invoke('tools_jwt_decode', { token })
+  },
   app: {
     /** Куда приложение реально пишет профиль и логи — видно в настройках. */
     paths: (): Promise<{ config: string; logs: string }> => invoke('app_paths')

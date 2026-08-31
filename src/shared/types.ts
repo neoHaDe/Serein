@@ -256,6 +256,8 @@ export interface SftpEntry {
 export interface SftpListResult {
   path: string
   entries: SftpEntry[]
+  /** SFTP или SCP — какой протокол выбран для этой сессии. */
+  backend?: 'sftp' | 'scp'
 }
 
 export interface TransferProgress {

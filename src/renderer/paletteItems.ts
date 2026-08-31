@@ -18,6 +18,7 @@ export interface PaletteActions {
   openLocal: () => void
   openSettings: () => void
   openKeyGen: () => void
+  openTools: () => void
   newServer: () => void
   setWorkspace: (tabKey: string, tool: WorkspaceTool) => void
   focusTab: (tabKey: string) => void
@@ -61,6 +62,14 @@ export function buildPaletteItems(
     icon: '🔑',
     group: 'Действие',
     run: actions.openKeyGen
+  })
+  items.push({
+    id: 'act:tools',
+    label: 'Утилиты',
+    hint: 'порт, DNS, TLS, подсеть, хеш, JWT',
+    icon: '🧰',
+    group: 'Действие',
+    run: actions.openTools
   })
   items.push({
     id: 'act:newserver',

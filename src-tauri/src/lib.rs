@@ -21,6 +21,8 @@ mod proxycmd;
 mod schema;
 mod pty;
 mod remoteedit;
+mod remote_fs;
+mod scp;
 mod serial;
 pub mod sftp;
 mod ssh_agent;
@@ -30,6 +32,7 @@ pub mod store;
 mod sync;
 mod telnet;
 mod term_out;
+mod tools;
 mod tunnels;
 mod vault;
 mod vaultkey;
@@ -901,42 +904,42 @@ fn docker_compose_logs_cancel(
 #[tauri::command]
 async fn sftp_list(state: State<'_, AppState>, session_id: String, path: String) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    sftp::list(&s.handle, &path).await
+    remote_fs::list(&s.remote_fs, &s.handle, &path).await
 }
 #[tauri::command]
 async fn sftp_mkdir(state: State<'_, AppState>, session_id: String, path: String) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    sftp::mkdir(&s.handle, &path).await
+    remote_fs::mkdir(&s.remote_fs, &s.handle, &path).await
 }
 #[tauri::command]
 async fn sftp_remove(state: State<'_, AppState>, session_id: String, path: String, is_dir: bool) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    sftp::remove(&s.handle, &path, is_dir).await
+    remote_fs::remove(&s.remote_fs, &s.handle, &path, is_dir).await
 }
 #[tauri::command]
 async fn sftp_rename(state: State<'_, AppState>, session_id: String, from: String, to: String) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    sftp::rename(&s.handle, &from, &to).await
+    remote_fs::rename(&s.remote_fs, &s.handle, &from, &to).await
 }
 #[tauri::command]
 async fn sftp_chmod(state: State<'_, AppState>, session_id: String, path: String, mode: u32) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    sftp::chmod(&s.handle, &path, mode).await
+    remote_fs::chmod(&s.remote_fs, &s.handle, &path, mode).await
 }
 #[tauri::command]
 async fn sftp_preview(state: State<'_, AppState>, session_id: String, remote_path: String) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    sftp::preview(&s.handle, &remote_path).await
+    remote_fs::preview(&s.remote_fs, &s.handle, &remote_path).await
 }
 #[tauri::command]
 async fn sftp_read_file(state: State<'_, AppState>, session_id: String, remote_path: String) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    sftp::read_file(&s.handle, &remote_path).await
+    remote_fs::read_file(&s.remote_fs, &s.handle, &remote_path).await
 }
 #[tauri::command]
 async fn sftp_write_file(state: State<'_, AppState>, session_id: String, remote_path: String, content: String, mode: u32, base_mtime: u64, eol: String) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    sftp::write_file(&s.handle, &remote_path, &content, mode, base_mtime, &eol).await
+    remote_fs::write_file(&s.remote_fs, &s.handle, &remote_path, &content, mode, base_mtime, &eol).await
 }
 #[tauri::command]
 async fn sftp_name_conflicts(
@@ -946,13 +949,14 @@ async fn sftp_name_conflicts(
     names: Vec<String>,
 ) -> Result<Vec<String>, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    sftp::name_conflicts(&s.handle, &remote_dir, &names).await
+    remote_fs::name_conflicts(&s.remote_fs, &s.handle, &remote_dir, &names).await
 }
 #[tauri::command]
 async fn sftp_upload_paths(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_dir: String, paths: Vec<String>) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let n = paths.len();
     let handle = s.handle.clone();
+    let remote_fs = s.remote_fs.clone();
     let alive = s.alive.clone();
     let hub = state.transfers.clone();
     let futs: Vec<_> = paths
@@ -960,11 +964,12 @@ async fn sftp_upload_paths(app: AppHandle, state: State<'_, AppState>, session_i
         .map(|p| {
             let app = app.clone();
             let handle = handle.clone();
+            let remote_fs = remote_fs.clone();
             let sid = session_id.clone();
             let remote = remote_dir.clone();
             let alive = alive.clone();
             let hub = hub.clone();
-            async move { sftp::upload_path(app, handle, &sid, &p, &remote, alive, hub).await }
+            async move { remote_fs::upload_path(app, remote_fs, handle, &sid, &p, &remote, alive, hub).await }
         })
         .collect();
     futures::future::join_all(futs).await;
@@ -973,7 +978,7 @@ async fn sftp_upload_paths(app: AppHandle, state: State<'_, AppState>, session_i
 #[tauri::command]
 async fn sftp_download_to(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_path: String, local_dir: String) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    sftp::download_path(app, s.handle.clone(), &session_id, &remote_path, &local_dir, s.alive.clone(), state.transfers.clone()).await
+    remote_fs::download_path(app, s.remote_fs.clone(), s.handle.clone(), &session_id, &remote_path, &local_dir, s.alive.clone(), state.transfers.clone()).await
 }
 #[tauri::command]
 async fn sftp_drag_out(
@@ -988,6 +993,7 @@ async fn sftp_drag_out(
     }
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let handle = s.handle.clone();
+    let remote_fs = s.remote_fs.clone();
     let alive = s.alive.clone();
     let hub = state.transfers.clone();
     // Не ждём скачивание в invoke с dragstart: WebView2 может оборвать промис и дропнуть SFTP-канал.
@@ -1019,8 +1025,9 @@ async fn sftp_drag_out(
         };
         let dest_s = dest_dir.to_string_lossy().replace('\\', "/");
         for remote in &remote_paths {
-            let _ = sftp::download_path(
+            let _ = remote_fs::download_path(
                 app.clone(),
+                remote_fs.clone(),
                 handle.clone(),
                 &session_id,
                 remote,
@@ -1061,7 +1068,7 @@ async fn sftp_drag_out(
 #[tauri::command]
 async fn sftp_edit(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_path: String) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    state.edit.open(app, s.handle.clone(), session_id, remote_path).await
+    state.edit.open(app, s.handle.clone(), s.remote_fs.clone(), session_id, remote_path).await
 }
 #[tauri::command]
 fn sftp_cancel_transfer(state: State<'_, AppState>, id: String) {
@@ -1181,6 +1188,33 @@ fn servers_import_xshell() -> Result<Value, String> {
 #[tauri::command]
 fn servers_import_securecrt() -> Result<Value, String> {
     Ok(json!({ "imported": importers::import_securecrt()? }))
+}
+
+// ---------------- Утилиты (P2.1) ----------------
+
+#[tauri::command]
+async fn tools_port_test(host: String, port: u16, timeout_ms: Option<u64>) -> Result<Value, String> {
+    tools::port_test(host, port, timeout_ms).await
+}
+#[tauri::command]
+async fn tools_dns_lookup(name: String) -> Result<Value, String> {
+    tools::dns_lookup(name).await
+}
+#[tauri::command]
+async fn tools_tls_cert(host: String, port: Option<u16>) -> Result<Value, String> {
+    tools::tls_cert(host, port).await
+}
+#[tauri::command]
+fn tools_subnet(input: String) -> Result<Value, String> {
+    tools::subnet_calc(&input)
+}
+#[tauri::command]
+fn tools_hash(algo: String, text: String) -> Result<Value, String> {
+    tools::hash_text(&algo, &text)
+}
+#[tauri::command]
+fn tools_jwt_decode(token: String) -> Result<Value, String> {
+    tools::jwt_decode(&token)
 }
 
 /// Сдвинуть окна группы на (dx, dy) в физических пикселях.
@@ -1412,6 +1446,7 @@ pub fn run() {
             keygen_generate, keygen_save, keygen_install,
             servers_import_ssh_config, servers_import_putty,
             servers_import_mobaxterm, servers_import_xshell, servers_import_securecrt,
+            tools_port_test, tools_dns_lookup, tools_tls_cert, tools_subnet, tools_hash, tools_jwt_decode,
             app_platform, app_paths, app_install_kind, multi_exec, multi_exec_cancel,
             windows_nudge_group, windows_raise_group, windows_restore_minimized, windows_count_minimized,
             clipboard_write, clipboard_read
