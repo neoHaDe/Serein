@@ -6,11 +6,11 @@
 
 **Desktop client for servers and network gear — everything in one window.**
 
-SSH, SFTP with an editor, serial consoles, telnet and raw TCP.
+SSH, SFTP and SCP with an editor, serial consoles, telnet and raw TCP.
 Tabs and split panes, port forwards, resource monitoring, a Docker panel
-and a local terminal — in an installer of about **6.7 MB**.
+and a local terminal — in an installer of about **7.8 MB**.
 
-Free, open source, Apache 2.0. Windows x64 and Linux x64, **v1.2.5**.
+Free, open source, Apache 2.0. Windows x64 and Linux x64, **v1.2.7**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -38,12 +38,12 @@ No Chromium tax. We are not racing Tabby on feature count. The point is a **serv
 
 | | **Serein (Tauri)** | Typical Electron client |
 | --- | :---: | :---: |
-| Installer size | **≈ 6.7 MB** | ≈ 85 MB |
+| Installer size | **≈ 7.8 MB** | ≈ 85 MB |
 | Idle RAM | **≈ 33 MB** | 150–250 MB |
 | SSH engine | pure Rust [`russh`](https://github.com/Eugeny/russh) | libssh2 / native |
 | Runtime | system WebView2 | full Chromium |
 
-Numbers come from a live `tauri dev` session (RAM) and the 1.2.5 NSIS build (~6.7 MB packed).
+Numbers come from a live `tauri dev` session (RAM) and the 1.2.7 NSIS build (~7.8 MB packed).
 A weak laptop will not magically match 33 MB.
 
 ---
@@ -76,7 +76,12 @@ A weak laptop will not magically match 33 MB.
 - **Compression** (`zlib@openssh.com`) and an opt-in **legacy algorithm** set for old gear
 - **TOFU known-hosts** on every hop: verification dialog, management and OpenSSH import
 - **Reconnect on drop** — manual or auto (up to 5 attempts, backoff)
-- Import from **`~/.ssh/config`** and **PuTTY** sessions
+- **Tags, favourites and environment labels (v1.2.7)** — search understands `tag:web`,
+  `env:prod` and `fav`; production hosts carry a red badge before anyone runs anything on them
+- **Multi-select (v1.2.7)** with Ctrl and Shift — connect, label, move or delete a whole group
+- Import from **`~/.ssh/config`**, **PuTTY**, and (v1.2.7) **MobaXterm · XShell · SecureCRT**.
+  Passwords are deliberately *not* imported: those formats store them decryptably by design,
+  and copying them into a second store would only spread the problem
 
 ### Files (SFTP)
 - Browse with **clickable breadcrumbs**, **inline rename**, drag & drop into the window
@@ -88,6 +93,8 @@ A weak laptop will not magically match 33 MB.
 - **Ctrl+wheel** (and Ctrl+/−/0) zooms text in SFTP and logs
 - **Built-in editor** (CodeMirror 6) — atomic save back to the server
 - **External editor** — OS default app, re-upload on save
+- **SCP fallback (v1.2.7)** — servers with no `Subsystem sftp` (old switches, stripped images)
+  are detected automatically and served over `scp` and `ls` instead
 
 ### Tunnels and ops
 - Forwards: **local `-L`**, **remote `-R`**, **dynamic SOCKS5 `-D`** (tunnel create can be cancelled)
@@ -97,6 +104,12 @@ A weak laptop will not magically match 33 MB.
 - **Docker logs** — coloured levels, follow (`-f`) with stop, wide panel; **detach** to a second monitor
 - **Host logs (v1.2.0)** — `journalctl` with highlighting, filter and an error report exported to `.txt`
 - **Session logging (v1.2.0)** — write terminal output to `%APPDATA%\serein\logs`, ANSI stripped
+- **Server overview (v1.2.7)** — CPU, RAM, disk, load, network, uptime, OS and kernel, process
+  count, failed services and Docker health on one screen
+- **Run one command on several servers** (`Ctrl+Shift+M`) — results per host with exit code,
+  stdout and stderr; hosts whose key is unknown are skipped with a reason, never trusted silently
+- **Local utilities (v1.2.7)** — TLS certificate check, port test, DNS query, subnet calculator,
+  hashes, JWT decode. No shell involved, nothing leaves the machine
 
 ### App windows
 - Detached tabs, SFTP, logs, and workspace panels — **separate OS windows**, no Windows caption
@@ -108,16 +121,26 @@ A weak laptop will not magically match 33 MB.
 - Remembers detached window geometry after restart
 
 ### Security and storage
-- Secrets via **DPAPI** plus an optional **master password**
+- Secrets via **DPAPI** (Windows) or the **keyring** (Linux) plus an optional **master password**
   (scrypt → AES-256-GCM); the UI never gets passwords or keys
+- **Master password of 12+ characters** — no composition rules, following NIST SP 800-63B
+  rather than the mandatory-symbol habit that produces `P@ssw0rd1`
+- **Offline mode** — one switch stops the update check and every outbound request. There is
+  exactly one outbound request in the whole codebase, and [SECURITY.md](SECURITY.md) names it
+- **No auth retry storms** — a wrong password is not retried five times; that is how fail2ban
+  trips and Active Directory accounts lock
+- **Config schema is versioned**: the profile is copied before a migration, and a profile from
+  a newer version is refused rather than silently rewritten
 - Encrypted **`.tbk` backup** of servers, settings, and snippets
 - **SSH keygen** (ed25519 / RSA) + `ssh-copy-id`
+- Published with every release: SHA-256 sums and a **CycloneDX SBOM**; `cargo audit` and
+  `npm audit` run in CI on every push
 
 ---
 
 ## Quick start
 
-1. Install the setup exe or grab the portable `Serein_1.2.5_x64-portable.exe` from [Releases](../../releases/latest).
+1. Install the setup exe or grab the portable `Serein_1.2.7_x64-portable.exe` from [Releases](../../releases/latest).
 2. Import `~/.ssh/config` or add a host by hand.
 3. Connect. The local terminal works with no SSH at all.
 
@@ -143,16 +166,20 @@ Matrix and smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
 
 From [Releases](../../releases/latest):
 
-- **`Serein_1.2.5_x64-setup.exe`** — Windows installer (Start menu, uninstall).
-- **`Serein_1.2.5_x64-portable.exe`** — Windows single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`.
-- **`Serein_1.2.5_amd64.deb`** — Debian/Ubuntu/Astra package (`/usr/bin/serein`).
-- **`Serein_1.2.5_amd64.AppImage`** — portable Linux binary.
+- **`Serein_1.2.7_x64-setup.exe`** — Windows installer (Start menu, uninstall).
+- **`Serein_1.2.7_x64-portable.exe`** — Windows single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`.
+- **`Serein_1.2.7_amd64.deb`** — Debian/Ubuntu/Astra package (`/usr/bin/serein`).
+- **`Serein_1.2.7_amd64.AppImage`** — portable Linux binary.
 
-The build is **unsigned**. SmartScreen will complain. *More info → Run anyway*.
-Release notes: [RELEASE_NOTES_v1.2.5.md](docs/RELEASE_NOTES_v1.2.5.md).
+Every release publishes SHA-256 sums and a **CycloneDX SBOM** for both the Rust and the npm
+dependency trees. Check the sums — the Windows build is **unsigned** and SmartScreen will
+complain (*More info → Run anyway*).
 
-The updater endpoint is wired (`nehade.xyz/updates/terminal/`). Do not rely on it
-while the installer is unsigned.
+Release notes: [RELEASE_NOTES_v1.2.7.md](docs/RELEASE_NOTES_v1.2.7.md).
+Security policy and threat model: [SECURITY.md](SECURITY.md).
+
+Auto-update is live (`nehade.xyz/updates/terminal/`), signed with minisign; the signing key
+never enters CI. It can be switched off entirely — see offline mode below.
 
 ---
 
@@ -164,9 +191,10 @@ while the installer is unsigned.
 | Frontend | **React 18** · **TypeScript 5** · **Vite** |
 | Terminal | [`@xterm/xterm`](https://xtermjs.org) |
 | Editor | [CodeMirror 6](https://codemirror.net) |
-| SSH / SFTP | [`russh`](https://github.com/Eugeny/russh) · [`russh-sftp`](https://github.com/AspectUnk/russh-sftp) |
+| SSH / SFTP | [`russh`](https://github.com/Eugeny/russh) **0.63** · [`russh-sftp`](https://github.com/AspectUnk/russh-sftp) |
 | Local PTY | [`portable-pty`](https://crates.io/crates/portable-pty) |
-| Crypto | `aes-gcm` · `scrypt` · `ssh-key` · Windows DPAPI |
+| Crypto | `ring` backend · `aes-gcm` · `scrypt` · `ssh-key` (via `russh::keys`) · DPAPI / keyring |
+| Tests | `vitest` (frontend) · real SSH servers in Docker (integration) |
 
 ---
 
@@ -180,18 +208,25 @@ while the installer is unsigned.
                      Tauri commands and events
 ┌───────────────────────────────┴───────────────────────────────────────┐
 │  Rust backend (src-tauri/src)                                          │
-│  ssh · ssh_agent · ssh_algos · proxycmd · serial · telnet · sftp ·     │
-│  tunnels · monitor · docker · pty · term_out · store · vault ·         │
-│  crypto · dpapi · keygen · importers · knownhosts · remoteedit         │
+│  ssh · ssh_agent · ssh_algos · proxycmd · serial · telnet ·            │
+│  sftp · scp · remote_fs · tunnels · monitor · workspace · docker ·     │
+│  pty · term_out · store · schema · vault · crypto · dpapi ·            │
+│  os_secrets · keygen · importers · knownhosts · remoteedit ·           │
+│  ownership · multihost · tools · error · sync                          │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
 - React talks to Rust through a thin `window.api` bridge (`invoke` / `listen`).
 - One SSH connection multiplexes **shell + SFTP + exec + tunnels**. The handle is locked
   only briefly, so opening channels does not stall the others.
-- Secrets decrypt **only in Rust**, at connect time. Outside Windows there is no DPAPI,
-  and nothing is written instead: base64 is not encryption, so a port has to wire up
-  Keychain / Secret Service first.
+- Secrets decrypt **only in Rust**, at connect time. On Linux they live in the keyring and
+  the file holds a `kr:{uuid}` handle — base64 is not encryption, so nothing is written in
+  place of real storage.
+- **Session ownership is one fact in Rust** (`ownership.rs`), not bookkeeping in each window.
+  A `Set` in a frontend module is per-webview state and invisible to a second window; that
+  mismatch is what killed detached-tab sessions before 1.2.6.
+- The file manager picks its backend once per session: SFTP where the subsystem exists,
+  `scp` + `ls` where it does not (`remote_fs.rs`).
 
 ---
 
@@ -217,6 +252,27 @@ npm run smoke
 
 (`tsc --noEmit` + `cargo check`. Full protocol: `docs/PHASE0.md`.)
 
+### Tests
+
+```bash
+npm test                                          # frontend, ~100 tests
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+```
+
+Integration tests run against **real SSH servers in Docker** — Debian, Alpine/BusyBox, and one
+with the SFTP subsystem removed on purpose:
+
+```bash
+./scripts/ssh-stand/up.sh
+cargo test --manifest-path src-tauri/Cargo.toml -- --ignored --test-threads=1
+./scripts/ssh-stand/down.sh
+```
+
+`--test-threads=1` is not optional: every test shares one `known_hosts.json`, which the app
+rewrites whole. The stand runs in CI too, and it has already paid for itself — it found a
+`known_hosts` race, a broken non-empty folder delete, and four bugs that made the SCP path
+hang forever rather than fall back.
+
 ---
 
 ## Data and diagnostics
@@ -238,13 +294,18 @@ stripped; there is no application-wide log file yet — for that, use `npm run t
 
 ## Known limitations
 
-- No **SCP** (SFTP only) and no **X11 forwarding** yet.
-- **Windows x64** only. No `.dmg` / `.AppImage`.
-- Installer is **unsigned**. SmartScreen will fight you.
-- Updater endpoint exists; do not rely on it while the installer is unsigned.
-- Not on the near-term list: cloud sync, mobile, plugins, RDP/VNC, a generic LLM chat pane.
+- The Windows build is **unsigned** — SmartScreen will fight you. Verify the SHA-256 sums.
+- No **macOS** build. It needs a Mac to even test the launch, so it waits for hardware.
+- No **X11 forwarding**.
+- No external penetration test or independent review of the crypto layer yet.
+- `rsa` carries RUSTSEC-2023-0071 with no upstream fix; it stays for plain `id_rsa` keys.
+- Telnet has not been run against real network hardware, only an emulator.
+- Not planned: cloud sync, mobile, plugins, a generic LLM chat pane.
 
-Product plan: reliability hardening → multi-host and automation → migration importers. RDP/VNC are out of scope for now. See [release notes 1.2.5](docs/RELEASE_NOTES_v1.2.5.md).
+Product plan: security first (that is what 1.2.7 was), then parity — **RDP and VNC**,
+databases over the existing tunnels, and Windows Server support. RDP/VNC were previously
+out of scope; that changed when the target changed to teams rather than a single user.
+See [release notes 1.2.7](docs/RELEASE_NOTES_v1.2.7.md).
 
 ---
 
