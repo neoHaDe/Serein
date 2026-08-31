@@ -205,3 +205,41 @@ fn changed_host_key_is_refused_when_there_is_nobody_to_ask() {
     assert!(res.is_err(), "сервер со сменившимся ключом принимать нельзя");
 }
 
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn server_side_disconnect_surfaces_as_an_error_not_a_hang() {
+    // Сервер уходит из-под ног: перезагрузка, обрыв канала, `systemctl restart sshd`.
+    // Приложение обязано увидеть это как ошибку и быстро, а не висеть до таймаута — иначе
+    // вкладка выглядит живой, а команды в ней молча копятся в никуда.
+    //
+    // Соединение рвём изнутри самого сеанса: убиваем sshd-процесс, который нас
+    // обслуживает. Это честный обрыв на уровне TCP и не требует доступа к docker,
+    // которого у теста может не быть.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let h = serein_lib::ssh::connect_client(vec![s.by_key(s.debian_port)])
+            .await
+            .expect("подключение к стенду");
+
+        // Команда убивает нашу же сессию, поэтому её собственный результат неинтересен:
+        // она вправе не вернуть ничего.
+        let _ = serein_lib::ssh::exec(&h, "kill -9 $PPID", None).await;
+
+        let started = std::time::Instant::now();
+        let after = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            serein_lib::ssh::exec(&h, "echo живой", None),
+        )
+        .await;
+
+        match after {
+            Err(_) => panic!("после обрыва команда повисла вместо ошибки"),
+            Ok(Ok((_, out, _))) => panic!("после обрыва команда не должна выполняться: {out}"),
+            Ok(Err(e)) => assert!(!e.is_empty(), "ошибка должна что-то объяснять"),
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(15),
+            "обрыв должен обнаруживаться быстро"
+        );
+    });
+}
