@@ -9,6 +9,8 @@ import {
   findTabKeyBySession,
   planReattach,
   planRestore,
+  reorderTabs,
+  sshLeafForTools,
   uid
 } from './tabs'
 import { shouldAutoReconnect } from './sessionRules'
@@ -59,15 +61,6 @@ import {
 import { errText } from './errText'
 
 /** SSH-лист для рельсы: активная панель, иначе первый подключённый SSH. */
-function sshLeafForTools(tab: Tab): PaneLeaf | undefined {
-  const active = findLeaf(tab.root, tab.activePaneId)
-  if (active?.kind === 'ssh') return active
-  const leaves = allLeaves(tab.root).filter((l) => l.kind === 'ssh')
-  return leaves.find((l) => l.status === 'connected') ?? leaves[0]
-}
-
-
-
 export default function App(): JSX.Element {
   const [servers, setServers] = useState<ServerConfig[]>([])
   const [tabs, setTabs] = useState<Tab[]>([])
@@ -453,16 +446,8 @@ export default function App(): JSX.Element {
     setTabs((prev) => prev.map((t) => (t.key === key ? { ...t, title } : t)))
   }, [])
 
-  const reorderTabs = useCallback((fromKey: string, toKey: string) => {
-    setTabs((prev) => {
-      const from = prev.findIndex((t) => t.key === fromKey)
-      const to = prev.findIndex((t) => t.key === toKey)
-      if (from < 0 || to < 0 || from === to) return prev
-      const next = [...prev]
-      const [moved] = next.splice(from, 1)
-      next.splice(to, 0, moved)
-      return next
-    })
+  const reorderTabsByKey = useCallback((fromKey: string, toKey: string) => {
+    setTabs((prev) => reorderTabs(prev, fromKey, toKey))
   }, [])
 
   const setWorkspace = useCallback((key: string, tool: WorkspaceTool) => {
@@ -928,7 +913,7 @@ export default function App(): JSX.Element {
           onSetWorkspace={setWorkspace}
           onDetachTab={(key) => void detachTab(key)}
           onRename={renameTab}
-          onReorder={reorderTabs}
+          onReorder={reorderTabsByKey}
           onSplit={splitPane}
           broadcast={broadcast}
           onToggleBroadcast={() => setBroadcast((b) => !b)}

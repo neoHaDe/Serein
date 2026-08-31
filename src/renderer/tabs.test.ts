@@ -3,7 +3,14 @@ import type { SavedAuxWindow, SerializedTab, ServerConfig } from '../shared/type
 import type { PaneNode } from './paneTree'
 import { allLeaves, makeLeaf, splitLeaf } from './paneTree'
 import type { Tab } from './tabs'
-import { broadcastTargets, closePaneIn, planReattach, planRestore } from './tabs'
+import {
+  broadcastTargets,
+  closePaneIn,
+  planReattach,
+  planRestore,
+  reorderTabs,
+  sshLeafForTools
+} from './tabs'
 
 /**
  * Первые тесты на фронтенде вообще. Взяты именно за восстановление запуска: логика тут
@@ -222,5 +229,63 @@ describe('closePaneIn', () => {
     const res = closePaneIn(tabs, 'одна', 'нет-такой-панели')
     expect(res.tabs).toHaveLength(1)
     expect(res.closedTab).toBe(false)
+  })
+})
+
+describe('sshLeafForTools', () => {
+  it('следует за активной панелью, если она SSH', () => {
+    // Инструменты относятся к тому, на что человек смотрит.
+    const t = tabWith('одна', ['первая', 'вторая'])
+    const leaf = sshLeafForTools(t)
+    expect(leaf?.sessionId).toBe('первая')
+  })
+
+  it('когда активен локальный терминал, берёт подключённую SSH-панель', () => {
+    const local = makeLeaf('local', 'локальный')
+    const ssh = makeLeaf('ssh', 'сервер', 'srv')
+    ssh.sessionId = 'сессия'
+    ssh.status = 'connected'
+    const root = splitLeaf(local, local.id, 'row', ssh)
+    const t: Tab = {
+      key: 'k', title: 'k', kind: 'terminal', root,
+      activePaneId: local.id, sftpOpen: false, workspace: 'terminal'
+    }
+    expect(sshLeafForTools(t)?.sessionId).toBe('сессия')
+  })
+
+  it('берёт неподключённую SSH-панель, если других нет', () => {
+    // Рельс должен показать статус и кнопку переподключения, а не исчезнуть молча.
+    const local = makeLeaf('local', 'локальный')
+    const ssh = makeLeaf('ssh', 'сервер', 'srv')
+    ssh.status = 'error'
+    const root = splitLeaf(local, local.id, 'row', ssh)
+    const t: Tab = {
+      key: 'k', title: 'k', kind: 'terminal', root,
+      activePaneId: local.id, sftpOpen: false, workspace: 'terminal'
+    }
+    expect(sshLeafForTools(t)?.id).toBe(ssh.id)
+  })
+
+  it('без SSH-панелей не возвращает ничего', () => {
+    const local = makeLeaf('local', 'локальный')
+    const t: Tab = {
+      key: 'k', title: 'k', kind: 'terminal', root: local,
+      activePaneId: local.id, sftpOpen: false, workspace: 'terminal'
+    }
+    expect(sshLeafForTools(t)).toBeUndefined()
+  })
+})
+
+describe('reorderTabs', () => {
+  it('переставляет вкладку на место другой', () => {
+    const tabs = [tabWith('a', ['1']), tabWith('b', ['2']), tabWith('c', ['3'])]
+    expect(reorderTabs(tabs, 'c', 'a').map((t) => t.key)).toEqual(['c', 'a', 'b'])
+  })
+
+  it('не трогает список при переносе на себя или неизвестном ключе', () => {
+    const tabs = [tabWith('a', ['1']), tabWith('b', ['2'])]
+    expect(reorderTabs(tabs, 'a', 'a')).toBe(tabs)
+    expect(reorderTabs(tabs, 'нет', 'a')).toBe(tabs)
+    expect(reorderTabs(tabs, 'a', 'нет')).toBe(tabs)
   })
 })
