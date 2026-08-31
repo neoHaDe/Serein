@@ -55,12 +55,37 @@ async function offerUpdate(update: Update): Promise<void> {
 }
 
 /**
+ * Включён ли закрытый контур.
+ *
+ * Читаем настройку прямо перед запросом, а не кэшируем: цена — одно чтение файла на
+ * проверку обновлений, зато флаг действует сразу после переключения, без перезапуска.
+ */
+async function isOffline(): Promise<boolean> {
+  try {
+    return !!(await window.api.settings.get()).offline
+  } catch {
+    // Настройки не прочитались — наружу не идём. В закрытом контуре ошибиться в эту
+    // сторону безопаснее, чем в обратную.
+    return true
+  }
+}
+
+/**
  * Проверка обновлений через endpoint из `tauri.conf` (nehade.xyz).
  *
  * `silent=true` — молчать, если обновлений нет или сеть недоступна.
  * `silent=false` — показывать результат всегда (кнопка в настройках).
  */
 export async function checkForUpdates(silent: boolean): Promise<void> {
+  if (await isOffline()) {
+    if (!silent) {
+      await message(
+        'Включён закрытый контур: Serein не обращается наружу. Отключите его в настройках, если нужна проверка обновлений.',
+        { title: 'Обновление' }
+      )
+    }
+    return
+  }
   let update: Update | null
   try {
     update = await check()
@@ -92,6 +117,9 @@ export function checkForUpdatesOnStartup(): void {
   let attempt = 0
 
   const tick = async (): Promise<void> => {
+    // Проверяем флаг на каждой попытке, а не один раз: закрытый контур могли включить
+    // между попытками, и тогда повтор ушёл бы наружу уже после запрета.
+    if (await isOffline()) return
     try {
       const update = await check()
       // Ответ получен — на этом запуске больше не тревожим сеть.

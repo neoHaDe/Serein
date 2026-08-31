@@ -457,6 +457,15 @@ export interface AppSettings {
   density?: 'comfortable' | 'compact'
   /** Отдельные кнопки на панели задач для откреплённых окон. По умолчанию одно приложение. */
   auxInTaskbar?: boolean
+  /**
+   * Закрытый контур: приложение не обращается наружу вообще.
+   *
+   * Единственный внешний запрос Serein — проверка обновлений. В организациях с изолированной
+   * сетью такой запрос не просто бесполезен: он вызывает вопросы у службы безопасности и
+   * шумит в журналах межсетевого экрана. Флаг выключает и проверку при запуске, и кнопку
+   * в настройках — «не ходить наружу» должно быть проверяемым обещанием, а не намерением.
+   */
+  offline?: boolean
   /** Параллельных SFTP-файлов (1–8, по умолчанию 4). */
   sftpConcurrency?: number
   /**
@@ -570,6 +579,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   localShell: 'auto',
   density: 'comfortable',
   auxInTaskbar: false,
+  offline: false,
   sftpConcurrency: 4,
   groupOrder: [],
   collapsedGroups: [],

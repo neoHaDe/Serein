@@ -248,6 +248,21 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           По умолчанию одна кнопка на панели задач (откреплённые окна без своей иконки). Клик по Serein на панели или кнопка внизу главного окна разворачивает свёрнутые. Галочка — отдельная кнопка у каждого окна. Переоткрой уже откреплённые окна после смены.
         </div>
 
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={!!settings.offline}
+            onChange={(e) => update({ offline: e.target.checked })}
+          />
+          Закрытый контур: не обращаться в интернет
+        </label>
+        <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
+          Единственный внешний запрос Serein — проверка обновлений. Галочка выключает и её, и
+          автопроверку при запуске: приложение перестаёт ходить наружу совсем. Обновляться
+          придётся вручную, скачивая релиз. Для изолированных сетей, где такой запрос всё
+          равно не пройдёт, а в журнале межсетевого экрана останется.
+        </div>
+
         <label>
           Параллельных SFTP-передач: {Math.min(8, Math.max(1, settings.sftpConcurrency ?? 4))}
           <input
