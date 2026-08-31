@@ -2,7 +2,7 @@ import { emit } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { WorkspaceTool } from '../shared/types'
-import { markSessionDetached } from './detachedSessions'
+import { handOverSession } from './detachedSessions'
 import type { PaneKind } from '../shared/types'
 
 export interface ReattachTabPayload {
@@ -27,7 +27,9 @@ export interface ReattachSftpPayload {
 }
 
 export async function reattachTab(payload: ReattachTabPayload): Promise<void> {
-  markSessionDetached(payload.sessionId)
+  // Отдаём сессию главному окну ДО того, как закроем своё: иначе между «мы ушли» и
+  // «главное забрало» остаётся щель, в которую сессия и проваливалась.
+  await handOverSession(payload.sessionId, 'main')
   await emit('serein-reattach-tab', payload)
   await invoke('windows_raise_group', { focused: 'main' }).catch(() => {})
   await getCurrentWindow().close()

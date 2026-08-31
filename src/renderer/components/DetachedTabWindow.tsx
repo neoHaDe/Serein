@@ -7,7 +7,7 @@ import type { PaneLeaf } from '../paneTree'
 import { applyUiTheme } from '../themes'
 import { useWindowSnap } from '../windowSnap'
 import { openAuxWindow, sanitizeWindowLabel } from '../auxWindows'
-import { clearDetachedMark, markSessionDetached } from '../detachedSessions'
+import { takeOverSession } from '../detachedSessions'
 import { reattachTab } from '../reattach'
 import { AppChrome, markAuxWindow } from './WindowChrome'
 import { TerminalView } from './TerminalView'
@@ -24,6 +24,17 @@ const paneStack: CSSProperties = {
   overflow: 'hidden'
 }
 
+/**
+ * Метка окна открепления по идентификатору сессии.
+ *
+ * Экспортируется, чтобы главное окно могло передать владение сессией ещё ДО того, как
+ * окно откроется. Считать эту метку во втором месте нельзя: разошлись бы — и владение
+ * ушло бы в никуда, а сессию закрыл бы первый, кто размонтируется.
+ */
+export function detachedWindowLabel(sessionId: string): string {
+  return `tab-${sanitizeWindowLabel(sessionId)}`
+}
+
 export async function openDetachedTabWindow(opts: {
   sessionId: string
   serverId?: string
@@ -32,7 +43,7 @@ export async function openDetachedTabWindow(opts: {
   sftpOpen: boolean
   kind: PaneKind
 }): Promise<void> {
-  const label = `tab-${sanitizeWindowLabel(opts.sessionId)}`
+  const label = detachedWindowLabel(opts.sessionId)
   await openAuxWindow({
     label,
     query: {
@@ -99,16 +110,12 @@ export function DetachedTabWindow(): JSX.Element {
     [kind, serverId, title, sessionId, status]
   )
 
-  // Сессия принадлежит окну, а не терминалу внутри него.
-  //
-  // `TerminalView` при размонтировании закрывает свою сессию, если она не помечена
-  // откреплённой, — а набор пометок у каждого webview свой, и здесь он пуст. Пока
-  // терминал размонтировался при каждом переключении на Docker/логи, это и убивало
-  // соединение через 120 мс после клика по инструменту. Терминал теперь не
-  // размонтируется (прячется стилем, как в главном окне), но пометка нужна и сама по
-  // себе: без неё любой будущий размонтаж снова унёс бы живую сессию.
+  // Забираем сессию себе: закрыть её теперь может только окно-владелец, и запись об
+  // этом одна на стороне Rust. Главное окно передаёт владение ещё при откреплении —
+  // здесь мы лишь подтверждаем его для сессий, поднятых уже в этом окне
+  // (переподключение), и на случай, если окно восстановили после перезапуска.
   useEffect(() => {
-    if (sessionId) markSessionDetached(sessionId)
+    if (sessionId) void takeOverSession(sessionId)
   }, [sessionId])
 
   useEffect(() => {
@@ -124,7 +131,6 @@ export function DetachedTabWindow(): JSX.Element {
     return () => {
       const sid = sessionRef.current
       if (!sid || reattachingRef.current) return
-      clearDetachedMark(sid)
       void window.api.session.close(sid)
     }
   }, [])
@@ -161,7 +167,6 @@ export function DetachedTabWindow(): JSX.Element {
         // При возврате вкладки сессию забирает главное окно — трогать её нельзя.
         if (reattachingRef.current || !sid) return
         e.preventDefault()
-        clearDetachedMark(sid)
         try {
           await window.api.session.close(sid)
         } catch {
@@ -182,13 +187,11 @@ export function DetachedTabWindow(): JSX.Element {
     setStatus('connecting')
     try {
       const id = await window.api.session.openSsh({ serverId, cols: 80, rows: 24 })
-      markSessionDetached(id)
       setSessionId(id)
       setStatus('connected')
       // Прежнюю закрываем только после успеха: иначе неудачная попытка оставила бы
       // окно вообще без сессии, и вернуть вкладку было бы уже нечем.
       if (dead) {
-        clearDetachedMark(dead)
         void window.api.session.close(dead)
       }
     } catch {
@@ -243,7 +246,6 @@ export function DetachedTabWindow(): JSX.Element {
 
   const doReattach = (): void => {
     reattachingRef.current = true
-    markSessionDetached(sessionId)
     void reattachTab({
       sessionId,
       serverId: serverId || undefined,

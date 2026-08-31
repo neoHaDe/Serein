@@ -119,6 +119,9 @@ export const api = {
     ping: (id: string): Promise<number | null> => invoke('session_ping', { id }),
     /** Что сессия уже напечатала: новый терминал на живой сессии не должен быть пустым. */
     replay: (id: string): Promise<string> => invoke('session_replay', { id }),
+    /** Передать владение сессией окну с указанной меткой. Закрыть её сможет только оно. */
+    claim: (id: string, windowLabel: string): Promise<void> =>
+      invoke('session_claim', { id, windowLabel }),
     monitor: (id: string): Promise<ServerMetrics> => invoke('session_monitor', { id }),
     logStatus: (id: string): Promise<boolean> => invoke('session_log_status', { id }),
     logToggle: (id: string, title: string): Promise<{ logging: boolean; path?: string }> =>

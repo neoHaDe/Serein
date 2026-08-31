@@ -15,8 +15,8 @@ import { GroupsModal } from './components/GroupsModal'
 import { StatusBar } from './components/StatusBar'
 import { CodeEditor } from './components/CodeEditor'
 import { CommandPalette, type PaletteItem } from './components/CommandPalette'
-import { openDetachedTabWindow } from './components/DetachedTabWindow'
-import { markSessionDetached, clearDetachedMark } from './detachedSessions'
+import { detachedWindowLabel, openDetachedTabWindow } from './components/DetachedTabWindow'
+import { handOverSession, takeOverSession } from './detachedSessions'
 import type { ReattachSftpPayload, ReattachTabPayload, ReattachWorkspacePayload } from './reattach'
 import { useSettings } from './SettingsContext'
 import { bindingLookup, comboFromEvent } from './keybindings'
@@ -438,10 +438,10 @@ export default function App(): JSX.Element {
         )
       )
       setActiveKey(existing)
-      clearDetachedMark(p.sessionId)
+      void takeOverSession(p.sessionId)
       return
     }
-    markSessionDetached(p.sessionId)
+    void takeOverSession(p.sessionId)
     const leaf = makeLeaf(p.kind, p.title, p.serverId)
     const root: PaneLeaf = { ...leaf, sessionId: p.sessionId, status: 'connected' }
     const key = uid()
@@ -639,7 +639,6 @@ export default function App(): JSX.Element {
         }
       }
       setTabs((prev) => prev.map((t) => ({ ...t, root: updateLeaf(t.root, paneId, { sessionId }) })))
-      clearDetachedMark(sessionId)
       if (serverId) tryRestoreAuxFor(serverId, sessionId)
     },
     [tryRestoreAuxFor]
@@ -748,7 +747,9 @@ export default function App(): JSX.Element {
       if (!leaf?.sessionId || leaf.status !== 'connected') return
       if (leaf.kind === 'ssh' && !leaf.serverId) return
 
-      markSessionDetached(leaf.sessionId)
+      // Владение передаём ДО открытия окна: иначе наш собственный терминал, размонтируясь
+      // при удалении вкладки, успел бы закрыть сессию, которая уже уехала.
+      await handOverSession(leaf.sessionId, detachedWindowLabel(leaf.sessionId))
       try {
         await openDetachedTabWindow({
           sessionId: leaf.sessionId,
@@ -759,7 +760,8 @@ export default function App(): JSX.Element {
           kind: leaf.kind
         })
       } catch {
-        clearDetachedMark(leaf.sessionId)
+        // Окно не открылось — забираем сессию обратно, иначе её некому будет закрыть.
+        await takeOverSession(leaf.sessionId)
         return
       }
 

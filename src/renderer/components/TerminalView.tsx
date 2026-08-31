@@ -5,7 +5,6 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
 import { useSettings } from '../SettingsContext'
 import { getTheme } from '../themes'
-import { shouldPreserveSession } from '../detachedSessions'
 import type { PaneKind } from '../../shared/types'
 import { errText } from '../errText'
 
@@ -386,7 +385,9 @@ export function TerminalView({
             cur.offData()
             cur.term.dispose()
             registry.delete(instanceKey)
-            if (sid && !shouldPreserveSession(sid)) void window.api.session.close(sid)
+            // Закрывать или нет — решает бэкенд по владельцу сессии. Раньше окно решало
+            // это само, по своему набору пометок, и закрывало чужое.
+            if (sid) void window.api.session.close(sid)
           }
         }, 120)
       }

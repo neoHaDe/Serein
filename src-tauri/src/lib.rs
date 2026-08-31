@@ -9,6 +9,7 @@ mod docker_compose;
 mod dpapi;
 mod importers;
 mod os_secrets;
+mod ownership;
 mod keygen;
 mod knownhosts;
 mod localfs;
@@ -53,6 +54,8 @@ pub(crate) struct AppState {
     edit: remoteedit::EditManager,
     transfers: sftp::TransferHub,
     ops: ssh::OpHub,
+    /// Какому окну принадлежит сессия. Закрыть её может только владелец — см. `ownership`.
+    owners: ownership::Owners,
 }
 
 impl AppState {
@@ -65,6 +68,7 @@ impl AppState {
             edit: remoteedit::EditManager::default(),
             transfers: sftp::TransferHub::default(),
             ops: ssh::OpHub::default(),
+            owners: ownership::Owners::default(),
         }
     }
     fn ssh(&self, id: &str) -> Option<Arc<ssh::SshSession>> {
@@ -81,6 +85,7 @@ impl AppState {
         self.transfers.cancel_session(id);
         self.ops.cancel_prefix(&format!("{id}:"));
         term_out::replay_forget(id);
+        self.owners.release(id);
         if let Some(tx) = self.ki.lock().unwrap().remove(id) {
             drop(tx);
         }
@@ -276,7 +281,7 @@ fn resolve_chain(server_id: &str) -> Result<Vec<Value>, String> {
 }
 
 #[tauri::command]
-fn session_open_local(app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
+fn session_open_local(window: tauri::Window, app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
     let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
     let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
     let cwd = p.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -289,6 +294,8 @@ fn session_open_local(app: AppHandle, state: State<'_, AppState>, p: Value) -> R
     let id = uuid::Uuid::new_v4().to_string();
     let sess = pty::open_local(app.clone(), id.clone(), shell, cwd, cols, rows)?;
     state.sessions.lock().unwrap().insert(id.clone(), Session::Local(sess));
+    // Владельцем становится окно, которое сессию открыло: закрыть её сможет только оно.
+    state.owners.claim(&id, window.label());
     emit_connected(&app, id.clone());
     Ok(id)
 }
@@ -302,7 +309,7 @@ fn serial_ports() -> Vec<Value> {
 /// Открывает сессию по COM-порту. `p.serial` — секция параметров линии из профиля,
 /// либо разовые настройки, если пользователь открывает порт без сохранённого профиля.
 #[tauri::command]
-fn session_open_serial(app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
+fn session_open_serial(window: tauri::Window, app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
     // Профиль сервера имеет приоритет: в нём настройки, которые пользователь сохранил.
     let cfg = match p.get("serverId").and_then(|v| v.as_str()) {
         Some(sid) => {
@@ -325,6 +332,8 @@ fn session_open_serial(app: AppHandle, state: State<'_, AppState>, p: Value) -> 
         "session-data",
         json!({ "id": id, "data": format!("\x1b[90m[{}]\x1b[0m\r\n", serial::describe(&cfg)) }),
     );
+    // Владельцем становится окно, которое сессию открыло: закрыть её сможет только оно.
+    state.owners.claim(&id, window.label());
     emit_connected(&app, id.clone());
     Ok(id)
 }
@@ -352,7 +361,7 @@ fn serial_set_signal(state: State<'_, AppState>, id: String, line: String, on: b
 /// прямо из запроса (разовое подключение из палитры). `cols`/`rows` нужны сразу: telnet
 /// сообщает размер окна в момент согласования, и без них сервер считает экран 80x24.
 #[tauri::command]
-fn session_open_tcp(app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
+fn session_open_tcp(window: tauri::Window, app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
     let profile = match p.get("serverId").and_then(|v| v.as_str()) {
         Some(sid) => store::servers_list()
             .into_iter()
@@ -394,6 +403,8 @@ fn session_open_tcp(app: AppHandle, state: State<'_, AppState>, p: Value) -> Res
         json!({ "id": id, "data": format!("[90m[{}][0m
 ", telnet::describe(mode, &host, port)) }),
     );
+    // Владельцем становится окно, которое сессию открыло: закрыть её сможет только оно.
+    state.owners.claim(&id, window.label());
     emit_connected(&app, id.clone());
     Ok(id)
 }
@@ -409,7 +420,7 @@ fn telnet_command(state: State<'_, AppState>, id: String, name: String) -> Resul
 }
 
 #[tauri::command]
-async fn session_open_ssh(app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
+async fn session_open_ssh(window: tauri::Window, app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
     let server_id = p.get("serverId").and_then(|v| v.as_str()).ok_or("Не задан serverId")?;
     let chain = resolve_chain(server_id)?;
     let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u32;
@@ -437,6 +448,8 @@ async fn session_open_ssh(app: AppHandle, state: State<'_, AppState>, p: Value) 
         }
     }
     state.sessions.lock().unwrap().insert(id.clone(), Session::Ssh(sess));
+    // Владельцем становится окно, которое сессию открыло: закрыть её сможет только оно.
+    state.owners.claim(&id, window.label());
     emit_connected(&app, id.clone());
     Ok(id)
 }
@@ -477,9 +490,27 @@ fn session_resize(state: State<'_, AppState>, p: Value) {
     }
 }
 
+/// Закрыть сессию. Разрешено только окну-владельцу.
+///
+/// Проверка здесь, а не во фронтенде, намеренно. Раньше каждое окно само решало, «его» ли
+/// это сессия, по своему набору пометок — и откреплённое окно, не знавшее о пометках
+/// главного, закрывало чужую сессию при первом переключении на Docker. Теперь запрос от
+/// не-владельца просто игнорируется: окну незачем знать чужую бухгалтерию.
 #[tauri::command]
-fn session_close(app: AppHandle, state: State<'_, AppState>, id: String) {
+fn session_close(window: tauri::Window, app: AppHandle, state: State<'_, AppState>, id: String) {
+    if !state.owners.may_close(&id, window.label()) {
+        return;
+    }
     state.teardown(&app, &id, true);
+}
+
+/// Передать владение сессией окну с указанной меткой.
+///
+/// Зовётся при откреплении (главное окно отдаёт новому) и при возврате вкладки
+/// (откреплённое отдаёт главному) — до того, как прежнее окно начнёт разбираться.
+#[tauri::command]
+fn session_claim(state: State<'_, AppState>, id: String, window_label: String) {
+    state.owners.claim(&id, &window_label);
 }
 
 /// Хвост вывода сессии.
@@ -1333,7 +1364,7 @@ pub fn run() {
             layout_get, layout_set, aux_layout_get, aux_layout_set,
             localfs_home, localfs_parent, localfs_list, localfs_copy_into,
             session_open_local, session_open_ssh, session_write, session_resize, session_close,
-            session_ping, session_replay, session_monitor, session_ki_respond,
+            session_ping, session_replay, session_claim, session_monitor, session_ki_respond,
             session_log_status, session_log_toggle, ssh_agent_identities,
             session_hostkey_respond, knownhosts_list, knownhosts_forget, knownhosts_import,
             serial_ports, session_open_serial, serial_send_break, serial_set_signal,
