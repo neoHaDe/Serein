@@ -1,0 +1,22 @@
+# Сервер БЕЗ подсистемы SFTP — ради него и существует запасной путь через SCP.
+#
+# Такие машины реальны: старые прошивки, встраиваемые системы, урезанные образы. На них
+# файловый менеджер обязан работать через `scp` и `ls`, а не показывать пустоту.
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-server \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /run/sshd
+
+RUN useradd -m -s /bin/bash probe && echo 'probe:probe-pass' | chpasswd
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Собственно смысл образа: убираем подсистему sftp из конфигурации.
+RUN sed -i '/^Subsystem[[:space:]]*sftp/d' /etc/ssh/sshd_config
+
+EXPOSE 22
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/usr/sbin/sshd", "-D", "-e"]

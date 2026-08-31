@@ -304,6 +304,9 @@ const SFTP_READ_MAX: u32 = 256 * 1024 - 64;
 const READ_INFLIGHT: usize = 64;
 const PIPELINE_AFTER: u64 = 256 * 1024;
 const SFTP_TIMEOUT_SECS: u64 = 300;
+/// Срок разовой проверки подсистемы. Короткий: это не работа, а вопрос «SFTP тут есть?»,
+/// и пользователь ждёт открытия файлового менеджера.
+const SFTP_PROBE_SECS: u64 = 10;
 
 fn sftp_config() -> SftpConfig {
     SftpConfig {
@@ -316,7 +319,7 @@ fn sftp_config() -> SftpConfig {
 async fn open_stream(
     handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
 ) -> Result<russh::ChannelStream<russh::client::Msg>, String> {
-    let channel = {
+    let mut channel = {
         let h = handle.lock().await;
         h.channel_open_session().await.map_err(|e| e.to_string())?
     };
@@ -324,12 +327,31 @@ async fn open_stream(
         .request_subsystem(true, "sftp")
         .await
         .map_err(|e| e.to_string())?;
+    // Запрос сделан с want_reply, и ответ на него нужно забрать здесь. Сервер без
+    // подсистемы отвечает отказом; если этот отказ не прочитать, рукопожатие SFTP уходит
+    // ждать данных, которых не будет, и файловый менеджер виснет вместо перехода на SCP.
+    loop {
+        match channel.wait().await {
+            Some(russh::ChannelMsg::Success) => break,
+            Some(russh::ChannelMsg::Failure) => return Err("SFTP-подсистема недоступна".into()),
+            Some(russh::ChannelMsg::Eof) | Some(russh::ChannelMsg::Close) | None => {
+                return Err("SFTP-подсистема недоступна: канал закрыт".into())
+            }
+            Some(_) => {}
+        }
+    }
     Ok(channel.into_stream())
 }
 
 /// Проверка доступности SFTP-подсистемы на соединении.
+///
+/// Сервер без подсистемы отвечает на запрос отказом канала, но до вызывающего этот отказ
+/// доходит не всегда: рукопожатие SFTP остаётся ждать ответа, которого не будет, и весь
+/// файловый менеджер повисает на «загрузке» вместо перехода на SCP. Поэтому у проверки
+/// свой короткий срок: не дождались — считаем, что подсистемы нет.
 pub async fn probe(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>) -> bool {
-    open(handle).await.is_ok()
+    let wait = std::time::Duration::from_secs(SFTP_PROBE_SECS);
+    matches!(tokio::time::timeout(wait, open(handle)).await, Ok(Ok(_)))
 }
 
 /// Открывает новый SFTP-канал поверх SSH-соединения.

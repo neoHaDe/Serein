@@ -23,6 +23,16 @@ services:
     volumes:
       - ./.stand/authorized_keys:/keys/authorized_keys:ro
 
+  # Сервер без подсистемы SFTP: проверяет запасной путь через SCP + ls.
+  nosftp:
+    build:
+      context: .
+      dockerfile: Dockerfile.nosftp
+    ports:
+      - "127.0.0.1:2204:22"
+    volumes:
+      - ./.stand/authorized_keys:/keys/authorized_keys:ro
+
   alpine:
     build:
       context: .

@@ -21,6 +21,8 @@ pub struct Stand {
     /// отпечаток. Отдельный порт даёт отдельную запись в `known_hosts`, поэтому тест
     /// не мешает соседям, идущим параллельно на основной порт.
     pub hostkey_port: u16,
+    /// Сервер без подсистемы SFTP: на нём файловый менеджер обязан уйти на SCP.
+    pub nosftp_port: u16,
 }
 
 fn env(name: &str) -> String {
@@ -48,6 +50,7 @@ impl Stand {
             key_path: env("SEREIN_STAND_KEY"),
             alpine_internal: env("SEREIN_STAND_ALPINE_INTERNAL"),
             hostkey_port: env("SEREIN_STAND_HOSTKEY_PORT").parse().expect("порт для теста ключа"),
+            nosftp_port: env("SEREIN_STAND_NOSFTP_PORT").parse().expect("порт сервера без SFTP"),
         }
     }
 

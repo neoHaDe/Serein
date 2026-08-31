@@ -51,11 +51,23 @@ impl ScpIo {
         }
     }
 
+    /// Ответ удалённого scp: 0 — принято, 1 — предупреждение, 2 — фатальная ошибка.
+    ///
+    /// За кодами 1 и 2 идёт текст ошибки до перевода строки, и его обязательно нужно
+    /// вычитать. Иначе поток разъезжается, и следующая проверка спотыкается о первую
+    /// букву этого текста — пользователь получал «неверный ack (115)» вместо причины.
     async fn read_ack(&mut self) -> Result<(), String> {
         match self.read_byte().await? {
             0 => Ok(()),
-            1 => Ok(()),
-            2 => Err("SCP: удалённая ошибка".into()),
+            code @ (1 | 2) => {
+                let msg = self.read_line().await.unwrap_or_default();
+                let msg = msg.trim();
+                Err(if msg.is_empty() {
+                    format!("SCP: удалённая ошибка (код {code})")
+                } else {
+                    format!("SCP: {msg}")
+                })
+            }
             b => Err(format!("SCP: неверный ack ({b})")),
         }
     }
@@ -251,7 +263,9 @@ pub async fn list(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, pa
 }
 
 async fn recv_file_bytes(io: &mut ScpIo) -> Result<Vec<u8>, String> {
-    io.read_ack().await?;
+    // В режиме `scp -f` первым говорит клиент: удалённый scp молчит, пока не получит
+    // нулевой байт. Лишнее ожидание ответа здесь ставило обе стороны ждать друг друга,
+    // и скачивание висело до конца сессии — молча, без ошибки.
     io.send_ack().await?;
     let line = io.read_line().await?;
     if line == "\x04" || line.is_empty() {
@@ -379,7 +393,7 @@ pub async fn chmod(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, p
 
 pub async fn preview(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str) -> Result<Value, String> {
     check_remote_path(remote)?;
-    let cmd = format!("wc -c < -- {}", shell_quote(remote));
+    let cmd = format!("wc -c < {}", shell_quote(remote));
     let (code, out, err) = crate::ssh::exec(handle, &cmd, None).await?;
     if code != 0 {
         return Err(err.trim().to_string());
@@ -400,7 +414,7 @@ pub async fn preview(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
 
 pub async fn read_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str) -> Result<Value, String> {
     check_remote_path(remote)?;
-    let cmd = format!("wc -c < -- {}", shell_quote(remote));
+    let cmd = format!("wc -c < {}", shell_quote(remote));
     let (code, out, _err) = crate::ssh::exec(handle, &cmd, None).await?;
     let size: u64 = if code == 0 { out.trim().parse().unwrap_or(0) } else { 0 };
     let mode = 0o644u32;
