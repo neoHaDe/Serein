@@ -29,7 +29,7 @@ interface Props {
   onDelete: (id: string) => void
   onOpenSettings: () => void
   onOpenKeyGen: () => void
-  onImport: (kind: 'ssh' | 'putty') => void
+  onImport: (kind: 'ssh' | 'putty' | 'mobaxterm' | 'xshell' | 'securecrt') => void
   showPuttyImport?: boolean
   width: number
   collapsed?: boolean
@@ -617,7 +617,12 @@ export function Sidebar({
                     items: [
                       { label: 'Из ~/.ssh/config', onClick: () => onImport('ssh') },
                       ...(showPuttyImport
-                        ? [{ label: 'Из сессий PuTTY', onClick: () => onImport('putty') }]
+                        ? [
+                            { label: 'Из сессий PuTTY', onClick: () => onImport('putty') },
+                            { label: 'Из MobaXterm', onClick: () => onImport('mobaxterm') },
+                            { label: 'Из XShell', onClick: () => onImport('xshell') },
+                            { label: 'Из SecureCRT', onClick: () => onImport('securecrt') }
+                          ]
                         : [])
                     ]
                   })

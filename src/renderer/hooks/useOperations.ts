@@ -10,13 +10,15 @@ import { errText } from '../errText'
  * другой домен: профили подключений и их раскладка в списке, без привязки к сессиям.
  */
 
+export type ServerImportKind = 'ssh' | 'putty' | 'mobaxterm' | 'xshell' | 'securecrt'
+
 export interface Operations {
   servers: ServerConfig[]
   setServers: React.Dispatch<React.SetStateAction<ServerConfig[]>>
   reloadServers: () => Promise<void>
   saveServer: (cfg: ServerConfig) => Promise<void>
   deleteServer: (id: string) => Promise<void>
-  importServers: (kind: 'ssh' | 'putty') => Promise<void>
+  importServers: (kind: ServerImportKind) => Promise<void>
   groupOrder: string[]
   collapsedGroups: string[]
   allGroups: string[]
@@ -65,10 +67,16 @@ export function useOperations(
   )
 
   const importServers = useCallback(
-    async (kind: 'ssh' | 'putty') => {
+    async (kind: ServerImportKind) => {
       try {
-        const r =
-          kind === 'ssh' ? await window.api.servers.importSshConfig() : await window.api.servers.importPutty()
+        const handlers: Record<ServerImportKind, () => Promise<{ imported: number }>> = {
+          ssh: () => window.api.servers.importSshConfig(),
+          putty: () => window.api.servers.importPutty(),
+          mobaxterm: () => window.api.servers.importMobaxterm(),
+          xshell: () => window.api.servers.importXshell(),
+          securecrt: () => window.api.servers.importSecurecrt()
+        }
+        const r = await handlers[kind]()
         await reloadServers()
         alert(
           r.imported

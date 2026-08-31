@@ -211,7 +211,12 @@ export default function App(): JSX.Element {
               <div className="welcome-actions">
                 <button onClick={() => void ops.importServers('ssh')}>Импорт из ~/.ssh/config</button>
                 {showPuttyImport && (
-                  <button onClick={() => void ops.importServers('putty')}>Импорт сессий PuTTY</button>
+                  <>
+                    <button onClick={() => void ops.importServers('putty')}>Импорт сессий PuTTY</button>
+                    <button onClick={() => void ops.importServers('mobaxterm')}>Импорт MobaXterm</button>
+                    <button onClick={() => void ops.importServers('xshell')}>Импорт XShell</button>
+                    <button onClick={() => void ops.importServers('securecrt')}>Импорт SecureCRT</button>
+                  </>
                 )}
                 <button onClick={() => setEditing(null)}>Добавить сервер вручную</button>
               </div>

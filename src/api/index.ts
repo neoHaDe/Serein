@@ -73,7 +73,10 @@ export const api = {
     reorder: (items: { id: string; group: string; order: number }[]): Promise<void> =>
       invoke('servers_reorder', { items }),
     importSshConfig: (): Promise<{ imported: number }> => invoke('servers_import_ssh_config'),
-    importPutty: (): Promise<{ imported: number }> => invoke('servers_import_putty')
+    importPutty: (): Promise<{ imported: number }> => invoke('servers_import_putty'),
+    importMobaxterm: (): Promise<{ imported: number }> => invoke('servers_import_mobaxterm'),
+    importXshell: (): Promise<{ imported: number }> => invoke('servers_import_xshell'),
+    importSecurecrt: (): Promise<{ imported: number }> => invoke('servers_import_securecrt')
   },
   agent: {
     /** Ключи локального SSH-агента. `ok: false` — агент не запущен, не ошибка вызова. */
@@ -347,6 +350,7 @@ export const api = {
      */
     exec: (serverIds: string[], command: string): Promise<MultiExecResult[]> =>
       invoke('multi_exec', { serverIds, command }),
+    cancel: (): Promise<void> => invoke('multi_exec_cancel'),
     onResult: (cb: (p: { done: number; total: number; result: MultiExecResult }) => void) =>
       sub<{ done: number; total: number; result: MultiExecResult }>('multi-exec-result', cb)
   },

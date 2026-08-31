@@ -1170,6 +1170,18 @@ fn servers_import_ssh_config() -> Result<Value, String> {
 fn servers_import_putty() -> Result<Value, String> {
     Ok(json!({ "imported": importers::import_putty()? }))
 }
+#[tauri::command]
+fn servers_import_mobaxterm() -> Result<Value, String> {
+    Ok(json!({ "imported": importers::import_mobaxterm()? }))
+}
+#[tauri::command]
+fn servers_import_xshell() -> Result<Value, String> {
+    Ok(json!({ "imported": importers::import_xshell()? }))
+}
+#[tauri::command]
+fn servers_import_securecrt() -> Result<Value, String> {
+    Ok(json!({ "imported": importers::import_securecrt()? }))
+}
 
 /// Сдвинуть окна группы на (dx, dy) в физических пикселях.
 /// Делаем из Rust: на Linux JS `setPosition` из чужого webview часто не доезжает,
@@ -1399,6 +1411,7 @@ pub fn run() {
             export_text_file,
             keygen_generate, keygen_save, keygen_install,
             servers_import_ssh_config, servers_import_putty,
+            servers_import_mobaxterm, servers_import_xshell, servers_import_securecrt,
             app_platform, app_paths, app_install_kind, multi_exec, multi_exec_cancel,
             windows_nudge_group, windows_raise_group, windows_restore_minimized, windows_count_minimized,
             clipboard_write, clipboard_read
