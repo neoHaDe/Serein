@@ -145,6 +145,13 @@ jobs:
 
       # Профиль уводим во временный каталог: тесты подтверждают ключи хостов, то есть
       # пишут в профиль, и делать это в домашнем каталоге раннера незачем.
+      #
+      # `--test-threads=1` обязателен, а не «на всякий случай». Все тесты стенда делят один
+      # файл `known_hosts.json`: приложение переписывает его целиком при каждом новом хосте,
+      # и тест, который правит этот файл снаружи, теряет свою правку под чужой записью.
+      # Своим замком это не лечится — замок приложения о тестовом ничего не знает. Гонять
+      # их последовательно дешевле (весь набор укладывается в секунды), чем городить
+      # синхронизацию между тестом и кодом, который он проверяет.
       - name: Прогнать матрицу
         env:
           SEREIN_CONFIG_DIR: ${{ runner.temp }}/serein-profile
@@ -157,8 +164,8 @@ jobs:
           SEREIN_STAND_PASSWORD: probe-pass
         run: |
           export SEREIN_STAND_KEY="$GITHUB_WORKSPACE/scripts/ssh-stand/.stand/id_ed25519"
-          cargo test --manifest-path src-tauri/Cargo.toml --test ssh_stand --locked -- --ignored
-          cargo test --manifest-path src-tauri/Cargo.toml --test sftp_stand --locked -- --ignored
+          cargo test --manifest-path src-tauri/Cargo.toml --test ssh_stand --locked -- --ignored --test-threads=1
+          cargo test --manifest-path src-tauri/Cargo.toml --test sftp_stand --locked -- --ignored --test-threads=1
 
       - name: Логи стенда при падении
         if: failure()

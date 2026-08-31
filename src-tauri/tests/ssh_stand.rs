@@ -13,7 +13,7 @@
 //! профиль — гадить в профиль живого пользователя они не имеют права.
 
 mod common;
-use common::{profile_lock, rt, Stand};
+use common::{rt, Stand};
 use serde_json::{json, Value};
 
 /// Подключиться и выполнить команду, вернув (код, stdout).
@@ -156,7 +156,6 @@ fn parallel_first_contact_remembers_every_host() {
         rb.expect("Alpine");
     });
 
-    let _guard = profile_lock().lock().unwrap_or_else(|e| e.into_inner());
     let file = serein_lib::store::config_dir().join("known_hosts.json");
     let text = std::fs::read_to_string(&file).expect("файл отпечатков");
     for port in [s.debian_port, s.alpine_port] {
@@ -179,16 +178,16 @@ fn changed_host_key_is_refused_when_there_is_nobody_to_ask() {
     let s = Stand::from_env();
     let host_id = format!("{}:{}", s.host, s.hostkey_port);
 
-    // Правим ровно свою запись и ничего не восстанавливаем обратно. Первый вариант этого
-    // теста читал файл целиком, а в конце writeback'ом возвращал снимок — и стирал
-    // отпечатки, которые за это время записали соседние тесты. Ровно та же гонка, которую
-    // мы только что чинили в приложении, воспроизведённая в тесте.
+    // Правим ровно свою запись и ничего не восстанавливаем обратно: порт 2203 существует
+    // только ради этой проверки, и чужой отпечаток на нём никому не мешает.
     //
-    // Восстанавливать нечего: порт 2203 существует только ради этой проверки, и чужой
-    // отпечаток на нём никому не мешает.
+    // ⚠ Набор тестов стенда обязан идти в один поток (`--test-threads=1`). Приложение
+    // переписывает `known_hosts.json` целиком при каждом новом хосте, поэтому параллельное
+    // подключение из соседнего теста стирает подложенный отпечаток, и проверка молча
+    // превращается в «подключились к незнакомому хосту». Своим замком это не лечится:
+    // замок приложения о тестовом ничего не знает.
     {
-        let _guard = profile_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let file = serein_lib::store::config_dir().join("known_hosts.json");
+            let file = serein_lib::store::config_dir().join("known_hosts.json");
         let mut data: serde_json::Map<String, Value> = std::fs::read_to_string(&file)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())

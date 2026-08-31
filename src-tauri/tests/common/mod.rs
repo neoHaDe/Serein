@@ -84,13 +84,3 @@ pub fn rt() -> tokio::runtime::Runtime {
         .build()
         .expect("рантайм")
 }
-
-/// Замок для тестов, которые правят `known_hosts.json` напрямую.
-///
-/// Ирония: приложение свою гонку на этом файле уже не имеет (в `knownhosts` есть замок),
-/// а вот тесты, которые лезут в файл мимо приложения, переоткрывают её сами. Кто читает
-/// файл целиком или переписывает его — берёт этот замок.
-pub fn profile_lock() -> &'static std::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| std::sync::Mutex::new(()))
-}
