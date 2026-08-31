@@ -4,6 +4,7 @@ import type { SavedAuxWindow, ServerConfig, WorkspaceTool } from '../shared/type
 import { paneKindOf } from '../shared/types'
 import type { Tab, SplitChoice } from './tabs'
 import { findTabKeyBySession, planReattach, planRestore, uid } from './tabs'
+import { shouldAutoReconnect } from './sessionRules'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { PaneView } from './components/PaneView'
@@ -194,12 +195,9 @@ export default function App(): JSX.Element {
       for (const t of tabsRef.current) {
         const leaf = allLeaves(t.root).find((l) => l.sessionId === p.id)
         if (!leaf) continue
-        const canAuto =
-          p.reason === 'drop' &&
-          leaf.kind === 'ssh' &&
-          settingsRef.current.autoReconnect &&
-          (leaf.status === 'connected' || leaf.status === 'connecting' || leaf.status === 'reconnecting')
-        if (canAuto) toReconnect = { tabKey: t.key, paneId: leaf.id }
+        if (shouldAutoReconnect(p, leaf, settingsRef.current)) {
+          toReconnect = { tabKey: t.key, paneId: leaf.id }
+        }
         break
       }
       if (toReconnect) {
