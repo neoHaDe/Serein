@@ -5,10 +5,12 @@ import type {
   SerialConfig,
   SerialPortInfo,
   ServerConfig,
+  ServerEnv,
   TunnelConfig,
   TunnelType
 } from '../../shared/types'
 import { errText } from '../errText'
+import { ENVS, ENV_LABEL, normalizeTags } from '../serverFilter'
 
 interface Props {
   initial: ServerConfig | null // null = создание нового
@@ -127,6 +129,11 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
   const [passphrase, setPassphrase] = useState('')
   const [group, setGroup] = useState(initial?.group ?? '')
   const [color, setColor] = useState(initial?.color ?? COLORS[0])
+  // Теги правятся строкой через запятую: так их быстрее набирать, чем щёлкая по чипсам,
+  // а к хранимому виду (нижний регистр, без повторов) их приводит normalizeTags.
+  const [tags, setTags] = useState((initial?.tags ?? []).join(', '))
+  const [env, setEnv] = useState<ServerEnv | ''>(initial?.env ?? '')
+  const [favorite, setFavorite] = useState(!!initial?.favorite)
   const [proxyJump, setProxyJump] = useState(initial?.proxyJump ?? '')
   const [tunnels, setTunnels] = useState<TunnelConfig[]>(initial?.tunnels ?? [])
   const [addingTunnel, setAddingTunnel] = useState(false)
@@ -234,6 +241,9 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
       sshLegacyAlgos: connection === 'ssh' && sshLegacyAlgos ? true : undefined,
       group: group.trim() || undefined,
       color,
+      tags: normalizeTags(tags).length ? normalizeTags(tags) : undefined,
+      env: env || undefined,
+      favorite: favorite || undefined,
       proxyJump: proxyJump || undefined,
       tunnels: tunnels.length ? tunnels : undefined,
       executeOnConnect: executeOnConnect.trim() || undefined,
@@ -674,6 +684,33 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
         </div>
           </>
         )}
+
+        <label>
+          Теги
+          <input
+            value={tags}
+            onChange={(e) => setTags(e.target.value)}
+            placeholder="web, nginx, клиент-1"
+          />
+          <div className="agent-hint">Через запятую. В поиске: «tag:web», «env:prod», «fav».</div>
+        </label>
+
+        <label>
+          Среда
+          <select value={env} onChange={(e) => setEnv(e.target.value as ServerEnv | '')}>
+            <option value="">Не указана</option>
+            {ENVS.map((e2) => (
+              <option key={e2} value={e2}>
+                {ENV_LABEL[e2]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="checkbox-row">
+          <input type="checkbox" checked={favorite} onChange={(e) => setFavorite(e.target.checked)} />
+          В избранном
+        </label>
 
         <label>
           Цвет

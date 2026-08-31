@@ -54,6 +54,12 @@ export interface GeneratedKey {
   publicKey: string
 }
 
+/**
+ * Метка среды сервера. Живёт здесь, рядом с профилем: её пишет форма, читает список и
+ * хранит бэкенд.
+ */
+export type ServerEnv = 'prod' | 'stage' | 'dev'
+
 export interface ServerConfig {
   id: string
   name: string
@@ -101,6 +107,15 @@ export interface ServerConfig {
   sshLegacyAlgos?: boolean
   /** Позиция в списке внутри своей группы. Меньше — выше. */
   order?: number
+  /** Метки для поиска и быстрых фильтров: хранятся в нижнем регистре, без повторов. */
+  tags?: string[]
+  /** Избранное — такие серверы поднимаются отдельной секцией наверх списка. */
+  favorite?: boolean
+  /**
+   * Метка среды. Нужна не для подключения, а чтобы «прод» был видно до того, как в него
+   * что-нибудь выполнят: он получает заметный ярлык в списке и во вкладке.
+   */
+  env?: ServerEnv
   /** Вид подключения. Отсутствует = `ssh` (все профили, созданные до появления COM). */
   connection?: 'ssh' | 'serial' | 'telnet' | 'raw'
   /** Параметры линии для `connection: 'serial'`. */

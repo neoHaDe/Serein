@@ -17,6 +17,8 @@ export interface Operations {
   setServers: React.Dispatch<React.SetStateAction<ServerConfig[]>>
   reloadServers: () => Promise<void>
   saveServer: (cfg: ServerConfig) => Promise<void>
+  /** Точечная правка профиля: избранное, среда, теги — без открытия формы. */
+  patchServer: (id: string, patch: Partial<ServerConfig>) => Promise<void>
   deleteServer: (id: string) => Promise<void>
   importServers: (kind: ServerImportKind) => Promise<void>
   groupOrder: string[]
@@ -56,6 +58,25 @@ export function useOperations(
       onSavedServer()
     },
     [reloadServers, onSavedServer]
+  )
+
+  const serversRef = useRef(servers)
+  serversRef.current = servers
+
+  /**
+   * Меняет одно-два поля профиля и сохраняет его.
+   *
+   * Секреты при этом не теряются: хранилище перезаписывает пароль только тогда, когда ключ
+   * пришёл явно, а в списке серверов его нет. Поэтому патчить безопасно.
+   */
+  const patchServer = useCallback(
+    async (id: string, patch: Partial<ServerConfig>) => {
+      const cur = serversRef.current.find((s) => s.id === id)
+      if (!cur) return
+      await window.api.servers.save({ ...cur, ...patch })
+      await reloadServers()
+    },
+    [reloadServers]
   )
 
   const deleteServer = useCallback(
@@ -181,6 +202,7 @@ export function useOperations(
     setServers,
     reloadServers,
     saveServer,
+    patchServer,
     deleteServer,
     importServers,
     groupOrder,
