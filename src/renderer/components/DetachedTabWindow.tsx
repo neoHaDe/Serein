@@ -10,14 +10,8 @@ import { openAuxWindow, sanitizeWindowLabel } from '../auxWindows'
 import { clearDetachedMark, markSessionDetached } from '../detachedSessions'
 import { reattachTab } from '../reattach'
 import { AppChrome, markAuxWindow } from './WindowChrome'
-import { WorkspaceRail } from './WorkspaceRail'
 import { TerminalView } from './TerminalView'
-import { SftpPanel } from './SftpPanel'
-import { DockerPanel } from './DockerPanel'
-import { HostLogsPanel } from './HostLogsPanel'
-import { ProcessPanel } from './ProcessPanel'
-import { ServicePanel } from './ServicePanel'
-import { TunnelPanel } from './TunnelPanel'
+import { ServerWorkspace } from './ServerWorkspace'
 import { AuxReattachButton } from './AuxReattachButton'
 import { Icon } from './Icon'
 import type { PaneKind } from '../../shared/types'
@@ -221,25 +215,30 @@ export function DetachedTabWindow(): JSX.Element {
 
   const showRail = kind === 'ssh' && !!serverId
   const canSftp = kind === 'ssh' && !!sessionId
-  const showSftp = tool === 'terminal' && sftpOpen && !!sessionId
 
+  // Раскладка теперь такая же, как в главном окне: строка из flex-элементов, ширины
+  // задают сами классы (`.pane-area` тянется, `.sftp-resizer` 5px, `.sftp-panel`
+  // фиксированной ширины). Прежняя сетка с явными номерами колонок требовала, чтобы
+  // разметка внутри знала о своём месте снаружи, — а вся суть общего компонента в том,
+  // чтобы она об этом не знала.
   const bodyStyle: CSSProperties = {
     flex: 1,
     minHeight: 0,
     minWidth: 0,
     overflow: 'hidden',
-    display: 'grid',
-    gridTemplateRows: 'minmax(0, 1fr)',
-    gridTemplateColumns: showRail ? 'auto minmax(0, 1fr)' : 'minmax(0, 1fr)'
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'stretch'
   }
 
   const slotStyle: CSSProperties = {
+    flex: 1,
     minWidth: 0,
     minHeight: 0,
     overflow: 'hidden',
-    display: 'grid',
-    gridTemplateRows: 'minmax(0, 1fr)',
-    gridTemplateColumns: showSftp ? `minmax(0, 1fr) 5px ${sftpWidth}px` : 'minmax(0, 1fr)'
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'stretch'
   }
 
   const doReattach = (): void => {
@@ -279,79 +278,37 @@ export function DetachedTabWindow(): JSX.Element {
         }
       />
       <div className="detached-tab-body" style={bodyStyle}>
-        {showRail && (
-          <WorkspaceRail
-            title={title}
-            leaf={leaf}
+        <div ref={slotRef} className="detached-tab-slot" style={slotStyle}>
+          <ServerWorkspace
+            leaf={showRail ? leaf : undefined}
             server={server}
+            title={title}
             tool={tool}
-            onSelect={setTool}
+            onSelectTool={setTool}
             onReconnect={() => void doReconnect()}
             onEditServer={() => {}}
-          />
-        )}
-        <div ref={slotRef} className="detached-tab-slot" style={slotStyle}>
-          {/*
-            Терминал прячем стилем, а не условным рендером: размонтирование освобождает
-            xterm вместе с сессией, а окно должно пережить поход в Docker и обратно —
-            вместе со скроллбэком. Главное окно устроено так же.
-          */}
-          <div
-            className="pane-area"
-            style={{ ...paneStack, gridColumn: 1, display: tool === 'terminal' ? 'flex' : 'none' }}
-          >
-            <div className="pane pane-active" style={paneStack}>
-              <TerminalView
-                key={`detached:${sessionId}`}
-                instanceKey={`detached:${sessionId}`}
-                paneId="detached-pane"
-                kind={kind}
-                serverId={serverId || undefined}
-                attachSessionId={sessionId}
-                active
-                focused
-                onReady={() => {}}
-              />
-            </div>
-          </div>
-          {showSftp && (
-            <>
-              <div
-                className="sftp-resizer"
-                style={{ gridColumn: 2, width: 5, minHeight: 0 }}
-                onMouseDown={startSftpResize}
-              />
-              <div style={{ ...paneStack, gridColumn: 3 }}>
-                <SftpPanel
-                  sessionId={sessionId}
+            sessionId={status === 'connected' ? sessionId || undefined : undefined}
+            serverId={serverId || undefined}
+            sftpOpen={sftpOpen}
+            sftpWidth={sftpWidth}
+            onSftpClose={() => setSftpOpen(false)}
+            onSftpResizeStart={startSftpResize}
+            terminal={
+              <div className="pane pane-active" style={paneStack}>
+                <TerminalView
+                  key={`detached:${sessionId}`}
+                  instanceKey={`detached:${sessionId}`}
+                  paneId="detached-pane"
+                  kind={kind}
                   serverId={serverId || undefined}
-                  width={sftpWidth}
-                  closing={false}
-                  fill
-                  onClose={() => setSftpOpen(false)}
+                  attachSessionId={sessionId}
+                  active
+                  focused
+                  onReady={() => {}}
                 />
               </div>
-            </>
-          )}
-          {tool !== 'terminal' && (
-            <div className="ws-body" style={{ ...paneStack, gridColumn: 1 }}>
-              {tool === 'docker' && (
-                <DockerPanel sessionId={sessionId} serverId={serverId || undefined} docked onClose={() => setTool('terminal')} />
-              )}
-              {tool === 'logs' && <HostLogsPanel sessionId={sessionId} />}
-              {tool === 'processes' && <ProcessPanel sessionId={sessionId} />}
-              {tool === 'services' && <ServicePanel sessionId={sessionId} />}
-              {tool === 'tunnels' && (
-                <TunnelPanel
-                  sessionId={sessionId}
-                  server={server}
-                  docked
-                  onClose={() => setTool('terminal')}
-                  onEditServer={() => {}}
-                />
-              )}
-            </div>
-          )}
+            }
+          />
         </div>
       </div>
     </div>

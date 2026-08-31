@@ -5,8 +5,8 @@ import { paneKindOf, parseWorkspaceTool } from '../shared/types'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { PaneView } from './components/PaneView'
+import { ServerWorkspace } from './components/ServerWorkspace'
 import { ServerForm } from './components/ServerForm'
-import { SftpPanel } from './components/SftpPanel'
 import { SettingsModal } from './components/SettingsModal'
 import { KiModal } from './components/KiModal'
 import { HostKeyModal } from './components/HostKeyModal'
@@ -15,13 +15,7 @@ import { GroupsModal } from './components/GroupsModal'
 import { StatusBar } from './components/StatusBar'
 import { CodeEditor } from './components/CodeEditor'
 import { CommandPalette, type PaletteItem } from './components/CommandPalette'
-import { WorkspaceRail } from './components/WorkspaceRail'
-import { DockerPanel } from './components/DockerPanel'
-import { ProcessPanel } from './components/ProcessPanel'
-import { ServicePanel } from './components/ServicePanel'
-import { HostLogsPanel } from './components/HostLogsPanel'
 import { openDetachedTabWindow } from './components/DetachedTabWindow'
-import { TunnelPanel } from './components/TunnelPanel'
 import { markSessionDetached, clearDetachedMark } from './detachedSessions'
 import type { ReattachSftpPayload, ReattachTabPayload, ReattachWorkspacePayload } from './reattach'
 import { useSettings } from './SettingsContext'
@@ -1280,90 +1274,43 @@ export default function App(): JSX.Element {
                 className="terminal-slot"
                 style={{ display: isActive ? 'flex' : 'none' }}
               >
-                {showRail && sshLeaf && (
-                  <WorkspaceRail
-                    title={tab.title}
-                    leaf={sshLeaf}
-                    server={servers.find((s) => s.id === sshLeaf.serverId)}
-                    tool={tool}
-                    onSelect={(t) => setWorkspace(tab.key, t)}
-                    onReconnect={() => reconnectPaneManual(tab.key, sshLeaf.id)}
-                    onEditServer={() => {
-                      const srv = servers.find((s) => s.id === sshLeaf.serverId)
-                      if (srv) setEditing(srv)
-                    }}
-                  />
-                )}
-                <div className="pane-area" style={{ display: tool === 'terminal' ? 'flex' : 'none' }}>
-                  <PaneView
-                    node={tab.root}
-                    activePaneId={tab.activePaneId}
-                    tabActive={tab.key === activeKey}
-                    canClose={allLeaves(tab.root).length > 1}
-                    onFocusPane={(pid) => focusPane(tab.key, pid)}
-                    onReady={handleReady}
-                    onFail={handleFail}
-                    onInput={broadcastInput}
-                    onClosePane={(pid) => closePane(tab.key, pid)}
-                    onReconnect={(pid) => reconnectPaneManual(tab.key, pid)}
-                    onCancelReconnect={(pid) => cancelReconnect(tab.key, pid)}
-                    onResizeSplit={(sid, sizes) => resizeSplit(tab.key, sid, sizes)}
-                  />
-                </div>
-                {tool === 'terminal' && tab.sftpOpen && sessionId && (
-                  <>
-                    <div className="sftp-resizer" onMouseDown={startSftpResize} />
-                    <SftpPanel
-                      sessionId={sessionId}
-                      serverId={sshLeaf?.serverId}
-                      width={sftpWidth}
-                      closing={false}
-                      onClose={() => toggleSftp(tab.key)}
-                      onOpenInEditor={(rp) => openEditorTab(sessionId, rp)}
+                <ServerWorkspace
+                  leaf={showRail && sshLeaf ? sshLeaf : undefined}
+                  server={servers.find((srv) => srv.id === sshLeaf?.serverId)}
+                  title={tab.title}
+                  panelTitle={panelTitle}
+                  tool={tool}
+                  onSelectTool={(t) => setWorkspace(tab.key, t)}
+                  onReconnect={() => sshLeaf && reconnectPaneManual(tab.key, sshLeaf.id)}
+                  onEditServer={() => {
+                    const srv = servers.find((x) => x.id === sshLeaf?.serverId)
+                    if (srv) setEditing(srv)
+                  }}
+                  sessionId={sessionId}
+                  serverId={sshLeaf?.serverId}
+                  sftpOpen={tab.sftpOpen}
+                  sftpWidth={sftpWidth}
+                  onSftpClose={() => toggleSftp(tab.key)}
+                  onSftpResizeStart={startSftpResize}
+                  onOpenInEditor={sessionId ? (rp) => openEditorTab(sessionId, rp) : undefined}
+                  onDetached={goTerminal}
+                  terminal={
+                    <PaneView
+                      node={tab.root}
+                      activePaneId={tab.activePaneId}
+                      tabActive={tab.key === activeKey}
+                      canClose={allLeaves(tab.root).length > 1}
+                      onFocusPane={(pid) => focusPane(tab.key, pid)}
+                      onReady={handleReady}
+                      onFail={handleFail}
+                      onInput={broadcastInput}
+                      onClosePane={(pid) => closePane(tab.key, pid)}
+                      onReconnect={(pid) => reconnectPaneManual(tab.key, pid)}
+                      onCancelReconnect={(pid) => cancelReconnect(tab.key, pid)}
+                      onResizeSplit={(sid, sizes) => resizeSplit(tab.key, sid, sizes)}
                     />
-                  </>
-                )}
-                {showRail && tool !== 'terminal' && (
-                  <div className="ws-body">
-                    {!sessionId && (
-                      <div className="ws-waiting">Нет активного SSH-соединения</div>
-                    )}
-                    {sessionId && tool === 'docker' && (
-                      <DockerPanel
-                        sessionId={sessionId}
-                        serverId={sshLeaf?.serverId}
-                        panelTitle={panelTitle}
-                        docked
-                        onClose={goTerminal}
-                        onGoTerminal={goTerminal}
-                        onDetached={goTerminal}
-                      />
-                    )}
-                    {sessionId && tool === 'logs' && (
-                      <HostLogsPanel sessionId={sessionId} panelTitle={panelTitle} onDetached={goTerminal} />
-                    )}
-                    {sessionId && tool === 'processes' && (
-                      <ProcessPanel sessionId={sessionId} panelTitle={panelTitle} onDetached={goTerminal} />
-                    )}
-                    {sessionId && tool === 'services' && (
-                      <ServicePanel sessionId={sessionId} panelTitle={panelTitle} onDetached={goTerminal} />
-                    )}
-                    {sessionId && tool === 'tunnels' && (
-                      <TunnelPanel
-                        sessionId={sessionId}
-                        server={servers.find((s) => s.id === sshLeaf?.serverId)}
-                        panelTitle={panelTitle}
-                        docked
-                        onClose={goTerminal}
-                        onDetached={goTerminal}
-                        onEditServer={() => {
-                          const srv = servers.find((s) => s.id === sshLeaf?.serverId)
-                          if (srv) setEditing(srv)
-                        }}
-                      />
-                    )}
-                  </div>
-                )}
+                  }
+                />
               </div>
             )
           })}
