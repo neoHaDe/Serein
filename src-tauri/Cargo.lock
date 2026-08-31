@@ -4803,7 +4803,7 @@ dependencies = [
 
 [[package]]
 name = "serein"
-version = "1.2.6"
+version = "1.2.7"
 dependencies = [
  "aes-gcm 0.10.3",
  "arboard",
