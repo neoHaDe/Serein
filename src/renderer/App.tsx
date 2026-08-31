@@ -3,7 +3,14 @@ import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { SavedAuxWindow, ServerConfig, WorkspaceTool } from '../shared/types'
 import { paneKindOf } from '../shared/types'
 import type { Tab, SplitChoice } from './tabs'
-import { findTabKeyBySession, planReattach, planRestore, uid } from './tabs'
+import {
+  broadcastTargets,
+  closePaneIn,
+  findTabKeyBySession,
+  planReattach,
+  planRestore,
+  uid
+} from './tabs'
 import { shouldAutoReconnect } from './sessionRules'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
@@ -40,13 +47,11 @@ import {
 import {
   type PaneLeaf,
   makeLeaf,
-  firstLeaf,
   findLeaf,
   allLeaves,
   updateLeaf,
   updateLeafBySession,
   splitLeaf,
-  removeLeaf,
   updateSplitSizes,
   serializePane
 } from './paneTree'
@@ -374,17 +379,7 @@ export default function App(): JSX.Element {
     if (leaf?.sessionId) window.api.session.close(leaf.sessionId)
     reconnect.clear(paneId)
     setTabs((prev) => {
-      const next: Tab[] = []
-      for (const t of prev) {
-        if (t.key !== tabKey) {
-          next.push(t)
-          continue
-        }
-        const root = removeLeaf(t.root, paneId)
-        if (!root) continue // последняя панель — вкладка закрывается
-        const stillActive = findLeaf(root, t.activePaneId)
-        next.push({ ...t, root, activePaneId: stillActive ? t.activePaneId : firstLeaf(root).id })
-      }
+      const { tabs: next } = closePaneIn(prev, tabKey, paneId)
       setActiveKey((cur) => (next.some((t) => t.key === cur) ? cur : next.length ? next[next.length - 1].key : null))
       return next
     })
@@ -420,15 +415,13 @@ export default function App(): JSX.Element {
   // чтобы случайно не отправить команду в прод-сессию из другой вкладки.
   const broadcastInput = useCallback((fromId: string, data: string) => {
     if (!broadcastRef.current) return
-    const tab = tabsRef.current.find((t) => allLeaves(t.root).some((l) => l.sessionId === fromId))
-    if (!tab) return
-    for (const l of allLeaves(tab.root)) {
-      if (l.sessionId && l.sessionId !== fromId) window.api.session.write(l.sessionId, data)
+    for (const id of broadcastTargets(tabsRef.current, fromId)) {
+      window.api.session.write(id, data)
     }
   }, [])
 
   // Сколько сессий получит broadcast-ввод (для индикатора): панели активной вкладки.
-  const broadcastTargets = useMemo(() => {
+  const broadcastTargetCount = useMemo(() => {
     const tab = tabs.find((t) => t.key === activeKey)
     if (!tab) return 0
     return allLeaves(tab.root).filter((l) => l.sessionId).length
@@ -1076,7 +1069,7 @@ export default function App(): JSX.Element {
           }
           const activeLeaf = activeTab ? findLeaf(activeTab.root, activeTab.activePaneId) : undefined
           const srv = servers.find((s) => s.id === activeLeaf?.serverId)
-          return <StatusBar leaf={activeLeaf} server={srv} broadcast={broadcast} broadcastTargets={broadcastTargets} />
+          return <StatusBar leaf={activeLeaf} server={srv} broadcast={broadcast} broadcastTargets={broadcastTargetCount} />
         })()}
       </div>
 

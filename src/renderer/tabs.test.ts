@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { SavedAuxWindow, SerializedTab, ServerConfig } from '../shared/types'
-import { planReattach, planRestore } from './tabs'
+import type { PaneNode } from './paneTree'
+import { allLeaves, makeLeaf, splitLeaf } from './paneTree'
+import type { Tab } from './tabs'
+import { broadcastTargets, closePaneIn, planReattach, planRestore } from './tabs'
 
 /**
  * Первые тесты на фронтенде вообще. Взяты именно за восстановление запуска: логика тут
@@ -138,5 +141,86 @@ describe('planReattach', () => {
     const { tabs } = planReattach(other, req)
     expect(tabs).toHaveLength(2)
     expect(tabs[0].title).toBe('другая')
+  })
+})
+
+/** Вкладка с панелями на заданных сессиях (первая — активная). */
+function tabWith(key: string, sessions: string[]): Tab {
+  const first = makeLeaf('ssh', key, 'srv')
+  first.sessionId = sessions[0]
+  let root: PaneNode = first
+  for (const s of sessions.slice(1)) {
+    const leaf = makeLeaf('ssh', key, 'srv')
+    leaf.sessionId = s
+    root = splitLeaf(root, first.id, 'row', leaf)
+  }
+  return {
+    key,
+    title: key,
+    kind: 'terminal',
+    root,
+    activePaneId: first.id,
+    sftpOpen: false,
+    workspace: 'terminal'
+  }
+}
+
+describe('broadcastTargets', () => {
+  it('не выходит за пределы своей вкладки', () => {
+    // Главное правило: вкладки держат разные окружения, и рассылка по всем отправила бы
+    // команду в прод из вкладки, открытой на тесте. Отменить такое нельзя.
+    const tabs = [tabWith('тест', ['тест-1', 'тест-2']), tabWith('прод', ['прод-1', 'прод-2'])]
+    // Из тестовой вкладки — только по тестовым панелям, прод не задет ни при каких условиях.
+    expect(broadcastTargets(tabs, 'тест-1')).toEqual(['тест-2'])
+    expect(broadcastTargets(tabs, 'прод-1')).toEqual(['прод-2'])
+  })
+
+  it('доходит до соседних панелей своей вкладки', () => {
+    const tabs = [tabWith('одна', ['а', 'б', 'в'])]
+    expect(broadcastTargets(tabs, 'а').sort()).toEqual(['б', 'в'])
+  })
+
+  it('не отправляет ввод обратно источнику', () => {
+    const tabs = [tabWith('одна', ['своя'])]
+    expect(broadcastTargets(tabs, 'своя')).toEqual([])
+  })
+
+  it('для неизвестной сессии не возвращает ничего', () => {
+    const tabs = [tabWith('одна', ['своя'])]
+    expect(broadcastTargets(tabs, 'чужая')).toEqual([])
+  })
+})
+
+describe('closePaneIn', () => {
+  it('последняя панель закрывает вкладку целиком', () => {
+    // Вкладка без единой панели выглядела бы сломанной.
+    const tabs = [tabWith('одна', ['s1'])]
+    const res = closePaneIn(tabs, 'одна', tabs[0].activePaneId)
+    expect(res.tabs).toHaveLength(0)
+    expect(res.closedTab).toBe(true)
+  })
+
+  it('закрытие активной панели переводит активность на оставшуюся', () => {
+    // Иначе вкладка ссылается на панель, которой уже нет.
+    const tabs = [tabWith('одна', ['s1', 's2'])]
+    const active = tabs[0].activePaneId
+    const res = closePaneIn(tabs, 'одна', active)
+    expect(res.closedTab).toBe(false)
+    expect(res.tabs).toHaveLength(1)
+    expect(res.tabs[0].activePaneId).not.toBe(active)
+    expect(allLeaves(res.tabs[0].root).map((l) => l.sessionId)).toEqual(['s2'])
+  })
+
+  it('не трогает соседние вкладки', () => {
+    const tabs = [tabWith('первая', ['s1']), tabWith('вторая', ['s2'])]
+    const res = closePaneIn(tabs, 'первая', tabs[0].activePaneId)
+    expect(res.tabs.map((t) => t.key)).toEqual(['вторая'])
+  })
+
+  it('на неизвестной панели ничего не меняет', () => {
+    const tabs = [tabWith('одна', ['s1'])]
+    const res = closePaneIn(tabs, 'одна', 'нет-такой-панели')
+    expect(res.tabs).toHaveLength(1)
+    expect(res.closedTab).toBe(false)
   })
 })

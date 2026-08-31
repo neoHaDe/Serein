@@ -8,7 +8,7 @@ import type {
 } from '../shared/types'
 import { paneKindOf, parseWorkspaceTool } from '../shared/types'
 import type { PaneLeaf, PaneNode } from './paneTree'
-import { allLeaves, deserializePane, firstLeaf, makeLeaf } from './paneTree'
+import { allLeaves, deserializePane, findLeaf, firstLeaf, makeLeaf, removeLeaf } from './paneTree'
 
 /**
  * Вкладка и правила её восстановления после перезапуска.
@@ -202,4 +202,55 @@ export function planReattach(
     ],
     activeKey: key
   }
+}
+
+/**
+ * Кому уйдёт ввод при включённом broadcast.
+ *
+ * Правило одно и оно про безопасность, а не про удобство: **только панели той же вкладки**,
+ * где человек печатает. Соблазн разослать по всем вкладкам понятен — но вкладки обычно
+ * держат разные окружения, и один такой «удобный» ввод отправляет команду в прод из
+ * вкладки, открытой на тесте. Отменить это нельзя.
+ *
+ * Источник исключаем: он получит свой ввод сам, обычным путём.
+ */
+export function broadcastTargets(tabs: Tab[], fromSessionId: string): string[] {
+  const tab = tabs.find((t) => allLeaves(t.root).some((l) => l.sessionId === fromSessionId))
+  if (!tab) return []
+  return allLeaves(tab.root)
+    .map((l) => l.sessionId)
+    .filter((id): id is string => !!id && id !== fromSessionId)
+}
+
+/**
+ * Закрыть панель.
+ *
+ * Две тонкости, обе видны только на краях:
+ *
+ * - **последняя панель закрывает вкладку целиком** — пустая вкладка без единой панели
+ *   выглядела бы сломанной;
+ * - если закрыли активную панель, активной становится первая из оставшихся, иначе вкладка
+ *   ссылается на панель, которой уже нет.
+ */
+export function closePaneIn(
+  tabs: Tab[],
+  tabKey: string,
+  paneId: string
+): { tabs: Tab[]; closedTab: boolean } {
+  const next: Tab[] = []
+  let closedTab = false
+  for (const t of tabs) {
+    if (t.key !== tabKey) {
+      next.push(t)
+      continue
+    }
+    const root = removeLeaf(t.root, paneId)
+    if (!root) {
+      closedTab = true
+      continue
+    }
+    const stillActive = findLeaf(root, t.activePaneId)
+    next.push({ ...t, root, activePaneId: stillActive ? t.activePaneId : firstLeaf(root).id })
+  }
+  return { tabs: next, closedTab }
 }
