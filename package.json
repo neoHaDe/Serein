@@ -15,7 +15,9 @@
     "smoke:linux": "bash scripts/smoke.sh",
     "build:linux": "npm run tauri -- build --config src-tauri/tauri.linux.conf.json",
     "manifest": "node scripts/make-update-manifest.mjs",
-    "bench:phase0": "cargo run --release --manifest-path src-tauri/Cargo.toml --bin phase0_bench -- home_server"
+    "bench:phase0": "cargo run --release --manifest-path src-tauri/Cargo.toml --bin phase0_bench -- home_server",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",
@@ -53,6 +55,7 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^6.1.1",
     "typescript": "^5.7.2",
-    "vite": "^8.2.2"
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
   }
 }
