@@ -45,6 +45,16 @@ jobs:
       - name: tsc
         run: npm run typecheck
 
+      # Прод-зависимости — блокирующе: то, что уезжает пользователю, обязано быть чистым.
+      - name: npm audit (прод)
+        run: npm audit --omit=dev --audit-level=high
+
+      # Сборочные — отдельно и без падения. Уязвимость в dev-сервере vite не попадает в
+      # артефакт, и ронять из-за неё чужой pull request незачем; видеть её всё равно надо.
+      - name: npm audit (сборочные, справочно)
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
       - name: cargo check
         run: cargo check --manifest-path src-tauri/Cargo.toml --locked
 

@@ -93,6 +93,9 @@ onto the build VM. Release procedure:
 
 # on the Windows host, after the Windows bundle is built
 npm run manifest -- 1.2.6 "заметки к релизу"
+
+# SBOM for the release — the first thing a supply-chain review asks for
+./scripts/make-sbom.sh        # → dist/sbom/*.cdx.json, attach to the GitHub release
 ```
 
 If the signing step inside the script fails with exit code 2 and a bare `try '--help'`, the flags
