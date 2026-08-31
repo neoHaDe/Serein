@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { Tab, SplitChoice } from '../App'
+import type { Tab, SplitChoice } from '../tabs'
 import type { ServerConfig, Snippet, WorkspaceTool } from '../../shared/types'
 import { findLeaf } from '../paneTree'
 import { Icon } from './Icon'

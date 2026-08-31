@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import type { SavedAuxWindow, SerializedPane, SerializedTab, ServerConfig, WorkspaceTool } from '../shared/types'
-import { paneKindOf, parseWorkspaceTool } from '../shared/types'
+import type { SavedAuxWindow, ServerConfig, WorkspaceTool } from '../shared/types'
+import { paneKindOf } from '../shared/types'
+import type { Tab, SplitChoice } from './tabs'
+import { planRestore, uid } from './tabs'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { PaneView } from './components/PaneView'
 import { useReconnect } from './hooks/useReconnect'
 import { useServerPrompts } from './hooks/useServerPrompts'
+import { useAuxRestore } from './hooks/useAuxRestore'
 import { ServerWorkspace } from './components/ServerWorkspace'
 import { ServerForm } from './components/ServerForm'
 import { SettingsModal } from './components/SettingsModal'
@@ -25,19 +28,15 @@ import { bindingLookup, comboFromEvent } from './keybindings'
 import { applyUiTheme } from './themes'
 import { useWindowSnap } from './windowSnap'
 import { isWindowsPlatform } from './platform'
-import { openAuxWindow, sanitizeWindowLabel } from './auxWindows'
 import { MultiExecModal } from './components/MultiExecModal'
 import {
-  auxWindowKey,
   flushAuxPersist,
   listenAuxGeoEvents,
   markAuxPersistReady,
   seedAuxLive,
   setAuxPersistEnabled
 } from './auxLayout'
-import { openDetachedLogsWindow } from './components/dockerLogs'
 import {
-  type PaneNode,
   type PaneLeaf,
   makeLeaf,
   firstLeaf,
@@ -48,52 +47,9 @@ import {
   splitLeaf,
   removeLeaf,
   updateSplitSizes,
-  serializePane,
-  deserializePane
+  serializePane
 } from './paneTree'
 import { errText } from './errText'
-
-export interface Tab {
-  key: string
-  title: string
-  /** Вкладка-терминал (дерево панелей) или вкладка-редактор файла. */
-  kind: 'terminal' | 'editor'
-  root: PaneNode
-  activePaneId: string
-  sftpOpen: boolean
-  workspace: WorkspaceTool
-  /** Для kind==='editor': какой файл и на какой сессии редактируется. */
-  editor?: { sessionId: string; remotePath: string }
-  editorDirty?: boolean
-}
-
-/** Что открыть в новой панели при сплите: локальный терминал или конкретный сервер. */
-export type SplitChoice = { kind: 'local' } | { kind: 'ssh'; serverId: string; title: string }
-
-function uid(): string {
-  return crypto.randomUUID()
-}
-
-function serializedHasServer(node: SerializedPane, serverId: string): boolean {
-  if (node.t === 'leaf') return node.serverId === serverId
-  return serializedHasServer(node.children[0], serverId) || serializedHasServer(node.children[1], serverId)
-}
-
-function tabFromSaved(st: SerializedTab, restoreWorkspace: boolean): Tab {
-  const root = deserializePane(st.root)
-  const workspace = restoreWorkspace ? parseWorkspaceTool(st.workspace, st.sftpOpen) : 'terminal'
-  const legacyWs = st.workspace as string | undefined
-  const sftpOpen = restoreWorkspace && (!!st.sftpOpen || legacyWs === 'files')
-  return {
-    key: uid(),
-    title: st.title,
-    kind: 'terminal',
-    root,
-    activePaneId: firstLeaf(root).id,
-    sftpOpen,
-    workspace
-  }
-}
 
 /** SSH-лист для рельсы: активная панель, иначе первый подключённый SSH. */
 function sshLeafForTools(tab: Tab): PaneLeaf | undefined {
@@ -140,8 +96,7 @@ export default function App(): JSX.Element {
   activeKeyRef.current = activeKey
   const settingsRef = useRef(settings)
   settingsRef.current = settings
-  const pendingAuxRef = useRef<SavedAuxWindow[]>([])
-  const openedAuxRef = useRef(new Set<string>())
+  const auxRestore = useAuxRestore()
   const persistSettingInit = useRef(false)
   const layoutReadyRef = useRef(false)
   const broadcastRef = useRef(broadcast)
@@ -473,49 +428,6 @@ export default function App(): JSX.Element {
     setTabs((prev) => prev.map((t) => (t.key === tabKey ? { ...t, root: updateSplitSizes(t.root, splitId, sizes) } : t)))
   }, [])
 
-  const openSavedAux = useCallback(async (w: SavedAuxWindow, sessionId: string) => {
-    try {
-      if (w.kind === 'sftp') {
-        await openAuxWindow({
-          label: 'sftp-' + sanitizeWindowLabel(sessionId),
-          query: { sftp: '1', sessionId },
-          title: 'SFTP',
-          width: Math.max(w.w || 480, 420),
-          height: Math.max(w.h || 720, 280),
-          x: w.x,
-          y: w.y,
-          persist: { kind: 'sftp', serverId: w.serverId }
-        })
-      } else if (w.containerId) {
-        await openDetachedLogsWindow({
-          sessionId,
-          serverId: w.serverId,
-          containerId: w.containerId,
-          name: w.name ?? w.containerId,
-          width: Math.max(w.w || 800, 420),
-          height: Math.max(w.h || 560, 280),
-          x: w.x,
-          y: w.y
-        })
-      }
-    } catch {
-      openedAuxRef.current.delete(auxWindowKey(w))
-    }
-  }, [])
-
-  const tryRestoreAuxFor = useCallback(
-    (serverId: string, sessionId: string) => {
-      for (const w of pendingAuxRef.current) {
-        if (w.serverId !== serverId) continue
-        const k = auxWindowKey(w)
-        if (openedAuxRef.current.has(k)) continue
-        openedAuxRef.current.add(k)
-        void openSavedAux(w, sessionId)
-      }
-    },
-    [openSavedAux]
-  )
-
   const handleReady = useCallback(
     (paneId: string, sessionId: string) => {
       const timer = reconnectTimers.current.get(paneId)
@@ -533,9 +445,9 @@ export default function App(): JSX.Element {
         }
       }
       setTabs((prev) => prev.map((t) => ({ ...t, root: updateLeaf(t.root, paneId, { sessionId }) })))
-      if (serverId) tryRestoreAuxFor(serverId, sessionId)
+      if (serverId) auxRestore.tryRestoreFor(serverId, sessionId)
     },
-    [tryRestoreAuxFor]
+    [auxRestore]
   )
 
   // Broadcast ограничен панелями ТЕКУЩЕЙ вкладки (а не всеми вкладками) —
@@ -729,46 +641,18 @@ export default function App(): JSX.Element {
           auxWindows = []
         }
         seedAuxLive(auxWindows)
-        pendingAuxRef.current = auxWindows
+        auxRestore.remember(auxWindows)
       }
       markAuxPersistReady()
 
-      const restoreSftp = !!s.restoreAuxOnStart
-      let restored: Tab[] = []
-      if (s.restoreTabsOnStart && saved.length) {
-        restored = saved.map((st) => tabFromSaved(st, true))
-      } else if (restoreSftp) {
-        const used = new Set<string>()
-        for (const st of saved) {
-          const ws = st.workspace as string | undefined
-          if (!st.sftpOpen && ws !== 'files' && ws !== 'resources') continue
-          restored.push(tabFromSaved(st, true))
-          for (const l of allLeaves(deserializePane(st.root))) {
-            if (l.serverId) used.add(l.serverId)
-          }
-        }
-        for (const w of auxWindows) {
-          if (!w.serverId || used.has(w.serverId)) continue
-          const st = saved.find((x) => serializedHasServer(x.root, w.serverId))
-          if (st) restored.push(tabFromSaved(st, false))
-          else {
-            const srv = serverList.find((x) => x.id === w.serverId)
-            if (srv) {
-              const leaf = makeLeaf(paneKindOf(srv), srv.name, srv.id)
-              restored.push({
-                key: uid(),
-                title: srv.name,
-                kind: 'terminal',
-                root: leaf,
-                activePaneId: leaf.id,
-                sftpOpen: false,
-                workspace: 'terminal'
-              })
-            }
-          }
-          used.add(w.serverId)
-        }
-      }
+      // Что именно открыть — решает чистая функция; здесь остаётся только применить.
+      const restored = planRestore({
+        restoreTabs: !!s.restoreTabsOnStart,
+        restoreAux: !!s.restoreAuxOnStart,
+        saved,
+        auxWindows,
+        servers: serverList
+      })
       if (restored.length) {
         setTabs(restored)
         setActiveKey(restored[restored.length - 1].key)
