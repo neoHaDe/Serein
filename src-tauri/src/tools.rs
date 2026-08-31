@@ -227,6 +227,13 @@ fn subnet_from(ip: u32, prefix: u8) -> Result<Value, String> {
     }))
 }
 
+/// Калькулятор хешей для пользователя.
+///
+/// ⚠ MD5 и SHA-1 здесь именно как калькулятор — их просят, чтобы сверить чужую
+/// контрольную сумму, и без них утилита бесполезна. Внутри продукта они не используются
+/// нигде: секреты закрыты AES-256-GCM со scrypt, подпись обновлений — minisign. Строка
+/// написана затем, чтобы при следующем аудите зависимостей `md5` и `sha1` не приняли
+/// за криптографию Serein.
 pub fn hash_text(algo: &str, text: &str) -> Result<Value, String> {
     let bytes = text.as_bytes();
     let (hex, b64) = match algo.to_ascii_lowercase().as_str() {
