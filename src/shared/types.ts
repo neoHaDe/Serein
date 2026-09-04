@@ -543,7 +543,8 @@ export const WORKSPACE_TOOLS = [
   'logs',
   'processes',
   'services',
-  'tunnels'
+  'tunnels',
+  'desktop'
 ] as const
 export type WorkspaceTool = (typeof WORKSPACE_TOOLS)[number]
 

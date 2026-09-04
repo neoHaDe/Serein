@@ -2,7 +2,7 @@
  * Мост renderer ↔ Rust: `window.api` через Tauri `invoke` / `listen`.
  * Неперенесённые модули пока возвращают заглушки.
  */
-import { invoke } from '@tauri-apps/api/core'
+import { Channel, invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import type {
@@ -326,6 +326,32 @@ export const api = {
     close: (sessionId: string, tunnelId: string): Promise<void> => invoke('tunnel_close', { sessionId, tunnelId }),
     onStatus: (cb: (s: TunnelStatus) => void) => sub<TunnelStatus>('tunnel-status', cb)
   },
+  /**
+   * Рабочий стол VNC поверх открытой SSH-сессии.
+   *
+   * Кадры приходят каналом сырыми байтами, а не ответом команды: экран обновляется
+   * десятки раз в секунду, и гонять пиксели через JSON нельзя — разбор формата в
+   * `vncFrames.ts`.
+   */
+  vnc: {
+    open: (
+      sessionId: string,
+      onFrame: (buf: ArrayBuffer) => void,
+      opts: { host?: string; port?: number; password?: string } = {}
+    ): Promise<string> => {
+      const channel = new Channel<ArrayBuffer>()
+      channel.onmessage = onFrame
+      return invoke('vnc_open', { sessionId, onFrame: channel, ...opts })
+    },
+    pointer: (id: string, x: number, y: number, buttons: number): Promise<void> =>
+      invoke('vnc_pointer', { id, x, y, buttons }),
+    key: (id: string, keysym: number, down: boolean): Promise<void> =>
+      invoke('vnc_key', { id, keysym, down }),
+    refresh: (id: string, full = false): Promise<void> => invoke('vnc_refresh', { id, full }),
+    paste: (id: string, text: string): Promise<void> => invoke('vnc_paste', { id, text }),
+    close: (id: string): Promise<void> => invoke('vnc_close', { id })
+  },
+
   workspace: {
     processes: (sessionId: string): Promise<{ ok: boolean; error?: string; rows?: WorkspaceProcess[] }> =>
       invoke('workspace_processes', { sessionId }),

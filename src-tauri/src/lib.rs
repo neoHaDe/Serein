@@ -23,6 +23,7 @@ mod pty;
 mod remoteedit;
 pub mod remote_fs;
 pub mod scp;
+pub mod vnc;
 mod serial;
 pub mod sftp;
 mod ssh_agent;
@@ -612,6 +613,72 @@ async fn session_monitor(state: State<'_, AppState>, id: String) -> Result<Value
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
     let (_c, out, _e) = ssh::exec(&s.handle, monitor::SAMPLE_CMD, Some(s.cancel.subscribe())).await?;
     Ok(monitor::parse(&out))
+}
+
+/// Открывает рабочий стол VNC поверх уже подключённой SSH-сессии.
+///
+/// Через сессию, а не напрямую, потому что VNC на сервере почти всегда слушает `127.0.0.1`
+/// и наружу не смотрит — и правильно делает: свой протокол он защищает паролем до восьми
+/// символов на DES. Ходить к нему нужно внутри SSH, а не открывать порт в сеть.
+#[tauri::command]
+async fn vnc_open(
+    state: State<'_, AppState>,
+    session_id: String,
+    host: Option<String>,
+    port: Option<u16>,
+    password: Option<String>,
+    on_frame: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
+) -> Result<String, vnc::OpenError> {
+    let s = state
+        .ssh(&session_id)
+        .ok_or_else(|| vnc::OpenError::from("Сессия не подключена".to_string()))?;
+    let id = format!("vnc-{}", uuid::Uuid::new_v4());
+    let target = vnc::Target::Ssh {
+        handle: s.handle.clone(),
+        host: host.unwrap_or_else(|| "127.0.0.1".into()),
+        // 5900 — нулевой дисплей; у большинства серверов рабочий стол именно там.
+        port: port.unwrap_or(5900),
+    };
+    vnc::open(id.clone(), target, password, on_frame).await?;
+    Ok(id)
+}
+
+/// Движение мыши и нажатия. Кнопки — битовой маской, как в RFB: 1 левая, 2 средняя,
+/// 4 правая, 8 и 16 — колесо вверх и вниз.
+#[tauri::command]
+fn vnc_pointer(id: String, x: u16, y: u16, buttons: u8) {
+    vnc::input(&id, vnc::X11Event::PointerEvent((x, y, buttons).into()));
+}
+
+#[tauri::command]
+fn vnc_key(id: String, keysym: u32, down: bool) {
+    vnc::input(&id, vnc::X11Event::KeyEvent((keysym, down).into()));
+}
+
+/// Запрос обновления экрана. Полное обновление нужно после переподключения или когда
+/// картинка «поехала»: сервер шлёт только изменения и сам себя не перерисовывает.
+#[tauri::command]
+fn vnc_refresh(id: String, full: bool) {
+    vnc::input(
+        &id,
+        if full { vnc::X11Event::FullRefresh } else { vnc::X11Event::Refresh },
+    );
+}
+
+/// Вставка на удалённый рабочий стол.
+///
+/// В RFB буфер обмена и вставка — разные вещи: `ClientCutText` только кладёт текст в буфер
+/// сервера, но никуда его не вставляет. Поэтому следом отправляется Shift+Insert — это
+/// сочетание понимают и xterm, и обычные приложения X, в отличие от Ctrl+V, который в
+/// терминалах не работает.
+#[tauri::command]
+fn vnc_paste(id: String, text: String) {
+    vnc::paste(&id, text);
+}
+
+#[tauri::command]
+fn vnc_close(id: String) {
+    vnc::close(&id);
 }
 
 #[tauri::command]
@@ -1439,6 +1506,7 @@ pub fn run() {
             sftp_pause_transfer, sftp_resume_transfer,
             tunnel_list_status, tunnel_open, tunnel_close,
             workspace_processes, workspace_kill, workspace_services, workspace_service_action, workspace_logs,
+            vnc_open, vnc_pointer, vnc_key, vnc_refresh, vnc_paste, vnc_close,
             vault_status, vault_unlock, vault_enable, vault_disable,
             backup_export, backup_import,
             export_text_file,

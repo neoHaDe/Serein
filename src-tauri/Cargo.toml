@@ -54,6 +54,7 @@ open = "5"
 # Уже в дереве через aes-gcm и ssh-key — новой поверхности не добавляет.
 zeroize = "1"
 dunce = "1"
+vnc-rs = "0.5"
 
 [target.'cfg(not(windows))'.dependencies]
 # Буфер обмена вне Windows: на Windows работаем напрямую через Win32, там arboard лишний.
