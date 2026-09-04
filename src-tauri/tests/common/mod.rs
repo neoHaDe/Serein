@@ -23,6 +23,8 @@ pub struct Stand {
     pub hostkey_port: u16,
     /// Сервер без подсистемы SFTP: на нём файловый менеджер обязан уйти на SCP.
     pub nosftp_port: u16,
+    /// Сервер с рабочим столом VNC на своей петле — снаружи порт 5900 не опубликован.
+    pub vnc_port: u16,
 }
 
 fn env(name: &str) -> String {
@@ -51,6 +53,7 @@ impl Stand {
             alpine_internal: env("SEREIN_STAND_ALPINE_INTERNAL"),
             hostkey_port: env("SEREIN_STAND_HOSTKEY_PORT").parse().expect("порт для теста ключа"),
             nosftp_port: env("SEREIN_STAND_NOSFTP_PORT").parse().expect("порт сервера без SFTP"),
+            vnc_port: env("SEREIN_STAND_VNC_PORT").parse().expect("порт сервера с VNC"),
         }
     }
 

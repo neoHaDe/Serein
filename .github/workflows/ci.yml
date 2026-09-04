@@ -138,7 +138,7 @@ jobs:
       # и в таком порядке контейнеры живут ровно столько, сколько нужно. Фокусов с запуском
       # в фоне не делаем: экономия там минута, а способов тихо разъехаться — несколько.
       - name: Собрать тесты
-        run: cargo test --manifest-path src-tauri/Cargo.toml --test ssh_stand --test sftp_stand --test scp_stand --locked --no-run
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test ssh_stand --test sftp_stand --test scp_stand --test vnc_stand --locked --no-run
 
       - name: Поднять стенд
         run: bash ./scripts/ssh-stand/up.sh
@@ -161,6 +161,7 @@ jobs:
           SEREIN_STAND_ALPINE_INTERNAL: alpine
           SEREIN_STAND_HOSTKEY_PORT: "2203"
           SEREIN_STAND_NOSFTP_PORT: "2204"
+          SEREIN_STAND_VNC_PORT: "2205"
           SEREIN_STAND_USER: probe
           SEREIN_STAND_PASSWORD: probe-pass
         run: |
@@ -168,6 +169,7 @@ jobs:
           cargo test --manifest-path src-tauri/Cargo.toml --test ssh_stand --locked -- --ignored --test-threads=1
           cargo test --manifest-path src-tauri/Cargo.toml --test sftp_stand --locked -- --ignored --test-threads=1
           cargo test --manifest-path src-tauri/Cargo.toml --test scp_stand --locked -- --ignored --test-threads=1
+          cargo test --manifest-path src-tauri/Cargo.toml --test vnc_stand --locked -- --ignored --test-threads=1
 
       - name: Логи стенда при падении
         if: failure()

@@ -1,0 +1,24 @@
+# Сервер с рабочим столом VNC, доступным ТОЛЬКО изнутри — как в жизни.
+#
+# `x11vnc -localhost` слушает петлю контейнера и наружу не смотрит. Это не ограничение
+# стенда, а воспроизведение нормальной практики: собственная защита VNC слаба (пароль до
+# восьми символов на DES), поэтому его держат за SSH, а не открывают в сеть. Клиент обязан
+# дойти до него каналом `direct-tcpip` внутри уже установленной SSH-сессии — ровно этот
+# путь тут и проверяется.
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      openssh-server xvfb x11vnc x11-apps xterm twm \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /run/sshd
+
+RUN useradd -m -s /bin/bash probe && echo 'probe:probe-pass' | chpasswd
+
+COPY entrypoint.sh /entrypoint.sh
+COPY vnc-start.sh /vnc-start.sh
+RUN chmod +x /entrypoint.sh /vnc-start.sh
+
+EXPOSE 22
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/vnc-start.sh"]

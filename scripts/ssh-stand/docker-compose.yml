@@ -33,6 +33,17 @@ services:
     volumes:
       - ./.stand/authorized_keys:/keys/authorized_keys:ro
 
+  # Рабочий стол VNC на петле контейнера: наружу порт 5900 НЕ публикуется намеренно —
+  # дойти до него можно только каналом внутри SSH-сессии, как и задумано в приложении.
+  vnc:
+    build:
+      context: .
+      dockerfile: Dockerfile.vnc
+    ports:
+      - "127.0.0.1:2205:22"
+    volumes:
+      - ./.stand/authorized_keys:/keys/authorized_keys:ro
+
   alpine:
     build:
       context: .
