@@ -45,6 +45,9 @@
       "icons/icon.ico"
     ],
     "copyright": "© 2026 HaDe",
+    "publisher": "HaDe",
+    "homepage": "https://github.com/neoHaDe/Serein",
+    "licenseFile": "../LICENSE",
     "category": "DeveloperTool",
     "shortDescription": "Serein — SSH/SFTP workstation",
     "longDescription": "Desktop SSH/SFTP: terminal, files, Docker, tunnels.",
