@@ -15,6 +15,7 @@ import { ServicePanel } from './ServicePanel'
 import { TunnelPanel } from './TunnelPanel'
 import { ServerOverviewPanel } from './ServerOverviewPanel'
 import { VncPanel } from './VncPanel'
+import { DatabasePanel } from './DatabasePanel'
 
 export type DetachableWorkspaceTool = Exclude<WorkspaceTool, 'terminal'>
 
@@ -25,7 +26,8 @@ const TOOL_TITLE: Record<DetachableWorkspaceTool, string> = {
   processes: 'Processes',
   services: 'Services',
   tunnels: 'Tunnels',
-  desktop: 'Desktop'
+  desktop: 'Desktop',
+  databases: 'Databases'
 }
 
 export async function openDetachedWorkspace(opts: {
@@ -59,7 +61,9 @@ function panelForTool(
     case 'overview':
       return <ServerOverviewPanel sessionId={sessionId} fill />
     case 'desktop':
-      return <VncPanel sessionId={sessionId} />
+      return <VncPanel sessionId={sessionId} fill />
+    case 'databases':
+      return <DatabasePanel sessionId={sessionId} fill />
     case 'docker':
       return <DockerPanel sessionId={sessionId} serverId={server?.id} docked fill onClose={() => void getCurrentWindow().close()} />
     case 'logs':

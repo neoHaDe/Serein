@@ -22,6 +22,7 @@ mod schema;
 mod pty;
 mod remoteedit;
 pub mod remote_fs;
+pub mod db;
 pub mod scp;
 pub mod vnc;
 mod serial;
@@ -613,6 +614,32 @@ async fn session_monitor(state: State<'_, AppState>, id: String) -> Result<Value
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
     let (_c, out, _e) = ssh::exec(&s.handle, monitor::SAMPLE_CMD, Some(s.cancel.subscribe())).await?;
     Ok(monitor::parse(&out))
+}
+
+/// Подключается к базе данных рядом с сервером.
+///
+/// Через ту же SSH-сессию, а не отдельным соединением: база слушает петлю сервера и в сеть
+/// не смотрит. Иначе пришлось бы вручную поднимать проброс порта и помнить, что он открыт.
+#[tauri::command]
+async fn db_open(
+    state: State<'_, AppState>,
+    session_id: String,
+    params: db::Params,
+) -> Result<Value, String> {
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let id = format!("db-{}", uuid::Uuid::new_v4());
+    db::open(id, &s.handle, params).await
+}
+
+/// Выполняет запрос: SQL для PostgreSQL, команду для Redis.
+#[tauri::command]
+async fn db_query(id: String, text: String) -> Result<Value, String> {
+    db::query(&id, &text).await
+}
+
+#[tauri::command]
+fn db_close(id: String) {
+    db::close(&id);
 }
 
 /// Открывает рабочий стол VNC поверх уже подключённой SSH-сессии.
@@ -1507,6 +1534,7 @@ pub fn run() {
             tunnel_list_status, tunnel_open, tunnel_close,
             workspace_processes, workspace_kill, workspace_services, workspace_service_action, workspace_logs,
             vnc_open, vnc_pointer, vnc_key, vnc_refresh, vnc_paste, vnc_close,
+            db_open, db_query, db_close,
             vault_status, vault_unlock, vault_enable, vault_disable,
             backup_export, backup_import,
             export_text_file,

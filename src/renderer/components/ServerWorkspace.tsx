@@ -10,6 +10,7 @@ import { ServicePanel } from './ServicePanel'
 import { TunnelPanel } from './TunnelPanel'
 import { ServerOverviewPanel } from './ServerOverviewPanel'
 import { VncPanel } from './VncPanel'
+import { DatabasePanel } from './DatabasePanel'
 
 /**
  * Рабочее пространство сервера: рельс инструментов, терминал, файлы и панели.
@@ -153,6 +154,9 @@ export function ServerWorkspace(props: ServerWorkspaceProps): JSX.Element {
           )}
           {sessionId && tool === 'services' && (
             <ServicePanel sessionId={sessionId} panelTitle={panelTitle} onDetached={onDetached} />
+          )}
+          {sessionId && tool === 'databases' && (
+            <DatabasePanel sessionId={sessionId} panelTitle={panelTitle} onDetached={onDetached} />
           )}
           {sessionId && tool === 'desktop' && (
             <VncPanel sessionId={sessionId} panelTitle={panelTitle} onDetached={onDetached} />

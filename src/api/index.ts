@@ -352,6 +352,31 @@ export const api = {
     close: (id: string): Promise<void> => invoke('vnc_close', { id })
   },
 
+  /**
+   * Базы данных рядом с сервером — через ту же SSH-сессию, а не отдельным соединением.
+   * База слушает петлю сервера, и проброс порта для этого поднимать не нужно.
+   */
+  db: {
+    open: (
+      sessionId: string,
+      params: {
+        kind: 'postgres' | 'redis'
+        host?: string
+        port?: number
+        user?: string
+        password?: string
+        database?: string
+      }
+    ): Promise<{ id: string; kind: string; host: string; port: number }> =>
+      invoke('db_open', { sessionId, params }),
+    query: (
+      id: string,
+      text: string
+    ): Promise<{ columns: string[]; rows: Record<string, unknown>[]; affected: number; ms: number }> =>
+      invoke('db_query', { id, text }),
+    close: (id: string): Promise<void> => invoke('db_close', { id })
+  },
+
   workspace: {
     processes: (sessionId: string): Promise<{ ok: boolean; error?: string; rows?: WorkspaceProcess[] }> =>
       invoke('workspace_processes', { sessionId }),

@@ -12,7 +12,8 @@ const ITEMS: { id: WorkspaceTool; label: string; icon: IconName }[] = [
   { id: 'processes', label: 'Processes', icon: 'list' },
   { id: 'services', label: 'Services', icon: 'settings' },
   { id: 'tunnels', label: 'Tunnels', icon: 'tunnel' },
-  { id: 'desktop', label: 'Desktop', icon: 'desktop' }
+  { id: 'desktop', label: 'Desktop', icon: 'desktop' },
+  { id: 'databases', label: 'Databases', icon: 'list' }
 ]
 
 const STATUS_LABEL: Record<PaneLeaf['status'], string> = {

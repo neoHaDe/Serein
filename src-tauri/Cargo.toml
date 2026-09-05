@@ -55,6 +55,8 @@ open = "5"
 zeroize = "1"
 dunce = "1"
 vnc-rs = "0.5"
+tokio-postgres = "0.7"
+redis = { version = "1", features = ["tokio-comp"] }
 
 [target.'cfg(not(windows))'.dependencies]
 # Буфер обмена вне Windows: на Windows работаем напрямую через Win32, там arboard лишний.
