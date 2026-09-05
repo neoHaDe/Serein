@@ -44,6 +44,20 @@ services:
     volumes:
       - ./.stand/authorized_keys:/keys/authorized_keys:ro
 
+  # Базы данных живут рядом с сервером и слушают только его сеть — наружу порты не
+  # публикуются намеренно. Дойти до них можно лишь каналом внутри SSH-сессии, что и
+  # проверяется тестами: обычный клиент здесь бессилен, и это правильная постановка задачи.
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: probe-pass
+      POSTGRES_USER: probe
+      POSTGRES_DB: probe
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "probe-pass"]
+
   alpine:
     build:
       context: .

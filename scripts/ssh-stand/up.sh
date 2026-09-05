@@ -38,6 +38,9 @@ cat <<VARS
   export SEREIN_STAND_PASSWORD=probe-pass
   export SEREIN_STAND_KEY=$(pwd)/.stand/id_ed25519
   export SEREIN_STAND_ALPINE_INTERNAL=alpine
+  # Базы видны только изнутри сети стенда — по именам сервисов, как и на настоящем сервере.
+  export SEREIN_STAND_PG_HOST=postgres
+  export SEREIN_STAND_REDIS_HOST=redis
   export SEREIN_STAND_HOSTKEY_PORT=2203
   export SEREIN_STAND_NOSFTP_PORT=2204
   export SEREIN_STAND_VNC_PORT=2205
