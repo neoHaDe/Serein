@@ -37,11 +37,29 @@ wrong order. Every item below exists because it has been missed at least once.
 - [ ] `npm run manifest -- X.Y.Z "заметки"` — signs whatever is unsigned and writes `latest.json`.
       If the signing step fails with a bare `try '--help'`, the flags are fine: the npm wrapper
       mangles arguments on Windows. Sign by hand with `npx tauri signer sign` and re-run.
+- [ ] Upload the updater artifacts to our own mirror — the installer and the AppImage, both
+      named exactly as in the manifest:
+
+      ```
+      scp <bundle>/nsis/Serein_X.Y.Z_x64-setup.exe \
+          <bundle>/appimage/Serein_X.Y.Z_amd64.AppImage \
+          hade@192.168.0.156:/mnt/material/site/updates/terminal/
+      ```
+
+      The manifest points here, not at GitHub. That is a registry requirement — no foreign
+      party should be able to switch our updates off — and it also survives the days when
+      github.com is unreachable from Russia. GitHub stays as the human-facing release page.
+      The script prints these exact commands, so copy them from its output rather than
+      retyping paths.
+- [ ] Compare checksums against the local files. A truncated upload still answers `200`, and a
+      broken AppImage looks exactly like a working one until somebody installs it.
 - [ ] **Only after the artifacts are actually uploaded**, copy `latest.json` to the site. This is
       the step that turns the release on for everyone: a manifest pointing at files that are not
       there yet breaks auto-update for every user at once.
 - [ ] Verify from outside: `curl https://nehade.xyz/updates/terminal/latest.json` shows the new
-      version and both platforms.
+      version and both platforms, **and** every URL in it answers `200` with the right size.
+      Keep the previous manifest as `latest.json.<something>.bak` until the new one is confirmed:
+      rolling back is then one `cp`.
 
 ## After
 
