@@ -10,9 +10,9 @@ import { buttonMask, keysymFor, wheelMask } from '../vncKeys'
  * Рабочий стол VNC внутри вкладки сервера.
  *
  * Идёт через уже открытую SSH-сессию, а не отдельным соединением: VNC на сервере обычно
- * слушает `127.0.0.1`, и это правильно — его собственная защита слабая (пароль до восьми
+ * слушает `127.0.0.1`, и это правильно - его собственная защита слабая (пароль до восьми
  * символов на DES), выставлять её в сеть незачем. Разбор кадров и клавиш живёт в
- * `vncFrames.ts` и `vncKeys.ts` — там же тесты.
+ * `vncFrames.ts` и `vncKeys.ts` - там же тесты.
  */
 
 interface Props {
@@ -21,15 +21,26 @@ interface Props {
   onDetached?: () => void
   /** В откреплённом окне панель занимает его целиком. */
   fill?: boolean
+  /** Вернуться к выбору способа подключения. В откреплённом окне выбора нет. */
+  onBack?: () => void
+  /** Открыть настройку VNC на сервере. */
+  onSetup?: () => void
 }
 
-/** Экран рисуется в свой холст и оттуда копируется на видимый — так проще с масштабом. */
+/** Экран рисуется в свой холст и оттуда копируется на видимый - так проще с масштабом. */
 interface Screen {
   canvas: HTMLCanvasElement
   ctx: CanvasRenderingContext2D
 }
 
-export function VncPanel({ sessionId, panelTitle, onDetached, fill }: Props): JSX.Element {
+export function VncPanel({
+  sessionId,
+  panelTitle,
+  onDetached,
+  fill,
+  onBack,
+  onSetup
+}: Props): JSX.Element {
   const viewRef = useRef<HTMLCanvasElement | null>(null)
   const screenRef = useRef<Screen | null>(null)
   const idRef = useRef<string | null>(null)
@@ -159,7 +170,7 @@ export function VncPanel({ sessionId, panelTitle, onDetached, fill }: Props): JS
           return
         }
         case 'text': {
-          // Скопировали на сервере — значит текст должен быть доступен и здесь.
+          // Скопировали на сервере - значит текст должен быть доступен и здесь.
           if (f.text) void window.api.clipboard.write(f.text)
           return
         }
@@ -181,7 +192,7 @@ export function VncPanel({ sessionId, panelTitle, onDetached, fill }: Props): JS
         setStatus('closed')
         setError(errText(e))
         // Рукопожатие падает до первого кадра, поэтому отказ по паролю приходит сюда, а не
-        // пакетом закрытия. Признак — поле рядом с текстом, а не разбор самого текста.
+        // пакетом закрытия. Признак - поле рядом с текстом, а не разбор самого текста.
         setNeedPassword(!!(e as { needsPassword?: boolean } | null)?.needsPassword)
       }
     },
@@ -225,7 +236,7 @@ export function VncPanel({ sessionId, panelTitle, onDetached, fill }: Props): JS
     if (!id) return
 
     // Ctrl+V перехватываем у сервера: пользователь ждёт свой буфер, а не серверный.
-    // Ctrl+Shift+V — тоже, это привычное сочетание для терминалов.
+    // Ctrl+Shift+V - тоже, это привычное сочетание для терминалов.
     if (down && (e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V' || e.key === 'м' || e.key === 'М')) {
       e.preventDefault()
       void paste()
@@ -257,6 +268,16 @@ export function VncPanel({ sessionId, panelTitle, onDetached, fill }: Props): JS
           </span>
         </span>
         <div style={{ display: 'flex', gap: 6 }}>
+          {onBack && (
+            <button className="mini" title="Выбрать способ подключения" onClick={onBack}>
+              <Icon name="back" size={14} />
+            </button>
+          )}
+          {onSetup && (
+            <button className="mini" title="Настроить VNC на сервере" onClick={onSetup}>
+              <Icon name="settings" size={14} />
+            </button>
+          )}
           {panelTitle && onDetached && <WsDetachButton onClick={detach} />}
           <button
             className={'mini' + (scaled ? ' on' : '')}
@@ -291,7 +312,7 @@ export function VncPanel({ sessionId, panelTitle, onDetached, fill }: Props): JS
             const id = idRef.current
             const p = toRemote(e)
             if (!id || !p) return
-            // В RFB прокрутка — это нажатие и отпускание кнопки, отдельного события нет.
+            // В RFB прокрутка - это нажатие и отпускание кнопки, отдельного события нет.
             const mask = wheelMask(e.deltaY, e.deltaX)
             void window.api.vnc.pointer(id, p.x, p.y, mask)
             void window.api.vnc.pointer(id, p.x, p.y, 0)
@@ -327,9 +348,18 @@ export function VncPanel({ sessionId, panelTitle, onDetached, fill }: Props): JS
                   </form>
                 )}
                 {!needPassword && (
-                  <button className="secondary" onClick={() => void connect(password || undefined)}>
-                    Повторить
-                  </button>
+                  <div className="vnc-actions">
+                    <button className="secondary" onClick={() => void connect(password || undefined)}>
+                      Повторить
+                    </button>
+                    {/* Если VNC на сервере нет, повторять нечего - там и правда никого
+                        нет. Полезнее увести туда, где его можно поставить. */}
+                    {onSetup && (
+                      <button className="secondary" onClick={onSetup}>
+                        <Icon name="settings" size={13} /> Настроить сервер
+                      </button>
+                    )}
+                  </div>
                 )}
               </>
             )}

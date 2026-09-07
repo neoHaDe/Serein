@@ -30,7 +30,7 @@ pub type HostKeyBridge = Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>;
 pub struct HostKeyAsk {
     pub app: AppHandle,
     pub bridge: HostKeyBridge,
-    /// id сессии — чтобы фронт понял, к какой вкладке относится вопрос.
+    /// id сессии - чтобы фронт понял, к какой вкладке относится вопрос.
     pub session_id: String,
 }
 
@@ -90,7 +90,7 @@ pub enum SshCmd {
 }
 
 /// Целевой Handle за Mutex: &self-операции (открытие каналов) лочат его кратко,
-/// а tcpip_forward/cancel (-R) требуют &mut — лочат на время вызова.
+/// а tcpip_forward/cancel (-R) требуют &mut - лочат на время вызова.
 pub type SharedHandle = Arc<tokio::sync::Mutex<client::Handle<ClientHandler>>>;
 
 pub struct SshSession {
@@ -98,14 +98,14 @@ pub struct SshSession {
     pub tx: UnboundedSender<SshCmd>,
     pub server_id: String,
     pub remote_forwards: RemoteForwards,
-    /// Промежуточные клиенты цепочки jump-хостов — держим живыми до закрытия сессии.
+    /// Промежуточные клиенты цепочки jump-хостов - держим живыми до закрытия сессии.
     pub jump_handles: Vec<Arc<client::Handle<ClientHandler>>>,
-    /// true, если фронт сам вызвал session_close — не считать обрывом.
+    /// true, если фронт сам вызвал session_close - не считать обрывом.
     pub user_closed: Arc<AtomicBool>,
-    /// false после shutdown — SFTP/exec не крутятся до таймаута.
+    /// false после shutdown - SFTP/exec не крутятся до таймаута.
     pub alive: Arc<AtomicBool>,
     pub cancel: watch::Sender<bool>,
-    /// SFTP или SCP — определяется при первой файловой операции.
+    /// SFTP или SCP - определяется при первой файловой операции.
     pub remote_fs: Arc<Mutex<crate::remote_fs::SessionFs>>,
 }
 
@@ -139,7 +139,7 @@ impl SshSession {
 
 pub struct ClientHandler {
     host_id: String,
-    /// Куда спрашивать про незнакомый/сменившийся ключ. None — молча доверять (jump-хопы
+    /// Куда спрашивать про незнакомый/сменившийся ключ. None - молча доверять (jump-хопы
     /// при восстановлении туннелей, где спросить некого).
     host_key_ask: Option<HostKeyAsk>,
     remote_forwards: RemoteForwards,
@@ -154,14 +154,14 @@ impl Handler for ClientHandler {
     type Error = russh::Error;
 
     /// Проверка ключа сервера. Незнакомый ключ и смена ключа выносятся пользователю:
-    /// молча доверять первому встречному — это TOFU без буквы T, а молча рвать соединение
+    /// молча доверять первому встречному - это TOFU без буквы T, а молча рвать соединение
     /// при смене ключа выглядит как «непонятная ошибка сети».
     async fn check_server_key(
         &mut self,
         server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         // Сертификаты хостов мы не запрашиваем (`host_key_certificates` пуст), поэтому сюда
-        // приходит обычный ключ. Если сервер всё же прислал сертификат — доверять ему без
+        // приходит обычный ключ. Если сервер всё же прислал сертификат - доверять ему без
         // списка удостоверяющих ключей нельзя, отказываем.
         let russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } = server_public_key else {
             return Ok(false);
@@ -174,7 +174,7 @@ impl Handler for ClientHandler {
         }
 
         let Some(ask) = self.host_key_ask.clone() else {
-            // Спросить некого (например, переподключение туннеля): ведём себя как раньше —
+            // Спросить некого (например, переподключение туннеля): ведём себя как раньше -
             // новый ключ принимаем, смену отвергаем.
             if matches!(status, knownhosts::HostKeyStatus::New) {
                 knownhosts::remember(&self.host_id, &fp);
@@ -211,7 +211,7 @@ impl Handler for ClientHandler {
             .get(&connected_port)
             .copied();
         // Канал теперь надо подтвердить явно: без accept он отклоняется при сбросе `reply`.
-        // Нет маршрута на этот порт — так и отклоняем, а не открываем «в никуда».
+        // Нет маршрута на этот порт - так и отклоняем, а не открываем «в никуда».
         if local_port.is_none() {
             reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await;
             return Ok(());
@@ -235,7 +235,7 @@ impl Handler for ClientHandler {
     /// Проброс SSH-агента: сервер открыл канал auth-agent@openssh.com.
     ///
     /// Раньше russh отдавал только идентификатор канала, и запросы приходилось ловить в
-    /// колбэке `data`, храня набор «агентских» каналов сбоку. Теперь отдаётся сам канал —
+    /// колбэке `data`, храня набор «агентских» каналов сбоку. Теперь отдаётся сам канал -
     /// обслуживаем его отдельной задачей, и весь этот учёт больше не нужен.
     async fn server_channel_open_agent_forward(
         &mut self,
@@ -277,7 +277,7 @@ impl Handler for ClientHandler {
     }
 }
 
-/// Base64 открытого ключа сервера — в том же виде, в каком его пишет OpenSSH
+/// Base64 открытого ключа сервера - в том же виде, в каком его пишет OpenSSH
 /// в `known_hosts`, чтобы отпечатки совпадали со старыми записями.
 fn base64_of(key: &russh::keys::PublicKey) -> String {
     use russh::keys::ssh_encoding::Encode;
@@ -312,7 +312,7 @@ fn auth_rejected(server: &Value) -> crate::error::SereinError {
     }
 }
 
-/// Окно и keepalive под длинные SFTP. `maximum_packet_size` 32 КиБ — как у OpenSSH;
+/// Окно и keepalive под длинные SFTP. `maximum_packet_size` 32 КиБ - как у OpenSSH;
 /// SFTP-чанк в `sftp.rs` режется под этот лимит, иначе DATA не влезает в SSH-пакет.
 pub(crate) fn ssh_client_config(server: &Value) -> Arc<client::Config> {
     let mut cfg = client::Config::default();
@@ -332,7 +332,7 @@ async fn request_ki(app: &AppHandle, ki: &KiBridge, id: &str, prompts: Vec<Value
     rx.await.unwrap_or_default()
 }
 
-/// Аутентификация одного хопа. Для целевого сервера (есть `id`/`ki`) — с поддержкой 2FA.
+/// Аутентификация одного хопа. Для целевого сервера (есть `id`/`ki`) - с поддержкой 2FA.
 fn wants_agent_forward(server: &Value) -> bool {
     server
         .get("agentForward")
@@ -473,7 +473,7 @@ async fn connect_one(
     }
 }
 
-/// Подключается по цепочке: chain[0] — цель, chain[1..] — jump-хосты (как в Electron).
+/// Подключается по цепочке: chain[0] - цель, chain[1..] - jump-хосты (как в Electron).
 pub async fn connect_chain(
     app: AppHandle,
     id: String,
@@ -491,14 +491,14 @@ pub async fn connect_chain(
     let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let alive = Arc::new(AtomicBool::new(true));
-    // Вопросы про ключ хоста задаём в UI этой сессии — и для цели, и для каждого jump-хопа.
+    // Вопросы про ключ хоста задаём в UI этой сессии - и для цели, и для каждого jump-хопа.
     let ask = Some(HostKeyAsk {
         app: app.clone(),
         bridge: host_keys.clone(),
         session_id: id.clone(),
     });
 
-    // Самый дальний хоп (конец цепочки) — прямое подключение.
+    // Самый дальний хоп (конец цепочки) - прямое подключение.
     let far = &chain[chain.len() - 1];
     let mut handle = connect_one(far, remote_forwards.clone(), cancel_rx.clone(), ask.clone()).await?;
     let far_is_target = chain.len() == 1;
@@ -640,7 +640,7 @@ pub async fn connect_chain(
     })
 }
 
-/// Подключение без PTY/shell — для exec/SFTP (bench и служебные каналы).
+/// Подключение без PTY/shell - для exec/SFTP (bench и служебные каналы).
 pub async fn connect_client(chain: Vec<Value>) -> crate::error::Result<SharedHandle> {
     if chain.is_empty() {
         return Err(crate::error::SereinError::EmptyChain);
@@ -724,7 +724,7 @@ pub async fn exec_for(
 }
 
 /// Выполняет команду отдельным exec-каналом. Возвращает (код, stdout, stderr).
-/// `cancel` — оборвать канал (теardown сессии / стоп логов).
+/// `cancel` - оборвать канал (теardown сессии / стоп логов).
 pub async fn exec(
     handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
     command: &str,
@@ -733,9 +733,35 @@ pub async fn exec(
     exec_with(handle, command, cancel, |_| {}).await
 }
 
+/// Exec, которому на вход подаётся текст.
+///
+/// Нужен ровно для одного: пароля `sudo`. Его нельзя подставлять в строку команды - она
+/// целиком видна в списке процессов сервера всем, кто там есть. Правильный способ - отдать
+/// пароль `sudo -S` через стандартный ввод, и вот он.
+///
+/// Введённое не логируется и нигде не сохраняется: приходит из формы, уходит в канал.
+pub async fn exec_with_input(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    command: &str,
+    input: &str,
+    cancel: Option<CancelRx>,
+) -> Result<(i32, String, String), String> {
+    exec_inner(handle, command, Some(input), cancel, |_| {}).await
+}
+
 pub async fn exec_with(
     handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
     command: &str,
+    cancel: Option<CancelRx>,
+    on_out: impl FnMut(&[u8]),
+) -> Result<(i32, String, String), String> {
+    exec_inner(handle, command, None, cancel, on_out).await
+}
+
+async fn exec_inner(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    command: &str,
+    input: Option<&str>,
     cancel: Option<CancelRx>,
     mut on_out: impl FnMut(&[u8]),
 ) -> Result<(i32, String, String), String> {
@@ -744,6 +770,15 @@ pub async fn exec_with(
         h.channel_open_session().await.map_err(|e| e.to_string())?
     };
     channel.exec(true, command).await.map_err(|e| e.to_string())?;
+    if let Some(text) = input {
+        channel
+            .data(text.as_bytes())
+            .await
+            .map_err(|e| format!("Не удалось передать ввод: {e}"))?;
+        // Без EOF читающая сторона будет ждать продолжения: `sudo -S` не начнёт работу,
+        // пока не поймёт, что пароль закончился.
+        channel.eof().await.map_err(|e| e.to_string())?;
+    }
     let mut out: Vec<u8> = Vec::new();
     let mut err: Vec<u8> = Vec::new();
     let mut code = 0i32;
@@ -864,7 +899,7 @@ mod tests {
     ///
     /// `AppHandle` лежит внутри `ClientHandler`, а его упоминание тянет в бинарь GUI-импорты
     /// wry, которым нужен comctl32 версии 6. Пока манифест не встраивался в тестовый бинарь,
-    /// это роняло ВСЕ тесты крейта ещё на загрузке (STATUS_ENTRYPOINT_NOT_FOUND) — не только
+    /// это роняло ВСЕ тесты крейта ещё на загрузке (STATUS_ENTRYPOINT_NOT_FOUND) - не только
     /// новый. Если тест снова начнёт падать, причина будет в `build.rs`, а не в самом тесте.
     #[test]
     fn tauri_types_do_not_break_the_test_binary() {
@@ -877,7 +912,7 @@ mod tests {
     fn port_defaults_to_22_and_survives_junk() {
         assert_eq!(port_of(&json!({})), 22);
         assert_eq!(port_of(&json!({ "port": 2222 })), 2222);
-        // Порт строкой (так приезжает из некоторых импортов) — не повод падать.
+        // Порт строкой (так приезжает из некоторых импортов) - не повод падать.
         assert_eq!(port_of(&json!({ "port": "2222" })), 22);
     }
 

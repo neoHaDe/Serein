@@ -9,22 +9,22 @@ import { ProcessPanel } from './ProcessPanel'
 import { ServicePanel } from './ServicePanel'
 import { TunnelPanel } from './TunnelPanel'
 import { ServerOverviewPanel } from './ServerOverviewPanel'
-import { VncPanel } from './VncPanel'
+import { DesktopPanel } from './DesktopPanel'
 import { DatabasePanel } from './DatabasePanel'
 
 /**
  * Рабочее пространство сервера: рельс инструментов, терминал, файлы и панели.
  *
- * Собрано в одно место потому, что раньше этого места было два — главное окно и
+ * Собрано в одно место потому, что раньше этого места было два - главное окно и
  * откреплённое рисовали один и тот же экран независимо друг от друга. Они разъехались, и
  * это стоило релиза 1.2.6: в главном окне терминал прятался стилем и оставался живым, а в
- * откреплённом размонтировался — и уносил с собой SSH-сессию при первом же переключении на
+ * откреплённом размонтировался - и уносил с собой SSH-сессию при первом же переключении на
  * Docker. Снаружи это выглядело как «окно сломалось».
  *
  * Отличие между окнами ровно одно и оно осталось: в главном внутри терминальной области
- * дерево панелей со сплитами, в откреплённом — один терминал. Поэтому содержимое приходит
- * слотом `terminal`, а всё остальное — раскладка, правило «прятать, а не размонтировать»,
- * разделитель SFTP, набор панелей — живёт здесь в единственном экземпляре.
+ * дерево панелей со сплитами, в откреплённом - один терминал. Поэтому содержимое приходит
+ * слотом `terminal`, а всё остальное - раскладка, правило «прятать, а не размонтировать»,
+ * разделитель SFTP, набор панелей - живёт здесь в единственном экземпляре.
  */
 export interface ServerWorkspaceProps {
   /** Панель, по которой рисуется рельс: статус, имя, кнопка переподключения. */
@@ -36,7 +36,7 @@ export interface ServerWorkspaceProps {
   onReconnect: () => void
   onEditServer: () => void
   /**
-   * Сессия для панелей Docker/логов/процессов. `undefined`, если соединения нет —
+   * Сессия для панелей Docker/логов/процессов. `undefined`, если соединения нет -
    * панели тогда не открываются, а не показывают пустоту от мёртвой сессии.
    */
   sessionId?: string
@@ -48,7 +48,7 @@ export interface ServerWorkspaceProps {
   onSftpClose: () => void
   onSftpResizeStart?: (e: ReactMouseEvent) => void
   onOpenInEditor?: (remotePath: string) => void
-  /** Заголовок в шапке панели — в откреплённом окне он уже есть в рамке окна. */
+  /** Заголовок в шапке панели - в откреплённом окне он уже есть в рамке окна. */
   panelTitle?: string
   /** Откреплять панели можно только из главного окна: во втором это некуда. */
   onDetached?: () => void
@@ -107,7 +107,7 @@ export function ServerWorkspace(props: ServerWorkspaceProps): JSX.Element {
 
       {/*
         Терминал прячем стилем и НЕ размонтируем. Размонтирование освобождает xterm вместе
-        с сессией, а поход в Docker и обратно должен её пережить — вместе со скроллбэком.
+        с сессией, а поход в Docker и обратно должен её пережить - вместе со скроллбэком.
         Это то самое решение, расхождение по которому и сломало откреплённое окно.
       */}
       <div className="pane-area" style={{ display: tool === 'terminal' ? 'flex' : 'none' }}>
@@ -163,7 +163,7 @@ export function ServerWorkspace(props: ServerWorkspaceProps): JSX.Element {
             <DatabasePanel sessionId={sessionId} panelTitle={panelTitle} onDetached={onDetached} />
           )}
           {sessionId && tool === 'desktop' && (
-            <VncPanel sessionId={sessionId} panelTitle={panelTitle} onDetached={onDetached} />
+            <DesktopPanel sessionId={sessionId} panelTitle={panelTitle} onDetached={onDetached} />
           )}
           {sessionId && tool === 'tunnels' && (
             <TunnelPanel

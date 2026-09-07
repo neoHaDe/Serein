@@ -1,4 +1,4 @@
-//! Serein — backend. Команды Tauri и менеджер сессий.
+//! Serein - backend. Команды Tauri и менеджер сессий.
 
 mod backup;
 mod clipboard;
@@ -30,6 +30,7 @@ pub mod db;
 pub mod platform;
 pub mod scp;
 pub mod vnc;
+pub mod vncsetup;
 mod serial;
 pub mod sftp;
 mod ssh_agent;
@@ -54,7 +55,7 @@ pub(crate) enum Session {
     Local(pty::LocalSession),
     Ssh(Arc<ssh::SshSession>),
     Serial(serial::SerialSession),
-    /// Telnet или «сырой» TCP — общий транспорт, разный разбор потока.
+    /// Telnet или «сырой» TCP - общий транспорт, разный разбор потока.
     Tcp(telnet::TcpSession),
 }
 
@@ -66,7 +67,7 @@ pub(crate) struct AppState {
     edit: remoteedit::EditManager,
     transfers: sftp::TransferHub,
     ops: ssh::OpHub,
-    /// Какому окну принадлежит сессия. Закрыть её может только владелец — см. `ownership`.
+    /// Какому окну принадлежит сессия. Закрыть её может только владелец - см. `ownership`.
     owners: ownership::Owners,
 }
 
@@ -144,7 +145,7 @@ fn app_platform() -> &'static str {
 /// Куда приложение на самом деле пишет профиль и логи сессий.
 ///
 /// Не украшение: на Linux запуск из меню приложений и из терминала может прийти с разным
-/// `HOME`/`XDG_CONFIG_HOME`, и тогда приложение молча открывает пустой профиль — список
+/// `HOME`/`XDG_CONFIG_HOME`, и тогда приложение молча открывает пустой профиль - список
 /// серверов выглядит потерянным. По этой строке разница видна за секунду.
 #[tauri::command]
 fn app_paths() -> Value {
@@ -155,14 +156,14 @@ fn app_paths() -> Value {
     })
 }
 
-/// Как приложение установлено — от этого зависит, можно ли обновиться на месте.
+/// Как приложение установлено - от этого зависит, можно ли обновиться на месте.
 ///
-/// `installer` — Windows: апдейтер скачивает установщик и перезапускает приложение.
-/// `appimage` — Linux, запуск из AppImage: файл заменяется целиком, это единственная
+/// `installer` - Windows: апдейтер скачивает установщик и перезапускает приложение.
+/// `appimage` - Linux, запуск из AppImage: файл заменяется целиком, это единственная
 /// форма на Linux, которую умеет обновлять сам Tauri (переменную `APPIMAGE` выставляет
 /// среда выполнения AppImage).
-/// `package` — Linux из `.deb`: бинарь лежит в `/usr/bin` и принадлежит менеджеру пакетов,
-/// писать туда приложение не может и не должно. Обновление — через пакет.
+/// `package` - Linux из `.deb`: бинарь лежит в `/usr/bin` и принадлежит менеджеру пакетов,
+/// писать туда приложение не может и не должно. Обновление - через пакет.
 #[tauri::command]
 fn app_install_kind() -> &'static str {
     #[cfg(windows)]
@@ -180,7 +181,7 @@ fn app_install_kind() -> &'static str {
 }
 
 /// Одна команда на нескольких серверах. Результат каждого хоста уходит событием
-/// сразу, как только готов; здесь возвращается общий список — для истории в окне.
+/// сразу, как только готов; здесь возвращается общий список - для истории в окне.
 #[tauri::command]
 async fn multi_exec(
     app: AppHandle,
@@ -328,13 +329,13 @@ fn session_open_local(window: tauri::Window, app: AppHandle, state: State<'_, Ap
     Ok(id)
 }
 
-/// Доступные COM-порты — для выпадающего списка в форме сервера.
+/// Доступные COM-порты - для выпадающего списка в форме сервера.
 #[tauri::command]
 fn serial_ports() -> Vec<Value> {
     serial::list_ports()
 }
 
-/// Открывает сессию по COM-порту. `p.serial` — секция параметров линии из профиля,
+/// Открывает сессию по COM-порту. `p.serial` - секция параметров линии из профиля,
 /// либо разовые настройки, если пользователь открывает порт без сохранённого профиля.
 #[tauri::command]
 fn session_open_serial(window: tauri::Window, app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
@@ -366,7 +367,7 @@ fn session_open_serial(window: tauri::Window, app: AppHandle, state: State<'_, A
     Ok(id)
 }
 
-/// BREAK на линию — им сетевое железо переводят в recovery.
+/// BREAK на линию - им сетевое железо переводят в recovery.
 #[tauri::command]
 fn serial_send_break(state: State<'_, AppState>, id: String) -> Result<(), String> {
     match crate::sync::lock(&state.sessions).get(&id) {
@@ -385,7 +386,7 @@ fn serial_set_signal(state: State<'_, AppState>, id: String, line: String, on: b
 
 /// Открывает telnet- или «сырую» TCP-сессию.
 ///
-/// `p.serverId` — подключение по сохранённому профилю; без него берём `host`/`port`/`mode`
+/// `p.serverId` - подключение по сохранённому профилю; без него берём `host`/`port`/`mode`
 /// прямо из запроса (разовое подключение из палитры). `cols`/`rows` нужны сразу: telnet
 /// сообщает размер окна в момент согласования, и без них сервер считает экран 80x24.
 #[tauri::command]
@@ -408,7 +409,7 @@ fn session_open_tcp(window: tauri::Window, app: AppHandle, state: State<'_, AppS
         "raw" => telnet::Mode::Raw,
         other => return Err(format!("Это не TCP-подключение: {other}")),
     };
-    // У сырого TCP осмысленного порта по умолчанию нет — консольные серверы слушают
+    // У сырого TCP осмысленного порта по умолчанию нет - консольные серверы слушают
     // кто на 2000, кто на 4001. Пусть пользователь укажет явно.
     let default_port = if mode == telnet::Mode::Telnet { 23 } else { 0 };
     let (host, port) = telnet::endpoint(&profile, default_port);
@@ -508,7 +509,7 @@ fn session_resize(state: State<'_, AppState>, p: Value) {
     if let Some(s) = crate::sync::lock(&state.sessions).get(&id) {
         match s {
             Session::Local(l) => l.resize(cols as u16, rows as u16),
-            // У последовательного порта нет размера окна — ресайз игнорируем.
+            // У последовательного порта нет размера окна - ресайз игнорируем.
             Session::Serial(_) => {}
             // У telnet размер окна есть (NAWS); у сырого TCP отправка молча пропускается.
             Session::Tcp(t) => t.resize(cols as u16, rows as u16),
@@ -522,7 +523,7 @@ fn session_resize(state: State<'_, AppState>, p: Value) {
 /// Закрыть сессию. Разрешено только окну-владельцу.
 ///
 /// Проверка здесь, а не во фронтенде, намеренно. Раньше каждое окно само решало, «его» ли
-/// это сессия, по своему набору пометок — и откреплённое окно, не знавшее о пометках
+/// это сессия, по своему набору пометок - и откреплённое окно, не знавшее о пометках
 /// главного, закрывало чужую сессию при первом переключении на Docker. Теперь запрос от
 /// не-владельца просто игнорируется: окну незачем знать чужую бухгалтерию.
 #[tauri::command]
@@ -536,7 +537,7 @@ fn session_close(window: tauri::Window, app: AppHandle, state: State<'_, AppStat
 /// Передать владение сессией окну с указанной меткой.
 ///
 /// Зовётся при откреплении (главное окно отдаёт новому) и при возврате вкладки
-/// (откреплённое отдаёт главному) — до того, как прежнее окно начнёт разбираться.
+/// (откреплённое отдаёт главному) - до того, как прежнее окно начнёт разбираться.
 #[tauri::command]
 fn session_claim(state: State<'_, AppState>, id: String, window_label: String) {
     state.owners.claim(&id, &window_label);
@@ -544,7 +545,7 @@ fn session_claim(state: State<'_, AppState>, id: String, window_label: String) {
 
 /// Хвост вывода сессии.
 ///
-/// Нужен, когда вкладка переезжает между окнами: сессия та же, а xterm новый и пустой —
+/// Нужен, когда вкладка переезжает между окнами: сессия та же, а xterm новый и пустой -
 /// шелл ничего не перерисует, пока не нажмёшь Enter. Отдаём то, что уже было на экране.
 #[tauri::command]
 fn session_replay(id: String) -> String {
@@ -567,7 +568,7 @@ fn session_hostkey_respond(state: State<'_, AppState>, request_id: String, accep
     }
 }
 
-/// Известные ключи хостов — список для настроек.
+/// Известные ключи хостов - список для настроек.
 #[tauri::command]
 fn knownhosts_list() -> Vec<Value> {
     knownhosts::list()
@@ -579,7 +580,7 @@ fn knownhosts_forget(host: String) -> bool {
     knownhosts::forget(&host)
 }
 
-/// Импорт отпечатков из `~/.ssh/known_hosts` — чтобы не подтверждать заново то,
+/// Импорт отпечатков из `~/.ssh/known_hosts` - чтобы не подтверждать заново то,
 /// чему пользователь уже доверился в OpenSSH.
 #[tauri::command]
 fn knownhosts_import() -> Result<Value, String> {
@@ -587,7 +588,7 @@ fn knownhosts_import() -> Result<Value, String> {
     Ok(json!({ "imported": added }))
 }
 
-/// Ключи локального SSH-агента — для выбора в настройках сервера.
+/// Ключи локального SSH-агента - для выбора в настройках сервера.
 #[tauri::command]
 async fn ssh_agent_identities() -> Result<Value, String> {
     match ssh_agent::list_identities().await {
@@ -595,7 +596,7 @@ async fn ssh_agent_identities() -> Result<Value, String> {
             "ok": true,
             "keys": keys.iter().map(|k| k.to_json()).collect::<Vec<_>>(),
         })),
-        // Отсутствие агента — обычное состояние, а не сбой: форма покажет подсказку.
+        // Отсутствие агента - обычное состояние, а не сбой: форма покажет подсказку.
         Err(e) => Ok(json!({ "ok": false, "error": e })),
     }
 }
@@ -620,7 +621,7 @@ fn session_log_toggle(id: String, title: String) -> Result<Value, String> {
 /// Железо сервера: процессор, видео, память, виртуализация.
 ///
 /// Собирается один раз за сессию и запоминается: модель процессора не меняется, а панель
-/// обзора обновляется каждые несколько секунд — спрашивать это по таймеру значило бы
+/// обзора обновляется каждые несколько секунд - спрашивать это по таймеру значило бы
 /// впустую гонять канал.
 #[tauri::command]
 async fn session_sysinfo(state: State<'_, AppState>, id: String) -> Result<Value, String> {
@@ -711,10 +712,94 @@ async fn db_current(session_id: String) -> Option<Value> {
     db::for_session(&session_id)
 }
 
+/// Что на сервере есть для рабочего стола: программа, порты, среда, права.
+///
+/// Спрашивается перед подключением, а не после неудачи. Раньше про отсутствие VNC можно
+/// было узнать только по невнятной ошибке соединения - а это три разные беды с тремя
+/// разными ответами: программы нет, программа не запущена, запущена не там.
+#[tauri::command]
+async fn desktop_detect(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let (kind, _) = platform::of_session(&session_id, &s.handle).await;
+    if kind == platform::Kind::Windows {
+        return Ok(json!({
+            "installed": [], "listening": [], "canInstall": false,
+            "summary": "На Windows-сервере рабочий стол настраивается иначе - этого мы пока не умеем",
+        }));
+    }
+    let (_c, out, _e) =
+        ssh::exec(&s.handle, vncsetup::DETECT_CMD, Some(s.cancel.subscribe())).await?;
+    Ok(vncsetup::parse_detect(&out))
+}
+
+/// Ставит сервер VNC на сервер.
+///
+/// Пароль `sudo` уходит на стандартный ввод, а не в строку команды: она целиком видна в
+/// списке процессов сервера любому, кто там есть. Нигде не сохраняется.
+#[tauri::command]
+async fn desktop_install(
+    state: State<'_, AppState>,
+    session_id: String,
+    package_manager: String,
+    sudo_password: String,
+) -> Result<Value, String> {
+    let cmd = vncsetup::install_cmd(&package_manager)
+        .ok_or("Не знаем, как ставить пакеты этим менеджером")?;
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let (code, out, err) =
+        ssh::exec_with_input(&s.handle, &cmd, &format!("{sudo_password}\n"), Some(s.cancel.subscribe()))
+            .await?;
+    if code != 0 {
+        // Неверный пароль sudo выглядит именно так, и сказать об этом прямо полезнее,
+        // чем показать сырой вывод пакетного менеджера.
+        let текст = if out.contains("incorrect password") || err.contains("incorrect password") {
+            "Пароль sudo не подошёл".to_string()
+        } else {
+            let x = format!("{out}\n{err}");
+            let x = x.trim();
+            if x.is_empty() { format!("установка вернула код {code}") } else { x.to_string() }
+        };
+        return Ok(json!({ "ok": false, "error": текст }));
+    }
+    Ok(json!({ "ok": true }))
+}
+
+/// Задаёт пароль рабочего стола.
+///
+/// Выполняется от самого пользователя, без sudo: файл пароля лежит в его домашнем каталоге.
+#[tauri::command]
+async fn desktop_set_password(
+    state: State<'_, AppState>,
+    session_id: String,
+    password: String,
+) -> Result<Value, String> {
+    vncsetup::check_vnc_password(&password)?;
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let (code, out, err) = ssh::exec_with_input(
+        &s.handle,
+        vncsetup::SET_PASSWORD_CMD,
+        &format!("{password}\n"),
+        Some(s.cancel.subscribe()),
+    )
+    .await?;
+    if code != 0 || !out.contains("OK") {
+        // Сюда попадает то, что сказала сама программа. Раньше её вывод глушился, и панель
+        // показывала «не удалось сохранить пароль» без единого слова о причине - на сервере
+        // с tigervnc это выглядело как поломка на пустом месте.
+        let x = format!("{err}\n{out}");
+        let x = x.trim();
+        return Ok(json!({
+            "ok": false,
+            "error": if x.is_empty() { format!("команда вернула код {code}") } else { x.to_string() },
+        }));
+    }
+    Ok(json!({ "ok": true }))
+}
+
 /// Открывает рабочий стол VNC поверх уже подключённой SSH-сессии.
 ///
 /// Через сессию, а не напрямую, потому что VNC на сервере почти всегда слушает `127.0.0.1`
-/// и наружу не смотрит — и правильно делает: свой протокол он защищает паролем до восьми
+/// и наружу не смотрит - и правильно делает: свой протокол он защищает паролем до восьми
 /// символов на DES. Ходить к нему нужно внутри SSH, а не открывать порт в сеть.
 #[tauri::command]
 async fn vnc_open(
@@ -732,15 +817,15 @@ async fn vnc_open(
     let target = vnc::Target::Ssh {
         handle: s.handle.clone(),
         host: host.unwrap_or_else(|| "127.0.0.1".into()),
-        // 5900 — нулевой дисплей; у большинства серверов рабочий стол именно там.
+        // 5900 - нулевой дисплей; у большинства серверов рабочий стол именно там.
         port: port.unwrap_or(5900),
     };
     vnc::open(id.clone(), target, password, on_frame).await?;
     Ok(id)
 }
 
-/// Движение мыши и нажатия. Кнопки — битовой маской, как в RFB: 1 левая, 2 средняя,
-/// 4 правая, 8 и 16 — колесо вверх и вниз.
+/// Движение мыши и нажатия. Кнопки - битовой маской, как в RFB: 1 левая, 2 средняя,
+/// 4 правая, 8 и 16 - колесо вверх и вниз.
 #[tauri::command]
 fn vnc_pointer(id: String, x: u16, y: u16, buttons: u8) {
     vnc::input(&id, vnc::X11Event::PointerEvent((x, y, buttons).into()));
@@ -763,8 +848,8 @@ fn vnc_refresh(id: String, full: bool) {
 
 /// Вставка на удалённый рабочий стол.
 ///
-/// В RFB буфер обмена и вставка — разные вещи: `ClientCutText` только кладёт текст в буфер
-/// сервера, но никуда его не вставляет. Поэтому следом отправляется Shift+Insert — это
+/// В RFB буфер обмена и вставка - разные вещи: `ClientCutText` только кладёт текст в буфер
+/// сервера, но никуда его не вставляет. Поэтому следом отправляется Shift+Insert - это
 /// сочетание понимают и xterm, и обычные приложения X, в отличие от Ctrl+V, который в
 /// терминалах не работает.
 #[tauri::command]
@@ -1429,7 +1514,7 @@ async fn tools_http_on(
     method: Option<String>,
 ) -> Result<Value, String> {
     // Адрес уходит в командную строку, поэтому проверяем его тем же разбором, что и для
-    // своей стороны: узел через `check_host`, схема — только http и https.
+    // своей стороны: узел через `check_host`, схема - только http и https.
     let u = tools::parse_url(&url)?;
     let method = method.unwrap_or_else(|| "GET".into()).to_uppercase();
     if !matches!(method.as_str(), "GET" | "HEAD") {
@@ -1455,12 +1540,12 @@ async fn tools_http_on(
 /// Откуда брать файл для сравнения.
 ///
 /// Смысл утилиты именно в разнородности сторон: сравнить конфиг на двух серверах или
-/// локальную правку с тем, что доехало, — вопросы, которые задают чаще всего, и ни один
+/// локальную правку с тем, что доехало, - вопросы, которые задают чаще всего, и ни один
 /// из них не решается сравнением двух файлов на одной машине.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DiffSide {
-    /// Пусто — файл на этой машине; иначе идентификатор открытой SSH-сессии.
+    /// Пусто - файл на этой машине; иначе идентификатор открытой SSH-сессии.
     #[serde(default)]
     session_id: Option<String>,
     path: String,
@@ -1494,7 +1579,7 @@ async fn diff_side_text(state: &State<'_, AppState>, side: &DiffSide) -> Result<
     }
 }
 
-/// Сравнение двух файлов. Каждая сторона — эта машина или любая открытая сессия.
+/// Сравнение двух файлов. Каждая сторона - эта машина или любая открытая сессия.
 #[tauri::command]
 async fn tools_diff(
     state: State<'_, AppState>,
@@ -1510,7 +1595,7 @@ async fn tools_diff(
             "b": b.label(),
             "same": ta == tb,
             "binary": true,
-            "note": "Похоже на двоичные файлы — построчное сравнение для них бессмысленно",
+            "note": "Похоже на двоичные файлы - построчное сравнение для них бессмысленно",
         }));
     }
     Ok(filediff::compare(&a.label(), &ta, &b.label(), &tb))
@@ -1518,7 +1603,7 @@ async fn tools_diff(
 
 /// Запрос к каталогу LDAP.
 ///
-/// Только со своей машины: варианта «с сервера» здесь нет, и это осознанно. LDAP — это
+/// Только со своей машины: варианта «с сервера» здесь нет, и это осознанно. LDAP - это
 /// ASN.1, готовый клиент открытый поток не принимает, а писать разбор протокола ради
 /// второго варианта несоразмерно пользе. В интерфейсе об этом сказано прямо.
 #[tauri::command]
@@ -1568,7 +1653,7 @@ async fn tools_port_scan(
 /// Просмотр диапазона портов **с сервера**.
 ///
 /// Проверки там идут по очереди, поэтому диапазон стоит держать узким: сотня портов на
-/// недоступном хосте с секундным таймаутом — это полторы минуты ожидания.
+/// недоступном хосте с секундным таймаутом - это полторы минуты ожидания.
 #[tauri::command]
 async fn tools_port_scan_on(
     state: State<'_, AppState>,
@@ -1648,7 +1733,7 @@ fn tools_jwt_decode(token: String) -> Result<Value, String> {
 
 /// Сдвинуть окна группы на (dx, dy) в физических пикселях.
 /// Делаем из Rust: на Linux JS `setPosition` из чужого webview часто не доезжает,
-/// а emit `serein-dock-move` сам по себе окна не двигает — только помечает «это наше».
+/// а emit `serein-dock-move` сам по себе окна не двигает - только помечает «это наше».
 #[tauri::command]
 fn windows_nudge_group(app: AppHandle, members: Vec<String>, dx: i32, dy: i32) {
     if dx == 0 && dy == 0 {
@@ -1715,7 +1800,7 @@ fn windows_restore_minimized_impl(app: &AppHandle) -> u32 {
 fn windows_raise_group_impl(app: &AppHandle, focused: &str) {
     // В Win32 есть отдельное «поднять, не забирая фокус» (SWP_NOACTIVATE); в Tauri его нет,
     // а `set_focus` перетащил бы фокус на каждое окно по очереди и заставил их мигать.
-    // Переносимый эквивалент — короткое «поверх всех» и обратно: менеджер окон поднимает
+    // Переносимый эквивалент - короткое «поверх всех» и обратно: менеджер окон поднимает
     // окно, фокус остаётся там, где был.
     let windows = app.webview_windows();
     for (label, w) in &windows {
@@ -1784,7 +1869,7 @@ fn windows_raise_group_impl(app: &AppHandle, focused: &str) {
     for (label, w) in app.webview_windows() {
         let Ok(h) = w.hwnd() else { continue };
         let hwnd = HWND(h.0 as isize as *mut c_void);
-        // Свернутые окна не трогаем — иначе minimize сразу отменяется raise_group.
+        // Свернутые окна не трогаем - иначе minimize сразу отменяется raise_group.
         unsafe {
             if IsIconic(hwnd).as_bool() {
                 continue;
@@ -1809,7 +1894,7 @@ fn windows_raise_group_impl(app: &AppHandle, focused: &str) {
     }
 }
 
-/// WebView2 по умолчанию вешает Ctrl+Shift+C на Inspect — это ломает копирование в терминале.
+/// WebView2 по умолчанию вешает Ctrl+Shift+C на Inspect - это ломает копирование в терминале.
 #[cfg(windows)]
 fn disable_browser_accelerators(w: &tauri::WebviewWindow) {
     use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
@@ -1832,13 +1917,13 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // Схему профиля приводим к текущей до того, как что-либо его прочитает.
-            // Ошибка здесь означает профиль от более новой версии: продолжать нельзя —
+            // Ошибка здесь означает профиль от более новой версии: продолжать нельзя -
             // первая же запись выбросит поля, которых мы не знаем.
             if let Err(e) = schema::migrate(&store::config_dir()) {
                 use tauri_plugin_dialog::DialogExt;
                 let _ = app.dialog()
                     .message(&e)
-                    .title("Serein — профиль несовместим")
+                    .title("Serein - профиль несовместим")
                     .blocking_show();
                 return Err(e.into());
             }
@@ -1871,6 +1956,7 @@ pub fn run() {
             workspace_processes, workspace_kill, workspace_services, workspace_service_action, workspace_logs,
             workspace_platform,
             vnc_open, vnc_pointer, vnc_key, vnc_refresh, vnc_paste, vnc_close,
+            desktop_detect, desktop_install, desktop_set_password,
             db_open, db_query, db_close, db_current,
             session_sysinfo,
             vault_status, vault_unlock, vault_enable, vault_disable,

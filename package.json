@@ -15,7 +15,7 @@
     "smoke:linux": "bash scripts/smoke.sh",
     "build:linux": "npm run tauri -- build --config src-tauri/tauri.linux.conf.json",
     "manifest": "node scripts/make-update-manifest.mjs",
-    "bench:phase0": "cargo run --release --manifest-path src-tauri/Cargo.toml --bin phase0_bench -- home_server",
+    "bench:phase0": "cargo run --release --manifest-path src-tauri/Cargo.toml --example phase0_bench -- home_server",
     "test": "vitest run",
     "test:watch": "vitest"
   },

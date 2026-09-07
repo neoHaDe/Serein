@@ -1,12 +1,12 @@
 /* ============================================================
-   Serein — tactical terminal cockpit UI
+   Serein - tactical terminal cockpit UI
    Все цвета берутся из CSS-переменных, которые выводятся из
    активной цветовой схемы терминала (themes.ts → applyUiTheme).
-   Не хардкодить hex — иначе сломается переключение тем.
+   Не хардкодить hex - иначе сломается переключение тем.
    ============================================================ */
 
 :root {
-  /* Схема по умолчанию — до того, как отработает применяльщик темы. Без неё первый кадр
+  /* Схема по умолчанию - до того, как отработает применяльщик темы. Без неё первый кадр
      рисуется со светлыми системными элементами формы, и на Linux это заметно морганием.
      Дальше `applyUiTheme` выставляет схему по выбранной теме, включая светлые. */
   color-scheme: dark;
@@ -33,7 +33,7 @@
   --shadow-rgb: 0, 0, 0;
   --on-accent: #15161e;
 
-  /* Типографика. Терминальный характер — моноширинный шрифт в «хроме». */
+  /* Типографика. Терминальный характер - моноширинный шрифт в «хроме». */
   --font-ui: 'Segoe UI Variable Display', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', 'Consolas', ui-monospace, monospace;
 
@@ -43,7 +43,7 @@
   --r-lg: 13px;
   --r-pill: 999px;
 
-  /* Тени (тематические через --shadow-rgb) — мягкая глубина, без свечения. */
+  /* Тени (тематические через --shadow-rgb) - мягкая глубина, без свечения. */
   --sh-1: 0 1px 2px rgba(var(--shadow-rgb), 0.2);
   --sh-2: 0 8px 24px rgba(var(--shadow-rgb), 0.28);
   --sh-3: 0 20px 48px rgba(var(--shadow-rgb), 0.4);
@@ -264,7 +264,7 @@ button {
   box-shadow: inset 2px 0 0 rgba(var(--accent-rgb), 0.7);
   transition: background 0.12s ease, box-shadow 0.12s ease;
 }
-/* Пока тащим — гасим наведение на элементах, иначе рамка «прыгает» под курсором. */
+/* Пока тащим - гасим наведение на элементах, иначе рамка «прыгает» под курсором. */
 .group.drop-target .server-item:hover {
   background: transparent;
 }
@@ -278,7 +278,7 @@ button {
   display: none;
 }
 /* Подсказка занимает ровно столько же, сколько строка сервера (--row-h меряется
-   по живому списку). Иначе последний сервер уезжает из группы — подсказка
+   по живому списку). Иначе последний сервер уезжает из группы - подсказка
    встаёт на его место другой высоты, и всё, что ниже, дёргается. */
 .group-empty {
   display: flex;
@@ -427,8 +427,8 @@ button {
   transform: scale(0.99);
 }
 /*
- * Выделенная строка. Отличается от наведения заметно сильнее: наведение — «мышь здесь»,
- * выделение — «действие меню применится сюда», и спутать их нельзя.
+ * Выделенная строка. Отличается от наведения заметно сильнее: наведение - «мышь здесь»,
+ * выделение - «действие меню применится сюда», и спутать их нельзя.
  */
 .server-item.selected {
   background: rgba(var(--accent-rgb), 0.18);
@@ -470,7 +470,7 @@ button {
   color: #e0af68;
 }
 /*
- * Ярлык среды. Прод обязан читаться первым и издалека — именно ради этого метка и
+ * Ярлык среды. Прод обязан читаться первым и издалека - именно ради этого метка и
  * заводилась: увидеть «прод» до того, как в него что-нибудь выполнят.
  */
 .env-badge {
@@ -516,7 +516,7 @@ button {
 /* Перетаскивание списка серверов и групп.
    Порядок в DOM не меняется, пока тащим: двигаем только картинку через
    `transform`. Перестройка списка на каждое движение мыши накладывает анимации
-   друг на друга — элементы размазывает по экрану.
+   друг на друга - элементы размазывает по экрану.
    Соседи расступаются ровно на высоту переносимого, а он сам идёт за курсором
    и поднят над списком, поэтому пересечений быть не может. */
 .row-move {
@@ -527,7 +527,7 @@ button {
   position: relative;
   z-index: 20;
   cursor: grabbing;
-  /* За курсором — без задержки: любая анимация здесь читается как «тормозит». */
+  /* За курсором - без задержки: любая анимация здесь читается как «тормозит». */
   transition: none;
 }
 .server-item.row-drag,
@@ -543,7 +543,7 @@ button {
 .group-title.grabbable {
   cursor: grab;
 }
-/* Пока тащим — гасим наведение: подсветка бежала бы за курсором по чужим строкам. */
+/* Пока тащим - гасим наведение: подсветка бежала бы за курсором по чужим строкам. */
 body.row-dragging {
   cursor: grabbing;
   user-select: none;
@@ -1009,7 +1009,7 @@ body.row-dragging .group-title:hover {
   border-top: 1px solid var(--accent);
   color: var(--muted);
   font-size: 12px;
-  flex-shrink: 0; /* всегда сохраняет высоту — терминал уступает место, а не наоборот */
+  flex-shrink: 0; /* всегда сохраняет высоту - терминал уступает место, а не наоборот */
 }
 .terminal-wrap {
   flex: 1;
@@ -1191,7 +1191,7 @@ body.row-dragging .group-title:hover {
   text-align: center;
   overflow: hidden;
 }
-/* Очень мягкое акцентное пятно за приветствием — спокойная атмосфера, без сетки и пульсации. */
+/* Очень мягкое акцентное пятно за приветствием - спокойная атмосфера, без сетки и пульсации. */
 .empty-state::before {
   content: '';
   position: absolute;
@@ -1250,7 +1250,7 @@ body.row-dragging .group-title:hover {
   font-size: 12px;
   opacity: 0.75;
 }
-/* Второстепенное действие рядом с акцентными — тот же размер, но без заливки. */
+/* Второстепенное действие рядом с акцентными - тот же размер, но без заливки. */
 .empty-state button.ghost {
   background: transparent;
   color: var(--muted);
@@ -2040,7 +2040,7 @@ html.aux-win #root {
 .tools-body textarea,
 /* Текстовое поле в этот список не входило, и потому оставалось системно-белым: подпись
    вставала сбоку от него, а не над ним. Видно это было только на тех вкладках, где такое
-   поле есть, — оттого и держалось долго. */
+   поле есть, - оттого и держалось долго. */
 .modal textarea {
   display: block;
   width: 100%;
@@ -2056,7 +2056,7 @@ html.aux-win #root {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 /* Только для текстового поля: высота и моноширинный шрифт. В общем правиле этому не
-   место — там от него раздувались обычные поля во всех диалогах разом. */
+   место - там от него раздувались обычные поля во всех диалогах разом. */
 .modal textarea,
 .tools-body textarea {
   min-height: 88px;
@@ -2110,7 +2110,7 @@ html.aux-win #root {
   margin-top: 10px;
 }
 /* Второстепенные кнопки диалогов («Закрыть», «Отмена») не имели стиля вовсе и рисовались
-   системными — белыми прямоугольниками посреди тёмного окна. Правило одно на все диалоги:
+   системными - белыми прямоугольниками посреди тёмного окна. Правило одно на все диалоги:
    дефект был общий, и чинить его только в одном окне значило бы развести их внешний вид. */
 .modal-actions button:not(.primary):not(.mini):not(.danger) {
   background: var(--bg);
@@ -3904,7 +3904,7 @@ button.secondary:hover {
   gap: 8px;
 }
 
-/* Dashboard метрик — вкладка Processes */
+/* Dashboard метрик - вкладка Processes */
 .ws-metrics.dashboard {
   padding: 12px 14px 10px;
   background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.05) 0%, transparent 100%);
@@ -4147,7 +4147,7 @@ button.secondary:hover {
   flex-direction: column;
   gap: 4px;
   padding: 10px 12px;
-  border-radius: var(--r-md);
+  border-radius: var(--r);
   background: rgba(var(--surface-rgb), 0.6);
   border: 1px solid rgba(var(--border-rgb), 0.5);
   min-width: 0;
@@ -4242,7 +4242,7 @@ button.secondary:hover {
   flex-direction: column;
   overflow: hidden;
 }
-/* Откреплённая вкладка: rail | (терминал | SFTP) — grid, не flex (надёжнее в aux-webview). */
+/* Откреплённая вкладка: rail | (терминал | SFTP) - grid, не flex (надёжнее в aux-webview). */
 .detached-tab-body {
   flex: 1;
   min-height: 0;
@@ -4296,7 +4296,7 @@ button.secondary:hover {
   }
 }
 
-/* Путь к профилю в настройках: моноширинный и переносится, а не уезжает за край —
+/* Путь к профилю в настройках: моноширинный и переносится, а не уезжает за край -
    на Linux он длиннее, чем `%APPDATA%\serein`. */
 .settings-path {
   font-family: var(--font-mono);
@@ -4312,7 +4312,7 @@ button.secondary:hover {
   width: 92vw;
 }
 
-/* Список серверов может быть длинным, а окно — нет: прокручиваем именно выбор,
+/* Список серверов может быть длинным, а окно - нет: прокручиваем именно выбор,
    чтобы поле команды и кнопки всегда оставались на виду. */
 .multi-pick {
   max-height: 34vh;
@@ -4363,7 +4363,7 @@ button.secondary:hover {
 .multi-result-name {
   font-weight: 600;
 }
-/* Состояние — цветом, а не только словом: в списке из десяти строк глаз ищет отличия. */
+/* Состояние - цветом, а не только словом: в списке из десяти строк глаз ищет отличия. */
 .multi-result.done .multi-result-state {
   color: var(--green);
 }
@@ -4441,7 +4441,7 @@ button.secondary:hover {
   outline: none;
   cursor: default;
 }
-/* Поверх холста — только когда картинки нет: подключение, ошибка, запрос пароля. */
+/* Поверх холста - только когда картинки нет: подключение, ошибка, запрос пароля. */
 .vnc-overlay {
   position: absolute;
   inset: 0;
@@ -4468,6 +4468,137 @@ button.secondary:hover {
 }
 .vnc-auth input {
   width: 220px;
+}
+.vnc-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---- Выбор рабочего стола и настройка VNC ---- */
+/*
+ * Экран выбора появляется до подключения. Плитки крупные и одинаковые: их всего две, и
+ * недоступная должна читаться как «место занято, но пока пусто», а не как сломанная кнопка.
+ */
+.desk-choose,
+.desk-setup {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: auto;
+}
+.desk-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  max-width: 620px;
+}
+.desk-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 16px;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.desk-tile:hover {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.08);
+}
+/* Недоступная плитка курсор не меняет и на наведение не отвечает - иначе она обещает
+   нажатие, которого не будет. */
+.desk-tile.off {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+.desk-tile-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+.desk-tile-note {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.desk-state {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  max-width: 620px;
+}
+.desk-state-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.desk-state .mini {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+.desk-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  max-width: 620px;
+}
+.desk-block-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.desk-block label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+/* Без своих правил браузер рисует поля пароля светлыми - посреди тёмной панели это
+   выглядит чужим окном. */
+.desk-block input {
+  width: 260px;
+  max-width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  padding: 9px 11px;
+  outline: none;
+  font-family: inherit;
+  font-size: 13px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.desk-block input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.14);
+}
+.desk-block .primary {
+  align-self: flex-start;
+}
+/* Полоса ошибки не должна быть шире карточек, к которым относится. */
+.desk-choose .sftp-error,
+.desk-setup .sftp-error {
+  max-width: 620px;
+}
+.desk-ok {
+  font-size: 12px;
+  color: var(--green);
+  max-width: 620px;
 }
 
 /* ---- Базы данных ---- */
@@ -4502,7 +4633,7 @@ button.secondary:hover {
   color: var(--muted);
 }
 /* Поля тут те же, что в модальных окнах, и выглядеть обязаны так же. Без этих правил
-   браузер рисует свои — светлые и чужие посреди тёмной панели. */
+   браузер рисует свои - светлые и чужие посреди тёмной панели. */
 .db-form input,
 .db-form select,
 .db-editor textarea {
@@ -4528,7 +4659,7 @@ button.secondary:hover {
   color: var(--muted);
   opacity: 0.7;
 }
-/* Свою стрелку списка Windows рисует поверх фона поля и в своей палитре — убираем её
+/* Свою стрелку списка Windows рисует поверх фона поля и в своей палитре - убираем её
    и ставим собственную, иначе на тёмной панели остаётся светлый квадрат. */
 .db-form select {
   appearance: none;
@@ -4591,7 +4722,7 @@ button.secondary:hover {
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
-/* NULL — это не пустая ячейка: значение отсутствует, и видно это должно быть сразу. */
+/* NULL - это не пустая ячейка: значение отсутствует, и видно это должно быть сразу. */
 .db-null {
   color: var(--muted);
   font-style: italic;
@@ -4619,7 +4750,7 @@ button.secondary:hover {
   padding: 1px 6px;
 }
 
-/* Утилиты. Своих правил у окна не было вовсе — оно держалось на общих для модальных
+/* Утилиты. Своих правил у окна не было вовсе - оно держалось на общих для модальных
    окон, из-за чего вкладки, панели и вывод стояли слипшимися. */
 .tools-modal {
   min-width: 520px;
@@ -4635,14 +4766,14 @@ button.secondary:hover {
   flex-direction: column;
   gap: 10px;
 }
-/* У подписи есть свой отступ снизу от общих правил диалога, а у панели — промежуток
+/* У подписи есть свой отступ снизу от общих правил диалога, а у панели - промежуток
    между элементами. Вместе выходил двойной зазор, из-за которого поля казались
    разбросанными по всему окну. */
 .tools-pane label {
   margin-bottom: 0;
 }
 /* Выбор «откуда» стоит особняком: это не параметр проверки, а вопрос о том, чьими
-   глазами смотреть, — и путать его с полями ввода не следует. */
+   глазами смотреть, - и путать его с полями ввода не следует. */
 .tools-from {
   display: flex;
   flex-direction: column;
@@ -4657,7 +4788,7 @@ button.secondary:hover {
 .tools-from .hint {
   font-size: 11px;
 }
-/* Ответ утилиты — машинный текст: моноширинный, с прокруткой и без переносов посреди
+/* Ответ утилиты - машинный текст: моноширинный, с прокруткой и без переносов посреди
    адреса. */
 .tools-out {
   margin: 12px 0 0;
@@ -4687,7 +4818,7 @@ button.secondary:hover {
 }
 
 /* Пояснение под заголовком средней загрузки: одной фразой, что значат числа ниже.
-   Голое «0.26» не говорит ничего — оно осмысленно только рядом с числом ядер. */
+   Голое «0.26» не говорит ничего - оно осмысленно только рядом с числом ядер. */
 .srv-load-summary {
   font-size: 12px;
   color: var(--muted);
@@ -4707,7 +4838,7 @@ button.secondary:hover {
 }
 
 /* Подпись под значением карточки обзора: вторая строка мелким и приглушённым.
-   Нужна там, где значение само по себе неполно — драйвер под видеокартой,
+   Нужна там, где значение само по себе неполно - драйвер под видеокартой,
    тип и скорость под объёмом памяти, причина недоступности вместо них. */
 .srv-overview-card .srv-overview-v .srv-overview-sub {
   display: block;
@@ -4715,7 +4846,7 @@ button.secondary:hover {
 }
 
 /* Утилиты устроены как открытый сервер: рельса со списком слева, содержимое справа.
-   Раньше здесь была карточка посреди пустой вкладки — она выглядела всплывающим окном,
+   Раньше здесь была карточка посреди пустой вкладки - она выглядела всплывающим окном,
    которое зачем-то не закрывается. */
 .tools-slot {
   display: flex;
@@ -4734,7 +4865,7 @@ button.secondary:hover {
   flex-direction: column;
 }
 /* Содержимое утилиты: форма сверху, ответ под ней, всё с прокруткой. Ширину ограничиваем
-   не ради красоты — поля во всю ширину монитора читаются плохо. */
+   не ради красоты - поля во всю ширину монитора читаются плохо. */
 .tools-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -4762,7 +4893,7 @@ button.secondary:hover {
 }
 
 /* Ряд полей внутри утилит. В модальном окне это давал `.modal .row`; вкладка из модалки
-   вышла, и правило надо было принести с собой — иначе «Хост» и «Порт» встают друг под
+   вышла, и правило надо было принести с собой - иначе «Хост» и «Порт» встают друг под
    друга и форма растягивается вдвое. */
 .tools-body .row {
   display: flex;
@@ -4801,7 +4932,7 @@ button.secondary:hover {
   margin-bottom: 6px;
 }
 
-/* Обзор файлов на сервере: список каталога в модальном окне. Только выбор — для работы
+/* Обзор файлов на сервере: список каталога в модальном окне. Только выбор - для работы
    с файлами есть полная панель, здесь нужен один ответ, какой путь взять. */
 .picker-modal {
   width: 560px;

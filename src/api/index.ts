@@ -80,7 +80,7 @@ export const api = {
     importSecurecrt: (): Promise<{ imported: number }> => invoke('servers_import_securecrt')
   },
   agent: {
-    /** Ключи локального SSH-агента. `ok: false` — агент не запущен, не ошибка вызова. */
+    /** Ключи локального SSH-агента. `ok: false` - агент не запущен, не ошибка вызова. */
     identities: (): Promise<AgentIdentitiesResult> => invoke('ssh_agent_identities')
   },
   knownHosts: {
@@ -97,7 +97,7 @@ export const api = {
   },
   telnet: {
     /**
-     * Управляющая команда telnet. `interrupt` — то же, что Ctrl+C на настоящем терминале,
+     * Управляющая команда telnet. `interrupt` - то же, что Ctrl+C на настоящем терминале,
      * но проходит даже когда железка перестала читать поток данных.
      */
     command: (
@@ -140,7 +140,7 @@ export const api = {
     onStatus: (cb: (p: SessionStatus) => void) => sub<SessionStatus>('session-status', cb),
     onKi: (cb: (p: { id: string; prompts: KIPrompt[] }) => void) =>
       sub<{ id: string; prompts: KIPrompt[] }>('session-ki', cb),
-    /** Сервер предъявил незнакомый или изменившийся ключ — ждём решения пользователя. */
+    /** Сервер предъявил незнакомый или изменившийся ключ - ждём решения пользователя. */
     onHostKey: (cb: (p: HostKeyRequest) => void) => sub<HostKeyRequest>('session-hostkey', cb),
     respondHostKey: (requestId: string, accept: boolean): Promise<void> =>
       invoke('session_hostkey_respond', { requestId, accept }),
@@ -333,7 +333,7 @@ export const api = {
    * Рабочий стол VNC поверх открытой SSH-сессии.
    *
    * Кадры приходят каналом сырыми байтами, а не ответом команды: экран обновляется
-   * десятки раз в секунду, и гонять пиксели через JSON нельзя — разбор формата в
+   * десятки раз в секунду, и гонять пиксели через JSON нельзя - разбор формата в
    * `vncFrames.ts`.
    */
   vnc: {
@@ -356,7 +356,42 @@ export const api = {
   },
 
   /**
-   * Базы данных рядом с сервером — через ту же SSH-сессию, а не отдельным соединением.
+   * Подготовка рабочего стола на сервере: что там есть и чего не хватает.
+   *
+   * Спрашиваем до подключения, а не после неудачи: «программы нет», «не запущена» и
+   * «слушает не там» - три разные беды, и ответ на каждую свой.
+   */
+  desktop: {
+    detect: (
+      sessionId: string
+    ): Promise<{
+      installed: { name: string; path: string }[]
+      listening: string[]
+      desktop?: string
+      packageManager?: string
+      sudo?: string
+      summary: string
+      canInstall: boolean
+    }> => invoke('desktop_detect', { sessionId }),
+    /**
+     * Пароль sudo уходит отдельным полем и попадает на стандартный ввод команды, а не в
+     * её строку: строка команды видна в списке процессов сервера всем, кто там есть.
+     */
+    install: (
+      sessionId: string,
+      packageManager: string,
+      sudoPassword: string
+    ): Promise<{ ok: boolean; error?: string }> =>
+      invoke('desktop_install', { sessionId, packageManager, sudoPassword }),
+    setPassword: (
+      sessionId: string,
+      password: string
+    ): Promise<{ ok: boolean; error?: string }> =>
+      invoke('desktop_set_password', { sessionId, password })
+  },
+
+  /**
+   * Базы данных рядом с сервером - через ту же SSH-сессию, а не отдельным соединением.
    * База слушает петлю сервера, и проброс порта для этого поднимать не нужно.
    */
   db: {
@@ -381,7 +416,7 @@ export const api = {
     /**
      * Уже открытая база этой сессии, если она есть.
      *
-     * Спрашиваем приложение, а не свою память: откреплённое окно — отдельный веб-контекст,
+     * Спрашиваем приложение, а не свою память: откреплённое окно - отдельный веб-контекст,
      * и памяти о соединении у него нет, а само соединение живёт и переезд окна переживает.
      */
     current: (
@@ -396,7 +431,7 @@ export const api = {
       invoke('workspace_platform', { sessionId }),
     processes: (
       sessionId: string
-      // `note` — оговорка о том, чего эта система не сообщает: панель показывает её
+      // `note` - оговорка о том, чего эта система не сообщает: панель показывает её
       // рядом с таблицей, чтобы прочерк в колонке не читался как «ноль».
     ): Promise<{ ok: boolean; error?: string; rows?: WorkspaceProcess[]; note?: string }> =>
       invoke('workspace_processes', { sessionId }),
@@ -418,7 +453,7 @@ export const api = {
   multi: {
     /**
      * Одна команда на нескольких серверах. Полный список возвращается в конце,
-     * но результат каждого хоста приходит событием сразу — ждать самый медленный,
+     * но результат каждого хоста приходит событием сразу - ждать самый медленный,
      * чтобы увидеть первый, незачем.
      */
     exec: (serverIds: string[], command: string): Promise<MultiExecResult[]> =>
@@ -453,7 +488,7 @@ export const api = {
       filter?: string
     }): Promise<Record<string, unknown>> => invoke('tools_ldap', { params }),
     /**
-     * Сравнение двух файлов. Каждая сторона — эта машина (`sessionId` пуст) либо открытая
+     * Сравнение двух файлов. Каждая сторона - эта машина (`sessionId` пуст) либо открытая
      * сессия. Смысл именно в разнородности: «тот же ли конфиг на двух серверах».
      */
     diff: (
@@ -463,28 +498,28 @@ export const api = {
     /**
      * Выбрать файл на этой машине системным диалогом.
      *
-     * `null` — человек передумал. Отличать это от ошибки важно: молча ничего не делать
-     * при отказе правильно, а при ошибке — нет.
+     * `null` - человек передумал. Отличать это от ошибки важно: молча ничего не делать
+     * при отказе правильно, а при ошибке - нет.
      */
     pickLocalFile: async (): Promise<string | null> => {
       const sel = await openDialog({ multiple: false, directory: false, title: 'Выберите файл' })
       return typeof sel === 'string' ? sel : null
     },
-    /** Просмотр диапазона портов. За раз — не больше 1024, это ограничение по смыслу. */
+    /** Просмотр диапазона портов. За раз - не больше 1024, это ограничение по смыслу. */
     portScan: (host: string, from: number, to: number): Promise<Record<string, unknown>> =>
       invoke('tools_port_scan', { host, from, to }),
     /**
      * HTTP-запрос: код ответа, заголовки, время, цепочка переходов.
      *
      * Со своей машины запрос делается своими силами и показывает каждый переход отдельно.
-     * С сервера — через `curl` или `wget`, и там виден только итог: чужими программами
+     * С сервера - через `curl` или `wget`, и там виден только итог: чужими программами
      * цепочку не разложить.
      */
     http: (url: string, method?: string, maxRedirects?: number): Promise<Record<string, unknown>> =>
       invoke('tools_http', { url, method, maxRedirects }),
     httpOn: (sessionId: string, url: string, method?: string): Promise<Record<string, unknown>> =>
       invoke('tools_http_on', { sessionId, url, method }),
-    /** Маршрут до адреса. `hops` — предел числа узлов, по умолчанию 15. */
+    /** Маршрут до адреса. `hops` - предел числа узлов, по умолчанию 15. */
     trace: (host: string, hops?: number): Promise<Record<string, unknown>> =>
       invoke('tools_trace', { host, hops }),
     traceOn: (sessionId: string, host: string, hops?: number): Promise<Record<string, unknown>> =>
@@ -503,7 +538,7 @@ export const api = {
     jwtDecode: (token: string): Promise<Record<string, unknown>> => invoke('tools_jwt_decode', { token })
   },
   app: {
-    /** Куда приложение реально пишет профиль и логи — видно в настройках. */
+    /** Куда приложение реально пишет профиль и логи - видно в настройках. */
     paths: (): Promise<{ config: string; logs: string }> => invoke('app_paths')
   },
   exportText: async (
