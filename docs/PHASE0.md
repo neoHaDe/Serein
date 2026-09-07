@@ -84,7 +84,7 @@ Release и установленный `Serein.exe` стартовали с PATH 
 
 ## Phase 0.2 — performance (2026-08-27)
 
-Хост: `home_server` (`192.168.0.156`), ключ, LAN. Гарнесс: `cargo run --release --bin phase0_bench` — те же `ssh`/`sftp` модули, **без** WebView и xterm. PTY-shell не открывали: exec-канал. Кадры UI не снимали.
+Хост: `home_server` (`192.168.0.156`), ключ, LAN. Гарнесс: `cargo run --release --example phase0_bench` — те же `ssh`/`sftp` модули, **без** WebView и xterm. PTY-shell не открывали: exec-канал. Кадры UI не снимали.
 
 Serein.exe в это время уже был открыт: **~92 МБ** Working Set. Холодный старт в этом прогоне не мерили. Процесс бенча: ~15–19 МБ.
 

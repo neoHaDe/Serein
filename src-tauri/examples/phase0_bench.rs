@@ -1,5 +1,10 @@
 //! Phase 0.2: те же russh/SFTP-модули, что у приложения. Без WebView/xterm.
-//! Запуск: cargo run --release --manifest-path src-tauri/Cargo.toml --bin phase0_bench -- home_server
+//! Запуск: cargo run --release --manifest-path src-tauri/Cargo.toml --example phase0_bench -- home_server
+//!
+//! Лежит в примерах, а не в `src/bin`, намеренно. Объявленный `[[bin]]` собирается вместе
+//! с приложением и попадает в пакет: в `.deb` и `.rpm` до версии 1.2.7 включительно уезжал
+//! `/usr/bin/phase0_bench` на двенадцать мегабайт — мерялка производительности в системном
+//! каталоге у каждого пользователя. Примеры `cargo build --release` не трогает.
 
 use russh_sftp::client::SftpSession;
 use serde_json::{json, Value};

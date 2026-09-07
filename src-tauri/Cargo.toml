@@ -11,10 +11,6 @@ default-run = "serein"
 name = "serein_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-[[bin]]
-name = "phase0_bench"
-path = "src/bin/phase0_bench.rs"
-
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
