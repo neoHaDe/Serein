@@ -5,11 +5,11 @@ type Platform = 'windows' | 'linux' | 'other'
 let cached: Promise<Platform> | null = null
 
 /**
- * На какой системе мы работаем. Ответ кэшируется — команда возвращает константу.
+ * На какой системе мы работаем. Ответ кэшируется - команда возвращает константу.
  *
  * Промис не отклоняется никогда, и это важно: результат ждут в том числе при настройке
  * магнетизма окон, а там всё обёрнуто в общий `try` со смыслом «мы не в Tauri». Одна
- * сорвавшаяся команда отключила бы примагничивание целиком и молча — до перезапуска.
+ * сорвавшаяся команда отключила бы примагничивание целиком и молча - до перезапуска.
  */
 export function appPlatform(): Promise<Platform> {
   if (!cached) {
@@ -30,7 +30,7 @@ export type InstallKind = 'installer' | 'appimage' | 'package'
 let cachedKind: Promise<InstallKind> | null = null
 
 /**
- * Windows — `installer`, Linux из AppImage — `appimage`, Linux из пакета — `package`.
+ * Windows - `installer`, Linux из AppImage - `appimage`, Linux из пакета - `package`.
  * Как и с платформой, промис не отклоняется: неизвестность трактуем как пакет,
  * то есть предлагаем скачать вручную вместо установки, которая всё равно не пройдёт.
  */

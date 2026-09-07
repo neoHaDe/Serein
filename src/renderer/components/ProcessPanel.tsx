@@ -5,7 +5,7 @@ import { WsDetachButton } from './WsDetachButton'
 import { openDetachedWorkspace } from './workspaceWindow'
 import { metricView } from '../processMetric'
 
-/** Ячейка с долей в процентах. Что именно показывать — решает `processMetric.ts`. */
+/** Ячейка с долей в процентах. Что именно показывать - решает `processMetric.ts`. */
 function MetricCell({ value, kind }: { value: number | null; kind?: 'mem' }): JSX.Element {
   const v = metricView(value)
   if (v.barPct === null) {

@@ -1,5 +1,5 @@
 //! Туннели: local (-L), dynamic SOCKS5 (-D) и remote (-R) поверх russh.
-//! -L/-D — direct-tcpip; -R — tcpip_forward + маршрутизация forwarded-каналов через ClientHandler.
+//! -L/-D - direct-tcpip; -R - tcpip_forward + маршрутизация forwarded-каналов через ClientHandler.
 
 use crate::ssh::{ClientHandler, RemoteForwards, wait_cancel, CancelRx};
 use russh::client;
@@ -95,7 +95,7 @@ impl TunnelManager {
         if ttype == "remote" {
             let remote_port = cfg.get("remotePort").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             crate::sync::lock(&remote_forwards).insert(remote_port, local_port);
-            // tcpip_forward требует &mut — лочим Handle на время вызова.
+            // tcpip_forward требует &mut - лочим Handle на время вызова.
             let fwd_res = tokio::select! {
                 r = async {
                     let h = handle.lock().await;

@@ -1,4 +1,4 @@
-//! Файловый менеджер: SFTP, при недоступности подсистемы — SCP + ls/exec.
+//! Файловый менеджер: SFTP, при недоступности подсистемы - SCP + ls/exec.
 
 use crate::scp;
 use crate::sftp::{self, TransferHub};

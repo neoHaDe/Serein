@@ -66,7 +66,7 @@ export interface TabsApi {
   openServerTab: (server: ServerConfig) => void
   openLocalTab: () => void
   openEditorTab: (sessionId: string, remotePath: string) => void
-  /** Открыть вкладку утилит. Если она уже есть — просто переключиться на неё. */
+  /** Открыть вкладку утилит. Если она уже есть - просто переключиться на неё. */
   openToolsTab: () => void
   closeTab: (key: string) => void
   renameTab: (key: string, title: string) => void
@@ -575,11 +575,11 @@ export function useTabs({
         allLeaves(t.root)
           .filter((l) => l.kind === 'ssh' && l.status === 'connected' && l.sessionId)
           // Имя панели дописываем только если оно отличается от имени вкладки. В одиночной
-          // вкладке они совпадают, и выходило «home-srv — home-srv»: половина строки ни о
+          // вкладке они совпадают, и выходило «home-srv - home-srv»: половина строки ни о
           // чём. Разделять их нужно лишь когда во вкладке несколько панелей.
           .map((l) => ({
             sessionId: l.sessionId!,
-            title: l.title && l.title !== t.title ? `${t.title} — ${l.title}` : t.title
+            title: l.title && l.title !== t.title ? `${t.title} - ${l.title}` : t.title
           }))
       ),
     [tabs]

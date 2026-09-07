@@ -62,7 +62,7 @@ export function MinimizedWindowsHint(): JSX.Element | null {
         void invoke('windows_restore_minimized').then(() => setCount(0))
       }}
     >
-      <Icon name="win-restore" size={12} /> {minimizedLabel(count)} — развернуть
+      <Icon name="win-restore" size={12} /> {minimizedLabel(count)} - развернуть
     </button>
   )
 }

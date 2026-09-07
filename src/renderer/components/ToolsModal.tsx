@@ -25,7 +25,7 @@ interface ConnectedSession {
 /**
  * Откуда выполнять проверку: со своей машины или глазами одного из серверов.
  *
- * Различие не косметическое. «Я не вижу этот адрес» и «его не видит сервер» — разные
+ * Различие не косметическое. «Я не вижу этот адрес» и «его не видит сервер» - разные
  * новости, и при разборе неполадки нужна почти всегда вторая: у сервера свои маршруты,
  * свой DNS и свой `/etc/hosts`. Утилита, которая умеет только первое, отвечает не на тот
  * вопрос, который ей задают.
@@ -36,14 +36,14 @@ interface Props {
   /** Живые SSH-сессии: только через них можно спросить сервер. */
   connectedSessions: ConnectedSession[]
   /**
-   * Закрыть панель. Есть только у модального варианта — вкладку закрывают её крестиком
+   * Закрыть панель. Есть только у модального варианта - вкладку закрывают её крестиком
    * в общей полосе, и вторая кнопка там была бы лишней.
    */
   onClose?: () => void
   /**
    * С чего начать выбор «откуда».
    *
-   * У окна две двери. Из общего меню человек ещё не выбрал сервер — начинаем со своей
+   * У окна две двери. Из общего меню человек ещё не выбрал сервер - начинаем со своей
    * машины. Из рельсы сервера он его уже выбрал, открыв вкладку, и спрашивать второй раз
    * незачем: подставляем этот сервер.
    */
@@ -51,8 +51,8 @@ interface Props {
 }
 
 /**
- * Порядок не алфавитный и не случайный: сверху то, что спрашивают у сети, снизу — то,
- * что считается на месте и сервера не касается вовсе. Между ними — черта.
+ * Порядок не алфавитный и не случайный: сверху то, что спрашивают у сети, снизу - то,
+ * что считается на месте и сервера не касается вовсе. Между ними - черта.
  */
 const TABS: { id: Tab; label: string; icon: IconName; hint: string; local?: true }[] = [
   { id: 'port', label: 'Порт', icon: 'link', hint: 'Открыт ли TCP-порт' },
@@ -105,7 +105,7 @@ function From({
 /**
  * Одна сторона сравнения: где лежит файл и какой.
  *
- * Выбор машины и путь стоят рядом не для красоты — путь без указания машины ничего не
+ * Выбор машины и путь стоят рядом не для красоты - путь без указания машины ничего не
  * значит, а `/etc/nginx/nginx.conf` есть на каждом сервере и везде разный.
  */
 function DiffSide({
@@ -121,7 +121,7 @@ function DiffSide({
 }): JSX.Element {
   const [picking, setPicking] = useState(false)
 
-  // Набранный руками путь — способ ошибиться дважды: опечататься и не заметить, что файла
+  // Набранный руками путь - способ ошибиться дважды: опечататься и не заметить, что файла
   // там нет. «Не удалось прочитать» в ответ на это не объясняет ничего.
   const pick = async (): Promise<void> => {
     if (value.sessionId) {
@@ -183,7 +183,7 @@ function DiffSide({
 export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): JSX.Element {
   const [tab, setTab] = useState<Tab>('port')
   // Одна на обе вкладки: человек обычно разбирается с одним сервером за раз.
-  // Сессия могла отвалиться, пока окно было закрыто, — тогда возвращаемся к своей машине,
+  // Сессия могла отвалиться, пока окно было закрыто, - тогда возвращаемся к своей машине,
   // иначе выбор указывал бы на то, чего уже нет.
   const [from, setFrom] = useState<string>(() =>
     defaultFrom && connectedSessions.some((s) => s.sessionId === defaultFrom) ? defaultFrom : HERE
@@ -254,7 +254,7 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
                 onClick={() => {
                   setTab(t.id)
                   // Ответ прошлой утилиты рядом с формой следующей читался бы как её
-                  // собственный — чистим вместе с переключением.
+                  // собственный - чистим вместе с переключением.
                   setError(null)
                   setOut(null)
                 }}
@@ -323,8 +323,8 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
             </div>
             <From value={from} onChange={setFrom} sessions={connectedSessions} />
             <p className="hint">
-              За раз — не больше 1024 портов. С сервера проверки идут по очереди, поэтому там
-              диапазон лучше держать узким: сотня закрытых портов — это около полутора минут.
+              За раз - не больше 1024 портов. С сервера проверки идут по очереди, поэтому там
+              диапазон лучше держать узким: сотня закрытых портов - это около полутора минут.
             </p>
             <button
               className="primary"
@@ -358,7 +358,7 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
             <p className="hint">
               Маршрут строит системная программа: <code>tracert</code> на Windows,
               <code> traceroute</code> на юниксах. На минимальных серверах её может не быть
-              вовсе — тогда это будет сказано прямо, а не показано пустым списком.
+              вовсе - тогда это будет сказано прямо, а не показано пустым списком.
             </p>
             <button
               className="primary"
@@ -398,7 +398,7 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
             <From value={from} onChange={setFrom} sessions={connectedSessions} />
             <p className="hint">
               Со своей машины запрос идёт своими силами, и каждый переход по редиректу виден
-              отдельным шагом. С сервера — через <code>curl</code> или <code>wget</code>, и там
+              отдельным шагом. С сервера - через <code>curl</code> или <code>wget</code>, и там
               будет только итог: чужими программами цепочку не разложить.
             </p>
             <button
@@ -470,7 +470,7 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
             </label>
             <div className="row">
               <label style={{ flex: 1 }}>
-                Учётная запись (пусто — анонимно)
+                Учётная запись (пусто - анонимно)
                 <input value={ldapDn} onChange={(e) => setLdapDn(e.target.value)} placeholder="cn=admin,dc=example,dc=com" />
               </label>
               <label style={{ flex: 1 }}>
@@ -490,7 +490,7 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
             </div>
             <p className="hint">
               Запрос идёт <b>с этой машины</b>, выбора «откуда» здесь нет: готовый клиент
-              каталога не умеет работать через SSH-канал. Показываются первые 50 записей —
+              каталога не умеет работать через SSH-канал. Показываются первые 50 записей -
               каталог организации отдаёт их тысячами.
             </p>
             <button
@@ -518,7 +518,7 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
             <DiffSide label="Первый файл" value={diffA} onChange={setDiffA} sessions={connectedSessions} />
             <DiffSide label="Второй файл" value={diffB} onChange={setDiffB} sessions={connectedSessions} />
             <p className="hint">
-              Каждая сторона — эта машина или любой подключённый сервер. Смысл именно в этом:
+              Каждая сторона - эта машина или любой подключённый сервер. Смысл именно в этом:
               вопрос обычно звучит как «тот же ли конфиг на двух серверах» или «доехала ли
               правка», а не «сравни два файла у себя».
             </p>
@@ -580,7 +580,7 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
         {error && <p className="tools-error">{error}</p>}
         {out != null && <JsonOut value={out} />}
 
-        {/* Кнопка закрытия — только у модального варианта. У вкладки для этого есть
+        {/* Кнопка закрытия - только у модального варианта. У вкладки для этого есть
             крестик в общей полосе, и вторая такая же рядом только путала бы. */}
         {onClose && (
           <div className="modal-actions">

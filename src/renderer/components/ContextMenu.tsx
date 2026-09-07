@@ -43,7 +43,7 @@ export function ContextMenu({ x, y, items, onClose }: Props): JSX.Element {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  // Через портал в body: сайдбар — отдельный слой (`position: relative; z-index`),
+  // Через портал в body: сайдбар - отдельный слой (`position: relative; z-index`),
   // и меню внутри него перекрывалось соседним разделителем панели.
   return createPortal(
     <>

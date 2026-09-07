@@ -7,11 +7,11 @@ export type TunnelType = 'local' | 'remote' | 'dynamic'
 export interface TunnelConfig {
   id: string
   type: TunnelType
-  /** Локальный порт: local/dynamic — слушаем здесь; remote — форвардим сюда. */
+  /** Локальный порт: local/dynamic - слушаем здесь; remote - форвардим сюда. */
   localPort: number
   /** Удалённый хост (только для local). */
   remoteHost?: string
-  /** local — порт цели; remote — порт на сервере, который слушает. */
+  /** local - порт цели; remote - порт на сервере, который слушает. */
   remotePort?: number
   label?: string
 }
@@ -32,7 +32,7 @@ export interface Snippet {
 /** Один промпт keyboard-interactive (2FA/OTP). */
 export interface KIPrompt {
   prompt: string
-  /** true — показывать ввод; false — скрывать (пароль/OTP). */
+  /** true - показывать ввод; false - скрывать (пароль/OTP). */
   echo: boolean
 }
 
@@ -88,28 +88,28 @@ export interface ServerConfig {
   agentForward?: boolean
   /**
    * Отпечаток ключа из агента (`SHA256:…`), которым подключаться.
-   * Пусто — перебирать все ключи агента подряд.
+   * Пусто - перебирать все ключи агента подряд.
    */
   agentKey?: string
   /**
    * Внешняя программа-посредник вместо прямого TCP (как `ProxyCommand` в ssh_config).
-   * Токены: `%h` — хост, `%p` — порт, `%r` — пользователь.
-   * Игнорируется, если задан `proxyJump` — тот идёт первым, как в OpenSSH.
+   * Токены: `%h` - хост, `%p` - порт, `%r` - пользователь.
+   * Игнорируется, если задан `proxyJump` - тот идёт первым, как в OpenSSH.
    */
   proxyCommand?: string
   /** Сжимать трафик (zlib). Помогает на медленном канале, грузит процессор. */
   sshCompression?: boolean
   /**
    * Разрешить устаревшие алгоритмы (`diffie-hellman-group1-sha1`, CBC, `3des-cbc`, `ssh-rsa`).
-   * Нужно для старых коммутаторов и прошивок; современный сервер это не ослабляет —
+   * Нужно для старых коммутаторов и прошивок; современный сервер это не ослабляет -
    * старые наборы идут последними в списке предпочтений.
    */
   sshLegacyAlgos?: boolean
-  /** Позиция в списке внутри своей группы. Меньше — выше. */
+  /** Позиция в списке внутри своей группы. Меньше - выше. */
   order?: number
   /** Метки для поиска и быстрых фильтров: хранятся в нижнем регистре, без повторов. */
   tags?: string[]
-  /** Избранное — такие серверы поднимаются отдельной секцией наверх списка. */
+  /** Избранное - такие серверы поднимаются отдельной секцией наверх списка. */
   favorite?: boolean
   /**
    * Метка среды. Нужна не для подключения, а чтобы «прод» был видно до того, как в него
@@ -123,7 +123,7 @@ export interface ServerConfig {
   /**
    * Что уходит на сервер по Enter в telnet вне двоичного режима.
    * По RFC 854 это `CR LF`, он и стоит по умолчанию; часть железа ждёт `CR NUL`
-   * или голый `CR` — на неверном варианте получаются двойные переводы строки
+   * или голый `CR` - на неверном варианте получаются двойные переводы строки
    * либо команда, которая не выполняется.
    */
   telnetEol?: 'crlf' | 'cr-nul' | 'cr'
@@ -134,7 +134,7 @@ export interface HostKeyRequest {
   /** Сессия, к которой относится вопрос. */
   id: string
   requestId: string
-  /** `host:port` — как хранится в known_hosts. */
+  /** `host:port` - как хранится в known_hosts. */
   host: string
   fingerprint: string
   /** Прежний отпечаток; пусто, если хост встречается впервые. */
@@ -232,7 +232,7 @@ export interface SessionExit {
   code?: number | null
   signal?: string | null
   error?: string
-  /** user — сами закрыли вкладку/панель; drop — обрыв канала. */
+  /** user - сами закрыли вкладку/панель; drop - обрыв канала. */
   reason?: 'user' | 'drop'
   /** На каком шаге SSH произошёл сбой (если известно). */
   phase?: SessionFailurePhase
@@ -271,7 +271,7 @@ export interface SftpEntry {
 export interface SftpListResult {
   path: string
   entries: SftpEntry[]
-  /** SFTP или SCP — какой протокол выбран для этой сессии. */
+  /** SFTP или SCP - какой протокол выбран для этой сессии. */
   backend?: 'sftp' | 'scp'
 }
 
@@ -425,11 +425,11 @@ export interface ServerMetrics {
   dockerAvailable?: boolean
   dockerRunning?: number
   dockerStopped?: number
-  /** Откуда снят замер: `windows` — значит средней загрузки нет и рисовать её нельзя. */
+  /** Откуда снят замер: `windows` - значит средней загрузки нет и рисовать её нельзя. */
   platform?: string
   /** Что именно меряет `diskPct`: в Linux корень, в Windows системный том. */
   diskLabel?: string
-  /** Все тома. Windows отдаёт их списком — у сервера редко один диск. */
+  /** Все тома. Windows отдаёт их списком - у сервера редко один диск. */
   volumes?: { mount: string; sizeKb: number; usedKb: number; usePct: number; fs?: string }[]
 }
 
@@ -437,13 +437,13 @@ export interface ServerMetrics {
  * Железо сервера: собирается один раз за сессию, дальше не меняется.
  *
  * Почти все поля необязательные, и это не небрежность: узнать их получается не везде.
- * Скорость памяти, например, лежит в таблицах DMI и без прав root недоступна — тогда
+ * Скорость памяти, например, лежит в таблицах DMI и без прав root недоступна - тогда
  * приходит `memWhy` с причиной, чтобы человек не гадал, сломалось приложение или нет.
  */
 export interface ServerHardware {
   cpu?: string
   cores?: number
-  /** Показывается только когда потоков больше ядер — иначе это то же число дважды. */
+  /** Показывается только когда потоков больше ядер - иначе это то же число дважды. */
   threads?: number
   mhz?: number
   gpus: { name: string; driver: string | null }[]
@@ -460,11 +460,11 @@ export interface ServerHardware {
 /** Содержимое удалённого файла для встроенного редактора. */
 export interface RemoteFileContent {
   content: string
-  /** Тип переводов строк исходного файла — чтобы сохранить как было. */
+  /** Тип переводов строк исходного файла - чтобы сохранить как было. */
   eol: 'lf' | 'crlf'
   /** POSIX-режим файла (для сохранения прав при записи). */
   mode: number
-  /** mtime сервера в мс — база для детекта внешних изменений. */
+  /** mtime сервера в мс - база для детекта внешних изменений. */
   mtime: number
   /** Файл слишком большой для редактора. */
   tooLarge?: boolean
@@ -521,10 +521,10 @@ export interface AppSettings {
   /**
    * Закрытый контур: приложение не обращается наружу вообще.
    *
-   * Единственный внешний запрос Serein — проверка обновлений. В организациях с изолированной
-   * сетью такой запрос не просто бесполезен: он вызывает вопросы у службы безопасности и
-   * шумит в журналах межсетевого экрана. Флаг выключает и проверку при запуске, и кнопку
-   * в настройках — «не ходить наружу» должно быть проверяемым обещанием, а не намерением.
+   * Единственный внешний запрос Serein - проверка обновлений. В организациях с изолированной
+   * сетью он бесполезен, вызывает вопросы у службы безопасности и шумит в журналах
+   * межсетевого экрана. Флаг выключает и проверку при запуске, и кнопку
+   * в настройках - «не ходить наружу» должно быть проверяемым обещанием, а не намерением.
    */
   offline?: boolean
   /** Параллельных SFTP-файлов (1–8, по умолчанию 4). */
@@ -534,7 +534,7 @@ export interface AppSettings {
    * (только что созданная) исчезала бы до появления в ней первого сервера.
    */
   groupOrder?: string[]
-  /** Свёрнутые группы — чтобы список не разворачивался заново при каждом запуске. */
+  /** Свёрнутые группы - чтобы список не разворачивался заново при каждом запуске. */
   collapsedGroups?: string[]
   /** Показывать скрытые файлы (имя начинается с точки) в SFTP. */
   sftpShowHidden?: boolean
@@ -593,7 +593,7 @@ export function parseWorkspaceTool(v: unknown, _sftpOpen?: boolean): WorkspaceTo
 export interface WorkspaceProcess {
   pid: number
   user: string
-  /** null — система этого не сообщает (у BusyBox `ps` нет колонки загрузки). */
+  /** null - система этого не сообщает (у BusyBox `ps` нет колонки загрузки). */
   cpu: number | null
   mem: number | null
   /** Рабочий набор в байтах: Windows даёт объём, а не долю. */
@@ -619,7 +619,7 @@ export interface SerializedTab {
   workspace?: WorkspaceTool
 }
 
-/** Откреплённое доп. окно (SFTP / логи Docker). Координаты — физические inner. */
+/** Откреплённое доп. окно (SFTP / логи Docker). Координаты - физические inner. */
 export interface SavedAuxWindow {
   kind: 'sftp' | 'dockerLogs'
   serverId: string
@@ -663,7 +663,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 export interface MultiExecResult {
   serverId: string
   name: string
-  /** `done` — команда отработала (код может быть любым), `failed` — не дошли, `skipped` — не стали. */
+  /** `done` - команда отработала (код может быть любым), `failed` - не дошли, `skipped` - не стали. */
   state: 'done' | 'failed' | 'skipped'
   code?: number
   stdout?: string

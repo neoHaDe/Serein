@@ -102,7 +102,7 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
             <>
               <button
                 className="sb-item sb-button"
-                title="Interrupt Process — прервать выполняемую команду"
+                title="Interrupt Process - прервать выполняемую команду"
                 onClick={() => {
                   const id = leaf.sessionId
                   if (id) void window.api.telnet.command(id, 'interrupt').catch(() => {})
@@ -112,7 +112,7 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
               </button>
               <button
                 className="sb-item sb-button"
-                title="Are You There — проверить, отвечает ли сервер"
+                title="Are You There - проверить, отвечает ли сервер"
                 onClick={() => {
                   const id = leaf.sessionId
                   if (id) void window.api.telnet.command(id, 'are-you-there').catch(() => {})
@@ -122,7 +122,7 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
               </button>
               <button
                 className="sb-item sb-button"
-                title="BREAK — на сетевом железе переводит в recovery"
+                title="BREAK - на сетевом железе переводит в recovery"
                 onClick={() => {
                   const id = leaf.sessionId
                   if (id) void window.api.telnet.command(id, 'break').catch(() => {})
@@ -143,7 +143,7 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
           {leaf.status === 'connected' && leaf.sessionId && (
             <button
               className="sb-item sb-button"
-              title="Послать BREAK в линию — им сетевое железо переводят в recovery"
+              title="Послать BREAK в линию - им сетевое железо переводят в recovery"
               onClick={() => {
                 const id = leaf.sessionId
                 if (id) void window.api.serial.sendBreak(id).catch(() => {})
@@ -167,7 +167,7 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
       <span className="sb-spacer" />
       <MinimizedWindowsHint />
       {broadcast && (
-        <span className="sb-item sb-broadcast" title="Broadcast активен — ввод дублируется в панели текущей вкладки">
+        <span className="sb-item sb-broadcast" title="Broadcast активен - ввод дублируется в панели текущей вкладки">
           <Icon name="broadcast" size={13} /> Broadcast{broadcastTargets ? ` → ${broadcastTargets}` : ''}
         </span>
       )}

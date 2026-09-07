@@ -14,7 +14,7 @@ export function useSettings(): SettingsCtx {
 
 export function SettingsProvider({ children }: { children: ReactNode }): JSX.Element {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
-  // Накопленный патч и таймер — чтобы не писать settings.json на каждый тик ползунка.
+  // Накопленный патч и таймер - чтобы не писать settings.json на каждый тик ползунка.
   const pending = useRef<Partial<AppSettings>>({})
   const timer = useRef<ReturnType<typeof setTimeout>>()
 

@@ -11,7 +11,7 @@ const MIN_BACKUP_PASSWORD: usize = 8;
 pub fn export(password: &str) -> Result<String, String> {
     if password.chars().count() < MIN_BACKUP_PASSWORD {
         return Err(format!(
-            "Пароль бэкапа — минимум {MIN_BACKUP_PASSWORD} символов: файл содержит пароли серверов"
+            "Пароль бэкапа - минимум {MIN_BACKUP_PASSWORD} символов: файл содержит пароли серверов"
         ));
     }
     let payload = json!({
@@ -34,8 +34,8 @@ pub fn import(content: &str, password: &str) -> Result<Value, String> {
     let servers = payload.get("servers").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let snippets = payload.get("snippets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let mut keys_remapped = 0usize;
-    // Профиль может нести `proxyCommand` — произвольную команду, которую мы запустим
-    // на этой машине при подключении. Для своего бэкапа это нормально, для чужого —
+    // Профиль может нести `proxyCommand` - произвольную команду, которую мы запустим
+    // на этой машине при подключении. Для своего бэкапа это нормально, для чужого -
     // выполнение чужого кода. Собираем их, чтобы показать человеку, что именно приехало.
     let mut proxy_commands: Vec<Value> = Vec::new();
     for s in &servers {
@@ -71,7 +71,7 @@ pub fn import(content: &str, password: &str) -> Result<Value, String> {
 ///
 /// Бэкап с Windows несёт абсолютный путь вида `C:\Users\…\.ssh\id_ed25519`. На Linux
 /// такого файла нет, и подключение падало на ровном месте. Правим только когда файл
-/// действительно нашёлся: переписать путь на другой, столь же несуществующий, — значит
+/// действительно нашёлся: переписать путь на другой, столь же несуществующий, - значит
 /// соврать пользователю и спрятать причину.
 fn remap_key_path(mut s: Value) -> (Value, bool) {
     let Some(o) = s.as_object_mut() else {

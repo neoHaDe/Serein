@@ -74,7 +74,7 @@ export function gridTemplate(cols: SftpColId[], widths: Record<SftpColId, number
     .join(' ')
 }
 
-/** Расширение; у папки — «папка». */
+/** Расширение; у папки - «папка». */
 export function fileExt(name: string, isDir: boolean): string {
   if (isDir) return 'папка'
   const base = name.includes('/') ? name.slice(name.lastIndexOf('/') + 1) : name

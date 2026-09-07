@@ -209,7 +209,7 @@ export default function App(): JSX.Element {
             <div className="empty-state">
               <h1>Serein</h1>
               <p>
-                Серверов пока нет. Быстрее всего — забрать те, что уже
+                Серверов пока нет. Быстрее всего - забрать те, что уже
                 <br />
                 настроены на этой машине.
               </p>
@@ -248,7 +248,7 @@ export default function App(): JSX.Element {
             const isActive = tab.key === tabsApi.activeKey
             if (tab.kind === 'tools') {
               // Прячем стилем, а не размонтируем: иначе при возврате на вкладку пропали бы
-              // и введённый адрес, и полученный ответ — ровно то, ради чего её открывали.
+              // и введённый адрес, и полученный ответ - ровно то, ради чего её открывали.
               return (
                 <div
                   key={tab.key}

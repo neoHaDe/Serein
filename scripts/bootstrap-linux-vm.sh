@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Подготовка чистой Ubuntu/Astra VM к сборке Serein из ветки linux/port.
 #
-# Запуск (ветка с косой чертой в raw-ссылке не работает — берём через refs/heads):
+# Запуск (ветка с косой чертой в raw-ссылке не работает - берём через refs/heads):
 #   curl -fsSL https://raw.githubusercontent.com/neoHaDe/Serein/refs/heads/linux/port/scripts/bootstrap-linux-vm.sh | bash
 # либо, что надёжнее, склонировать репозиторий и запустить скрипт с диска.
 #
@@ -16,7 +16,7 @@ BRANCH="${SEREIN_BRANCH:-linux/port}"
 DIR="${SEREIN_DIR:-$HOME/Serein}"
 
 echo "==> пакеты"
-# На Astra `apt update` возвращает ненулевой код из-за недоступного репозитория —
+# На Astra `apt update` возвращает ненулевой код из-за недоступного репозитория -
 # это не повод останавливать подготовку.
 sudo apt update || true
 sudo apt install -y openssh-server git curl pkg-config build-essential libssl-dev \
@@ -33,7 +33,7 @@ if [ -n "${SEREIN_AUTHORIZED_KEY:-}" ]; then
     || echo "$SEREIN_AUTHORIZED_KEY" >> ~/.ssh/authorized_keys
   echo "    ключ добавлен в authorized_keys"
 else
-  echo "    SEREIN_AUTHORIZED_KEY не задан — authorized_keys не трогаем"
+  echo "    SEREIN_AUTHORIZED_KEY не задан - authorized_keys не трогаем"
 fi
 sudo systemctl enable --now ssh
 
@@ -60,7 +60,7 @@ if [ -d "$DIR/.git" ]; then
   git -C "$DIR" checkout "$BRANCH"
   git -C "$DIR" pull --ff-only origin "$BRANCH"
 elif [ -e "$DIR" ]; then
-  echo "    $DIR существует и это не репозиторий — уберите его или задайте SEREIN_DIR" >&2
+  echo "    $DIR существует и это не репозиторий - уберите его или задайте SEREIN_DIR" >&2
   exit 1
 else
   git clone -b "$BRANCH" "$REPO" "$DIR"

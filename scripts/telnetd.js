@@ -34,7 +34,7 @@ const server = net.createServer((sock) => {
       switch (state) {
         case 'data':
           if (b === IAC) { state = 'iac'; break }
-          if (b === 13) { // CR — смотрим, что придёт следом
+          if (b === 13) { // CR - смотрим, что придёт следом
             log(`строка: ${JSON.stringify(line)}`)
             sock.write('\r\n> ')
             line = ''
@@ -59,7 +59,7 @@ const server = net.createServer((sock) => {
           break
         case 'verb':
           log(`получил: ${VERB[verb]} ${OPT[b] || b}`)
-          // Согласился сообщать тип терминала — сразу спрашиваем какой.
+          // Согласился сообщать тип терминала - сразу спрашиваем какой.
           if (verb === WILL && b === 24) {
             sock.write(Buffer.from([IAC, SB, 24, 1, IAC, SE]))
             log('послал: SB TTYPE SEND')

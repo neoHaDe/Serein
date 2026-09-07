@@ -13,7 +13,7 @@ describe('перевод клавиш в keysym', () => {
 
   it('кириллица уезжает своими историческими кодами, а не юникодом', () => {
     // X11 держит кириллицу в диапазоне, унаследованном от КОИ-8. Юникод-форму
-    // (0x01000000 + код) понимают не все серверы — старые её игнорируют, и русский текст
+    // (0x01000000 + код) понимают не все серверы - старые её игнорируют, и русский текст
     // не набирается вовсе.
     expect(keysymFor(key('а', 'KeyF'))).toBe(0x6c1)
     expect(keysymFor(key('Ж', 'Semicolon'))).toBe(0x6f6)
@@ -41,7 +41,7 @@ describe('перевод клавиш в keysym', () => {
   })
 
   it('левый и правый модификаторы различаются', () => {
-    // `key` у них одинаковый — различить можно только по `code`.
+    // `key` у них одинаковый - различить можно только по `code`.
     expect(keysymFor(key('Shift', 'ShiftLeft'))).toBe(0xffe1)
     expect(keysymFor(key('Shift', 'ShiftRight'))).toBe(0xffe2)
     expect(keysymFor(key('Control', 'ControlLeft'))).toBe(0xffe3)
@@ -63,7 +63,7 @@ describe('перевод клавиш в keysym', () => {
 
 describe('мышь', () => {
   it('порядок кнопок в RFB не такой, как в браузере', () => {
-    // В браузере 2 — правая, в RFB правая это 4, а 2 — средняя. Перепутать легко.
+    // В браузере 2 - правая, в RFB правая это 4, а 2 - средняя. Перепутать легко.
     expect(buttonMask(1)).toBe(1)
     expect(buttonMask(2)).toBe(4)
     expect(buttonMask(4)).toBe(2)
@@ -71,7 +71,7 @@ describe('мышь', () => {
     expect(buttonMask(0)).toBe(0)
   })
 
-  it('колесо — это кнопки 4 и 5', () => {
+  it('колесо - это кнопки 4 и 5', () => {
     expect(wheelMask(-1)).toBe(8)
     expect(wheelMask(1)).toBe(16)
     expect(wheelMask(0)).toBe(0)

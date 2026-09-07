@@ -10,7 +10,7 @@ interface Props {
   onRename: (from: string, to: string) => void
   onDelete: (group: string) => void
   onCreate: (name: string) => void
-  /** Перенос сервера в группу; пустая строка — вынести из групп. */
+  /** Перенос сервера в группу; пустая строка - вынести из групп. */
   onAssign: (serverId: string, group: string) => void
   onMove: (group: string, dir: -1 | 1) => void
 }

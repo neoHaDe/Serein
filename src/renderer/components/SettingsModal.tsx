@@ -95,7 +95,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
             : ''
           const base = `Импортировано серверов: ${r.servers}, сниппетов: ${r.snippets}${remapped}`
           // `proxyCommand` запускается на этой машине при подключении. Для своего бэкапа
-          // это обычная настройка, для присланного со стороны — чужой код. Молча принимать
+          // это обычная настройка, для присланного со стороны - чужой код. Молча принимать
           // такое нельзя, запрещать тоже: показываем, что именно приехало.
           const proxies = r.proxyCommands ?? []
           if (proxies.length) {
@@ -103,7 +103,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
             setMsg({
               text:
                 `${base}. Внимание: у ${proxies.length} профилей задана команда-посредник, ` +
-                `она выполнится на этом компьютере при подключении — ${list}`,
+                `она выполнится на этом компьютере при подключении - ${list}`,
               ok: false
             })
           } else {
@@ -138,7 +138,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
       return setRecording(null)
     }
     const combo = comboFromEvent(e)
-    if (!combo) return // нажат только модификатор — ждём основную клавишу
+    if (!combo) return // нажат только модификатор - ждём основную клавишу
     setBinding(id, combo)
     setRecording(null)
   }
@@ -224,7 +224,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           Сохранять расположение доп. панелей после перезапуска
         </label>
         <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
-          SFTP в главном окне и откреплённые окна (SFTP, логи) откроются как были: примагниченные — рядом, остальные — на прежних местах.
+          SFTP в главном окне и откреплённые окна (SFTP, логи) откроются как были: примагниченные - рядом, остальные - на прежних местах.
         </div>
 
         <label className="checkbox-row">
@@ -245,7 +245,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           Отдельные кнопки на панели задач для откреплённых окон
         </label>
         <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
-          По умолчанию одна кнопка на панели задач (откреплённые окна без своей иконки). Клик по Serein на панели или кнопка внизу главного окна разворачивает свёрнутые. Галочка — отдельная кнопка у каждого окна. Переоткрой уже откреплённые окна после смены.
+          По умолчанию одна кнопка на панели задач (откреплённые окна без своей иконки). Клик по Serein на панели или кнопка внизу главного окна разворачивает свёрнутые. Галочка - отдельная кнопка у каждого окна. Переоткрой уже откреплённые окна после смены.
         </div>
 
         <label className="checkbox-row">
@@ -257,7 +257,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           Закрытый контур: не обращаться в интернет
         </label>
         <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
-          Единственный внешний запрос Serein — проверка обновлений. Галочка выключает и её, и
+          Единственный внешний запрос Serein - проверка обновлений. Галочка выключает и её, и
           автопроверку при запуске: приложение перестаёт ходить наружу совсем. Обновляться
           придётся вручную, скачивая релиз. Для изолированных сетей, где такой запрос всё
           равно не пройдёт, а в журнале межсетевого экрана останется.
@@ -274,7 +274,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           />
         </label>
         <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
-          Одновременно копируемых файлов. Больше — быстрее папки, тяжелее канал SSH.
+          Одновременно копируемых файлов. Больше - быстрее папки, тяжелее канал SSH.
         </div>
 
         <div className="settings-section">
@@ -380,7 +380,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
             )
           })}
           <div className="settings-row-desc" style={{ marginTop: 4 }}>
-            При записи: Esc — отмена, Backspace — сброс к умолчанию.
+            При записи: Esc - отмена, Backspace - сброс к умолчанию.
           </div>
         </div>
 
@@ -392,7 +392,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
             <div>
               <div className="settings-row-name">Мастер-пароль</div>
               <div className="settings-row-desc">
-                {masterEnabled ? 'Включён — спрашивается при запуске' : 'Доп. шифрование секретов поверх системного'}
+                {masterEnabled ? 'Включён - спрашивается при запуске' : 'Доп. шифрование секретов поверх системного'}
               </div>
             </div>
             {masterEnabled ? (
@@ -406,12 +406,12 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
             <div>
               <div className="settings-row-name">Резервная копия</div>
               {/* Про ключи говорим здесь, а не после неудачного восстановления: файлы ключей
-                  в бэкап не кладём намеренно — он и так несёт пароли, и приватные ключи в том
+                  в бэкап не кладём намеренно - он и так несёт пароли, и приватные ключи в том
                   же файле сильно повышают цену его утечки. */}
               <div className="settings-row-desc">
                 Зашифрованный бэкап серверов, настроек и сниппетов.
                 <br />
-                Файлы SSH-ключей в него не входят — перенесите их отдельно, пути к ним при
+                Файлы SSH-ключей в него не входят - перенесите их отдельно, пути к ним при
                 восстановлении подставятся автоматически.
               </div>
             </div>
@@ -457,7 +457,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
               <div className="settings-row-name">Запомненные отпечатки</div>
               <div className="settings-row-desc">
                 {knownHosts.length
-                  ? `Хостов: ${knownHosts.length}. Забыть — и при следующем подключении ключ спросят заново.`
+                  ? `Хостов: ${knownHosts.length}. Забыть - и при следующем подключении ключ спросят заново.`
                   : 'Пока пусто: отпечаток запоминается после подтверждения при подключении.'}
                 {' '}Можно перенести уже доверенные из <code>~/.ssh/known_hosts</code>.
               </div>
@@ -520,7 +520,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
             </button>
           </div>
 
-          {/* Путь к профилю — не украшение: если приложение запустили из окружения
+          {/* Путь к профилю - не украшение: если приложение запустили из окружения
               с другим HOME (на Linux так бывает при старте из меню), оно молча
               откроет пустой профиль, и по этой строке это видно сразу. */}
           {paths && (

@@ -1,11 +1,11 @@
-//! Native drag-out: мелкие файлы — OLE, крупные/отпущенная мышь — в Загрузки.
+//! Native drag-out: мелкие файлы - OLE, крупные/отпущенная мышь - в Загрузки.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 const TMP_NAME: &str = "serein-dnd";
 const MAX_AGE_SECS: u64 = 24 * 3600;
-/// Держать мышь дольше этого при скачивании нереально — OLE не стартуем.
+/// Держать мышь дольше этого при скачивании нереально - OLE не стартуем.
 pub const OLE_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 pub fn tmp_root() -> PathBuf {

@@ -241,7 +241,7 @@ export function TabBar({
               style={{
                 background:
                   t.kind === 'tools'
-                    ? // У утилит нет ни соединения, ни несохранённых правок — точке
+                    ? // У утилит нет ни соединения, ни несохранённых правок - точке
                       // состояния показывать нечего, поэтому она приглушённая.
                       '#565f89'
                     : t.kind === 'editor'
@@ -382,7 +382,7 @@ export function TabBar({
           <div className="split-control">
             <button
               className={'tool-btn' + (snippetOpen ? ' on' : '')}
-              title="Сниппеты — быстрая вставка команд"
+              title="Сниппеты - быстрая вставка команд"
               onClick={() => setSnippetOpen((v) => !v)}
             >
               <Icon name="snippets" />
@@ -398,7 +398,7 @@ export function TabBar({
         {active && activeLeaf?.sessionId && (
           <button
             className={'tool-btn' + (logging ? ' on' : '')}
-            title={logging ? 'Логирование включено — нажмите, чтобы остановить' : 'Логировать вывод сессии в файл'}
+            title={logging ? 'Логирование включено - нажмите, чтобы остановить' : 'Логировать вывод сессии в файл'}
             onClick={toggleLog}
           >
             <Icon name={logging ? 'log-on' : 'log'} />

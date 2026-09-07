@@ -157,7 +157,7 @@ fn save_imported_server(
     store::servers_save(srv).map(|_| ())
 }
 
-/// MobaXterm: закладка SSH — `#109#0%host%port%user%...`
+/// MobaXterm: закладка SSH - `#109#0%host%port%user%...`
 pub fn parse_mobaxterm_ssh_bookmark(name: &str, val: &str, _group: &str) -> Option<(String, String, u16, String)> {
     if !val.contains("#109#") {
         return None;

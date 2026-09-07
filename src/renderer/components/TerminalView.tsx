@@ -10,7 +10,7 @@ import { errText } from '../errText'
 
 interface Props {
   paneId: string
-  /** Стабильный ключ инстанса (paneId:gen) — переживает split, меняется при reconnect. */
+  /** Стабильный ключ инстанса (paneId:gen) - переживает split, меняется при reconnect. */
   instanceKey: string
   kind: PaneKind
   serverId?: string
@@ -25,7 +25,7 @@ interface Props {
 
 /**
  * Живой терминал, привязанный к инстансу (paneId:gen), а НЕ к монтированию компонента.
- * При split дерево панелей перестраивается и React перемонтирует компонент — но xterm и
+ * При split дерево панелей перестраивается и React перемонтирует компонент - но xterm и
  * SSH/PTY-сессия сохраняются в этом реестре, поэтому уже открытая панель не сбрасывается.
  */
 interface PaneTerm {
@@ -56,7 +56,7 @@ function pasteInto(term: Terminal): void {
   })
 }
 
-/** Правый клик не должен сбрасывать выделение; копирование — через Win32, не navigator.clipboard. */
+/** Правый клик не должен сбрасывать выделение; копирование - через Win32, не navigator.clipboard. */
 function bindTermClipboard(term: Terminal, host: HTMLDivElement): void {
   host.addEventListener(
     'mousedown',
@@ -293,7 +293,7 @@ export function TerminalView({
         if (e.sessionStarted && e.sessionId === attach) return
         e.sessionStarted = true
         e.sessionId = attach
-        // Подключаемся к уже живой сессии — экран у неё есть, а у нового xterm его нет:
+        // Подключаемся к уже живой сессии - экран у неё есть, а у нового xterm его нет:
         // вкладка приехала из другого окна. Сначала проигрываем то, что уже было
         // напечатано, и только потом отдаём живой поток, иначе свежие байты встанут
         // перед историей. Подписываемся при этом сразу, чтобы ничего не потерять.
@@ -378,8 +378,8 @@ export function TerminalView({
       if (e && e.host.parentElement === mount) mount.removeChild(e.host)
       if (e) {
         e.detached = true
-        // Если в этом же commit'е панель перемонтируется (split) — detached снова станет false
-        // и инстанс сохранится. Если это реальное закрытие — освобождаем xterm.
+        // Если в этом же commit'е панель перемонтируется (split) - detached снова станет false
+        // и инстанс сохранится. Если это реальное закрытие - освобождаем xterm.
         setTimeout(() => {
           const cur = registry.get(instanceKey)
           if (cur && cur.detached && !cur.host.isConnected) {
@@ -387,7 +387,7 @@ export function TerminalView({
             cur.offData()
             cur.term.dispose()
             registry.delete(instanceKey)
-            // Закрывать или нет — решает бэкенд по владельцу сессии. Раньше окно решало
+            // Закрывать или нет - решает бэкенд по владельцу сессии. Раньше окно решало
             // это само, по своему набору пометок, и закрывало чужое.
             if (sid) void window.api.session.close(sid)
           }

@@ -16,7 +16,7 @@ pub const CONFIG_DIR_ENV: &str = "SEREIN_CONFIG_DIR";
 /// `SEREIN_CONFIG_DIR` перекрывает выбор по умолчанию. Это нужно в трёх местах, и все
 /// три настоящие: тесты, которым нельзя писать в профиль живого пользователя; портативный
 /// запуск с флешки; закрытый контур, где профиль обязан лежать на заранее оговорённом
-/// пути. Читаем один раз за процесс — иначе половина приложения работала бы с одним
+/// пути. Читаем один раз за процесс - иначе половина приложения работала бы с одним
 /// каталогом, а половина с другим, если переменную поменяют на ходу.
 pub fn config_dir() -> PathBuf {
     static OVERRIDE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
@@ -47,7 +47,7 @@ pub fn config_dir() -> PathBuf {
 
 /// Закрыть каталог профиля от других пользователей машины.
 ///
-/// `create_dir_all` создаёт каталог по umask — обычно это `755`, и на многопользовательской
+/// `create_dir_all` создаёт каталог по umask - обычно это `755`, и на многопользовательской
 /// Linux-машине `servers.json` с хостами, пользователями и `secrets.json` читает кто угодно.
 /// На Windows этой дыры нет: `%APPDATA%` и так закрыт списком доступа, поэтому при переносе
 /// проблема и не проявилась. Ведём себя как OpenSSH со своим `~/.ssh`.
@@ -56,7 +56,7 @@ fn harden(d: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
     let _ = fs::set_permissions(d, fs::Permissions::from_mode(0o700));
     // Файлы, созданные прежними сборками, остались с правами от umask. Каталог `700`
-    // уже закрывает к ним доступ, но оставлять `644` внутри — значит зависеть от того,
+    // уже закрывает к ним доступ, но оставлять `644` внутри - значит зависеть от того,
     // что каталог никто не откроет обратно.
     if let Ok(entries) = fs::read_dir(d) {
         for e in entries.flatten() {
@@ -103,7 +103,7 @@ mod perm_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    /// Профиль хранит хосты, пользователей и секреты — читать его должен только владелец.
+    /// Профиль хранит хосты, пользователей и секреты - читать его должен только владелец.
     /// На многопользовательской машине `755`/`644` от umask отдают всё это соседям.
     #[test]
     fn config_dir_and_files_are_private() {
@@ -231,7 +231,7 @@ fn encrypt_secret(value: &str) -> Option<String> {
 }
 
 /// Отпустить прежний секрет в OS-хранилище перед перезаписью или удалением.
-/// На Windows это пустая операция, на Linux — удаление записи из связки ключей.
+/// На Windows это пустая операция, на Linux - удаление записи из связки ключей.
 fn release_secret(holder: &Value, field: &str) {
     if let Some(s) = holder.get(field).and_then(|v| v.as_str()) {
         os_secrets::forget(s);
@@ -239,7 +239,7 @@ fn release_secret(holder: &Value, field: &str) {
 }
 
 fn decrypt_secret(enc: &str) -> Option<String> {
-    // Префикс `plain:` больше не пишется (см. os_protect) — разбор оставлен только
+    // Префикс `plain:` больше не пишется (см. os_protect) - разбор оставлен только
     // для чтения профилей, сохранённых старыми сборками.
     let v = if let Some(rest) = enc.strip_prefix("plain:") {
         String::from_utf8(STANDARD.decode(rest).ok()?).ok()?
@@ -247,7 +247,7 @@ fn decrypt_secret(enc: &str) -> Option<String> {
         os_secrets::unprotect(enc)?
     };
     if let Some(rest) = v.strip_prefix("mk:") {
-        let mk = vaultkey::get()?; // заблокировано — секрет недоступен
+        let mk = vaultkey::get()?; // заблокировано - секрет недоступен
         crypto::aes_decrypt(rest, &mk).ok()
     } else {
         Some(v)
@@ -261,7 +261,7 @@ fn read_secrets() -> Value {
 pub fn servers_list() -> Vec<Value> {
     list_items("servers.json")
 }
-/// Список серверов БЕЗ секретов — для UI.
+/// Список серверов БЕЗ секретов - для UI.
 pub fn servers_list_safe() -> Vec<Value> {
     servers_list()
         .into_iter()
@@ -278,7 +278,7 @@ pub fn servers_list_safe() -> Vec<Value> {
 /// Перестановка серверов: меняет только группу и позицию, не трогая остальные поля.
 ///
 /// Отдельная операция, а не цикл `servers_save`: тот прогоняет запись через слой секретов,
-/// и перетаскивание мышью каждый раз перешифровывало бы пароли — лишний риск на ровном месте.
+/// и перетаскивание мышью каждый раз перешифровывало бы пароли - лишний риск на ровном месте.
 pub fn servers_reorder(items: &[Value]) -> Result<(), String> {
     let mut servers = list_items("servers.json");
     for patch in items {
@@ -322,7 +322,7 @@ pub fn servers_save(mut cfg: Value) -> Result<Value, String> {
     let base = upsert_item("servers.json", cfg)?;
     let id = base.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-    // Секреты: заданное значение перезаписывает, отсутствие ключа — сохраняет прежнее.
+    // Секреты: заданное значение перезаписывает, отсутствие ключа - сохраняет прежнее.
     let mut secrets = read_secrets();
     let prev = secrets.get(&id).cloned().unwrap_or_else(|| json!({}));
     let mut next = Map::new();
@@ -364,7 +364,7 @@ pub fn servers_delete(id: &str) -> Result<(), String> {
     write_value("secrets.json", &secrets)
 }
 
-/// Полный конфиг сервера ВМЕСТЕ с расшифрованными секретами — только для подключения.
+/// Полный конфиг сервера ВМЕСТЕ с расшифрованными секретами - только для подключения.
 pub fn server_with_secrets(id: &str) -> Option<Value> {
     let mut base = servers_list()
         .into_iter()

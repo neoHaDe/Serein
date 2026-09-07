@@ -20,7 +20,7 @@ pub(crate) const CANCELLED: &str = "Передача отменена";
 pub(crate) const PAUSED: &str = "paused";
 /// Параллельных файлов по умолчанию (роадмап 3.2).
 const TRANSFER_SLOTS: usize = 4;
-/// Верхняя граница пула — не открывать безлимит каналов.
+/// Верхняя граница пула - не открывать безлимит каналов.
 const TRANSFER_MAX: usize = 8;
 
 pub struct XferCtrl {
@@ -226,7 +226,7 @@ impl Default for TransferHub {
 }
 
 impl TransferHub {
-    /// None — такой файл уже в очереди или качается.
+    /// None - такой файл уже в очереди или качается.
     pub fn start(&self, id: &str, session_id: &str, key: String) -> Option<Arc<XferCtrl>> {
         {
             let mut dup = crate::sync::lock(&self.dup);
@@ -348,7 +348,7 @@ async fn open_stream(
 /// Сервер без подсистемы отвечает на запрос отказом канала, но до вызывающего этот отказ
 /// доходит не всегда: рукопожатие SFTP остаётся ждать ответа, которого не будет, и весь
 /// файловый менеджер повисает на «загрузке» вместо перехода на SCP. Поэтому у проверки
-/// свой короткий срок: не дождались — считаем, что подсистемы нет.
+/// свой короткий срок: не дождались - считаем, что подсистемы нет.
 pub async fn probe(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>) -> bool {
     let wait = std::time::Duration::from_secs(SFTP_PROBE_SECS);
     matches!(tokio::time::timeout(wait, open(handle)).await, Ok(Ok(_)))
@@ -383,7 +383,7 @@ pub(crate) fn join_remote(dir: &str, name: &str) -> String {
 /// Проверка удалённого пути перед операцией.
 ///
 /// `list` разрешает путь через `canonicalize` на сервере, а остальные операции работают
-/// с тем, что пришло из UI, — поэтому здесь требуем абсолютный путь без `..` и управляющих
+/// с тем, что пришло из UI, - поэтому здесь требуем абсолютный путь без `..` и управляющих
 /// символов. Иначе одна кривая строка в поле пути уводит удаление или заливку туда,
 /// куда пользователь не смотрел.
 pub fn check_remote_path(p: &str) -> Result<(), String> {
@@ -454,7 +454,7 @@ pub async fn list(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, pa
     Ok(json!({ "path": abs, "entries": entries }))
 }
 
-/// Скачивает один удалённый файл в локальный путь (без событий) — для внешнего редактора.
+/// Скачивает один удалённый файл в локальный путь (без событий) - для внешнего редактора.
 pub async fn download_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str, local: &str) -> Result<(), String> {
     check_remote_path(remote)?;
     let sftp = open(handle).await?;
@@ -480,7 +480,7 @@ pub async fn mkdir(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, p
 /// Насколько глубоко готовы спускаться при удалении каталога.
 ///
 /// Не «побольше на всякий случай»: ограничение защищает от петли из симлинков и от
-/// подсунутого дерева нелепой глубины. Тридцать уровней — заметно больше, чем встречается
+/// подсунутого дерева нелепой глубины. Тридцать уровней - заметно больше, чем встречается
 /// в реальных каталогах, и заведомо меньше, чем нужно, чтобы уйти в бесконечность.
 const MAX_REMOVE_DEPTH: usize = 30;
 
@@ -498,7 +498,7 @@ pub async fn remove(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, 
 ///
 /// Раньше здесь был голый `remove_dir`, который в SFTP работает только на пустом каталоге.
 /// Любая попытка удалить папку с файлами из файлового менеджера заканчивалась протокольным
-/// «Failure: Failure» — сообщением, из которого пользователю не следует ровно ничего.
+/// «Failure: Failure» - сообщением, из которого пользователю не следует ровно ничего.
 ///
 /// Симлинки удаляем как файлы и внутрь НЕ заходим: ссылка на `/etc` не повод снести `/etc`.
 async fn remove_dir_all(sftp: &SftpSession, root: &str) -> Result<(), String> {
@@ -510,7 +510,7 @@ async fn remove_dir_all(sftp: &SftpSession, root: &str) -> Result<(), String> {
     while let Some((dir, depth)) = to_visit.pop() {
         if depth > MAX_REMOVE_DEPTH {
             return Err(format!(
-                "Слишком глубокая вложенность в «{dir}» (больше {MAX_REMOVE_DEPTH} уровней) — удаление остановлено"
+                "Слишком глубокая вложенность в «{dir}» (больше {MAX_REMOVE_DEPTH} уровней) - удаление остановлено"
             ));
         }
         let entries = sftp
@@ -738,7 +738,7 @@ async fn sequential_download(
     Ok(transferred)
 }
 
-/// Несколько SSH_FXP_READ в полёте — иначе download упирается в RTT и на 1 ГБ «замирает».
+/// Несколько SSH_FXP_READ в полёте - иначе download упирается в RTT и на 1 ГБ «замирает».
 async fn pipelined_download(
     ssh: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
     app: Option<&AppHandle>,
@@ -1179,7 +1179,7 @@ async fn ensure_remote_dir(sftp: &SftpSession, dir: &str) -> Result<(), String> 
     Ok(())
 }
 
-// Рекурсивный обход локальной ФС (boxed — рекурсия в async).
+// Рекурсивный обход локальной ФС (boxed - рекурсия в async).
 fn collect_local<'a>(
     local: &'a str,
     remote: &'a str,
@@ -1264,7 +1264,7 @@ mod tests {
         assert!(check_remote_path("/srv/site/docker-compose.yml").is_ok());
         assert!(check_remote_path("/").is_ok());
         assert!(check_remote_path("/home/hade/файл с пробелом.txt").is_ok());
-        // «..» как часть имени — не выход наверх.
+        // «..» как часть имени - не выход наверх.
         assert!(check_remote_path("/srv/..hidden").is_ok());
     }
 

@@ -42,12 +42,12 @@ export const ACTIONS: ActionDef[] = [
 
 const MODIFIER_KEYS = new Set(['Control', 'Alt', 'Shift', 'Meta'])
 
-/** Подмножество полей KeyboardEvent — совместимо и с DOM-, и с React-событием. */
+/** Подмножество полей KeyboardEvent - совместимо и с DOM-, и с React-событием. */
 type KeyComboEvent = Pick<KeyboardEvent, 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey' | 'key'>
 
 /** Превращает событие клавиатуры в каноничную строку, например "Ctrl+Shift+T". */
 export function comboFromEvent(e: KeyComboEvent): string {
-  if (MODIFIER_KEYS.has(e.key)) return '' // нажат только модификатор — ещё не комбинация
+  if (MODIFIER_KEYS.has(e.key)) return '' // нажат только модификатор - ещё не комбинация
   const parts: string[] = []
   if (e.ctrlKey) parts.push('Ctrl')
   if (e.altKey) parts.push('Alt')

@@ -49,7 +49,7 @@ impl LocalSession {
 }
 
 /// Открывает локальный shell. Поток читает вывод PTY и эмитит `session-data`,
-/// по завершении — `session-exit`.
+/// по завершении - `session-exit`.
 pub fn open_local(
     app: AppHandle,
     id: String,

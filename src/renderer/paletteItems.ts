@@ -24,7 +24,7 @@ export interface PaletteActions {
   focusTab: (tabKey: string) => void
 }
 
-/** Пункты командной палитры — чистая сборка, run-колбэки приходят снаружи. */
+/** Пункты командной палитры - чистая сборка, run-колбэки приходят снаружи. */
 export function buildPaletteItems(
   servers: ServerConfig[],
   tabs: Tab[],

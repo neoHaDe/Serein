@@ -1,6 +1,6 @@
 import type { SessionStatus, SerializedPane, PaneKind } from '../shared/types'
 
-/** Лист дерева — один терминал (SSH, локальный или COM-порт). */
+/** Лист дерева - один терминал (SSH, локальный или COM-порт). */
 export interface PaneLeaf {
   type: 'leaf'
   id: string
@@ -14,7 +14,7 @@ export interface PaneLeaf {
   gen: number
 }
 
-/** Разделитель — два потомка по горизонтали (row) или вертикали (col). */
+/** Разделитель - два потомка по горизонтали (row) или вертикали (col). */
 export interface PaneSplit {
   type: 'split'
   id: string
@@ -49,7 +49,7 @@ export function findLeaf(node: PaneNode, id: string): PaneLeaf | undefined {
 
 type LeafPatch = Partial<PaneLeaf> | ((l: PaneLeaf) => Partial<PaneLeaf>)
 
-/** Возвращает новое дерево с применённым патчем к листу по id. patch — объект или функция. */
+/** Возвращает новое дерево с применённым патчем к листу по id. patch - объект или функция. */
 export function updateLeaf(node: PaneNode, id: string, patch: LeafPatch): PaneNode {
   if (node.type === 'leaf') {
     if (node.id !== id) return node
@@ -85,7 +85,7 @@ export function splitLeaf(node: PaneNode, targetId: string, dir: 'row' | 'col', 
   }
 }
 
-/** Удаляет лист; родительский split схлопывается в оставшегося потомка. null — дерево пусто. */
+/** Удаляет лист; родительский split схлопывается в оставшегося потомка. null - дерево пусто. */
 export function removeLeaf(node: PaneNode, targetId: string): PaneNode | null {
   if (node.type === 'leaf') return node.id === targetId ? null : node
   const a = removeLeaf(node.children[0], targetId)

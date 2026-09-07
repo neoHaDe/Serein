@@ -20,7 +20,7 @@ interface Props {
   serverId?: string
   panelTitle?: string
   onClose: () => void
-  /** В рельсе workspace — без попапа и backdrop. */
+  /** В рельсе workspace - без попапа и backdrop. */
   docked?: boolean
   fill?: boolean
   /** После «shell в контейнер» переключить вкладку на Terminal. */

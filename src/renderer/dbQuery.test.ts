@@ -16,7 +16,7 @@ describe('итог запроса', () => {
     expect(summarize(result(21))).toBe('21 строка · 12 мс')
   })
 
-  it('числа от 11 до 14 — исключение, а не правило', () => {
+  it('числа от 11 до 14 - исключение, а не правило', () => {
     // Наивное «n % 10» даёт «11 строка» и «12 строки».
     expect(summarize(result(11))).toBe('11 строк · 12 мс')
     expect(summarize(result(12))).toBe('12 строк · 12 мс')
@@ -57,7 +57,7 @@ describe('предупреждение перед выполнением', () =>
     expect(needsConfirm("DELETE FROM logs -- 'where'")).toMatch(/все строки/)
   })
 
-  it('решётка в MySQL — тоже комментарий', () => {
+  it('решётка в MySQL - тоже комментарий', () => {
     // Иначе на MySQL остаётся открытым тот же обход, который закрыт для остальных баз.
     expect(needsConfirm('DELETE FROM users # WHERE id = 1')).toMatch(/все строки/)
     expect(needsConfirm('UPDATE users SET active = 0 # WHERE id = 1')).toMatch(/все строки/)
@@ -71,7 +71,7 @@ describe('предупреждение перед выполнением', () =>
 
 describe('показ значений', () => {
   it('NULL отличается от пустой строки', () => {
-    // В таблице это разные вещи: пустая строка — значение, NULL — его отсутствие.
+    // В таблице это разные вещи: пустая строка - значение, NULL - его отсутствие.
     expect(cellText(null)).toBe('NULL')
     expect(cellText('')).toBe('')
     expect(isNull(null)).toBe(true)

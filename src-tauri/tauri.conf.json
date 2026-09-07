@@ -52,7 +52,7 @@
     "homepage": "https://github.com/neoHaDe/Serein",
     "licenseFile": "../LICENSE",
     "category": "DeveloperTool",
-    "shortDescription": "Serein — SSH/SFTP workstation",
+    "shortDescription": "Serein - SSH/SFTP workstation",
     "longDescription": "Desktop SSH/SFTP: terminal, files, Docker, tunnels.",
     "windows": {
       "nsis": {

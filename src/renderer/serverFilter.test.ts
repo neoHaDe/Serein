@@ -22,7 +22,7 @@ function srv(p: Partial<ServerConfig>): ServerConfig {
 }
 
 describe('разбор строки поиска', () => {
-  it('пустая строка — пустой фильтр', () => {
+  it('пустая строка - пустой фильтр', () => {
     expect(isEmptyQuery(parseServerQuery('   '))).toBe(true)
   })
 
@@ -35,7 +35,7 @@ describe('разбор строки поиска', () => {
   })
 
   it('ключ без значения не сужает выдачу', () => {
-    // Пользователь ещё печатает «tag:». Спрятать в этот момент все серверы — худшее,
+    // Пользователь ещё печатает «tag:». Спрятать в этот момент все серверы - худшее,
     // что может сделать фильтр: список моргает пустотой на каждом вводе.
     const q = parseServerQuery('tag:')
     expect(q.tags).toEqual([])
@@ -60,12 +60,12 @@ describe('отбор серверов', () => {
   const bare = srv({ id: 'c', name: 'без меток', host: '192.168.1.5' })
   const all = [web, db, bare]
 
-  it('несколько тегов — сервер должен нести все', () => {
+  it('несколько тегов - сервер должен нести все', () => {
     expect(matchesQuery(web, parseServerQuery('tag:web tag:nginx'))).toBe(true)
     expect(matchesQuery(web, parseServerQuery('tag:web tag:db'))).toBe(false)
   })
 
-  it('несколько сред — подходит любая', () => {
+  it('несколько сред - подходит любая', () => {
     expect(filterServers(all, 'env:prod env:stage').map((s) => s.id)).toEqual(['a', 'b'])
   })
 

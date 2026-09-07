@@ -1,6 +1,6 @@
 // Ставит версию сразу везде, где она нужна.
 //
-// Мест два: package.json и src-tauri/Cargo.toml. Третье — tauri.conf.json — теперь
+// Мест два: package.json и src-tauri/Cargo.toml. Третье - tauri.conf.json - теперь
 // ссылается на package.json и правки не требует. Раньше все три правились руками, и
 // разъехаться они могли молча: установщик, «о программе» и апдейтер начинали называть
 // разные версии, а замечалось это уже после публикации. Сборка теперь такое расхождение
@@ -19,19 +19,19 @@ if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) {
   process.exit(1)
 }
 
-// package.json — правим только поле верхнего уровня, не трогая версии зависимостей.
+// package.json - правим только поле верхнего уровня, не трогая версии зависимостей.
 const pkgPath = join(root, 'package.json')
 const pkg = readFileSync(pkgPath, 'utf8')
 const pkgField = /("version"\s*:\s*")[^"]+(")/
 // Проверяем наличие поля, а не факт изменения: если версия уже нужная, текст совпадёт,
-// и «ничего не поменялось» — это успех, а не ошибка.
+// и «ничего не поменялось» - это успех, а не ошибка.
 if (!pkgField.test(pkg)) {
   console.error('не нашёл поле version в package.json')
   process.exit(1)
 }
 writeFileSync(pkgPath, pkg.replace(pkgField, `$1${version}$2`))
 
-// Cargo.toml — только version в секции [package], которая идёт первой.
+// Cargo.toml - только version в секции [package], которая идёт первой.
 const cargoPath = join(root, 'src-tauri', 'Cargo.toml')
 const cargo = readFileSync(cargoPath, 'utf8')
 const cargoField = /^version = "[^"]+"$/m
@@ -42,4 +42,4 @@ if (!cargoField.test(cargo)) {
 writeFileSync(cargoPath, cargo.replace(cargoField, `version = "${version}"`))
 
 console.log(`версия ${version}: package.json, src-tauri/Cargo.toml`)
-console.log('tauri.conf.json трогать не надо — он ссылается на package.json')
+console.log('tauri.conf.json трогать не надо - он ссылается на package.json')

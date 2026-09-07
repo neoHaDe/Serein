@@ -2,7 +2,7 @@
 # Поднять стенд и напечатать переменные, которые ждут тесты.
 #
 # Ключ создаётся здесь, а не лежит в репозитории: приватных ключей в git быть не должно,
-# даже тестовых — секрет-сканеры на них справедливо ругаются, а для проекта, который
+# даже тестовых - секрет-сканеры на них справедливо ругаются, а для проекта, который
 # продаёт безопасность, это лишний разговор.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -21,7 +21,7 @@ docker compose up -d --build
 for port in 2201 2202 2203 2204 2205; do
   echo -n "жду 127.0.0.1:$port "
   for _ in $(seq 1 60); do
-    if printf '' 2>/dev/null >/dev/tcp/127.0.0.1/"$port"; then echo "— готов"; break; fi
+    if printf '' 2>/dev/null >/dev/tcp/127.0.0.1/"$port"; then echo "- готов"; break; fi
     echo -n .
     sleep 1
   done
@@ -34,13 +34,13 @@ for svc in mariadb mysql web ldap; do
   echo -n "жду $svc "
   for _ in $(seq 1 90); do
     state=$(docker compose ps --format '{{.Health}}' "$svc" 2>/dev/null | head -1)
-    if [ "$state" = "healthy" ]; then echo "— готов"; break; fi
+    if [ "$state" = "healthy" ]; then echo "- готов"; break; fi
     echo -n .
     sleep 2
   done
 done
 
-# Ветку каталога образ сам не заводит — создаём её и наполняем примерами. Команда
+# Ветку каталога образ сам не заводит - создаём её и наполняем примерами. Команда
 # идемпотентная по смыслу: на повторном запуске она откажет, и это нормально, ветка уже
 # есть. Без неё поиск возвращал бы «No such object», и тест проверял бы пустоту.
 docker compose exec -T ldap dsconf localhost backend create \
@@ -58,7 +58,7 @@ cat <<VARS
   export SEREIN_STAND_PASSWORD=probe-pass
   export SEREIN_STAND_KEY=$(pwd)/.stand/id_ed25519
   export SEREIN_STAND_ALPINE_INTERNAL=alpine
-  # Базы видны только изнутри сети стенда — по именам сервисов, как и на настоящем сервере.
+  # Базы видны только изнутри сети стенда - по именам сервисов, как и на настоящем сервере.
   export SEREIN_STAND_PG_HOST=postgres
   export SEREIN_STAND_REDIS_HOST=redis
   export SEREIN_STAND_MARIADB_HOST=mariadb

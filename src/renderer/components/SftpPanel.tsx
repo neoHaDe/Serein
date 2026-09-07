@@ -32,7 +32,7 @@ import { errText } from '../errText'
 
 /** Разбивает абсолютный remote-путь на сегменты-крошки: [{label, path}]. */
 function remoteCrumbs(path: string): { label: string; path: string }[] {
-  if (!path.startsWith('/')) return [] // относительный путь (напр. '.') — крошки не строим
+  if (!path.startsWith('/')) return [] // относительный путь (напр. '.') - крошки не строим
   const parts = path.split('/').filter(Boolean)
   const crumbs = [{ label: '/', path: '/' }]
   let acc = ''
@@ -45,7 +45,7 @@ function remoteCrumbs(path: string): { label: string; path: string }[] {
 
 interface Props {
   sessionId: string
-  /** Сервер вкладки — нужен, чтобы после перезапуска снова открыть откреплённое окно. */
+  /** Сервер вкладки - нужен, чтобы после перезапуска снова открыть откреплённое окно. */
   serverId?: string
   onClose: () => void
   width: number
@@ -192,7 +192,7 @@ function ExplorerHead({
           key={id}
           type="button"
           className={'sftp-th' + (sortCol === id ? ' sorted' : '')}
-          title="Сортировка · ПКМ — столбцы"
+          title="Сортировка · ПКМ - столбцы"
           onClick={() => onSort(id)}
         >
           <span className="sftp-th-label">{SFTP_COL_LABEL[id]}</span>
@@ -497,7 +497,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
     }
   }, [colMenu, ctxMenu])
 
-  // Подписка на очередь передач: апдейтим элементы по id, по завершении — обновляем списки.
+  // Подписка на очередь передач: апдейтим элементы по id, по завершении - обновляем списки.
   useEffect(() => {
     const off = window.api.sftp.onTransfer((item) => {
       const now = Date.now()
@@ -755,7 +755,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
   const removeMany = async (items: SftpEntry[]): Promise<void> => {
     if (!items.length) return
     // Каталог удаляется вместе с содержимым, и об этом надо предупредить: одно дело
-    // согласиться на удаление папки, другое — узнать постфактум, что вместе с ней ушло
+    // согласиться на удаление папки, другое - узнать постфактум, что вместе с ней ушло
     // всё, что внутри.
     const dirs = items.filter((i) => i.type === 'dir').length
     const what = items.length === 1 ? `«${items[0].name}»` : `${items.length} элементов`
@@ -1400,7 +1400,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
                 <div className="q-info">
                   <div className="q-name" title={t.error || t.filename}>
                     {t.filename}
-                    {t.state === 'error' && <span className="q-err"> — {t.error}</span>}
+                    {t.state === 'error' && <span className="q-err"> - {t.error}</span>}
                   </div>
                   {(t.state === 'active' || t.state === 'queued' || t.state === 'paused') && (
                     <div className="bar">

@@ -18,9 +18,9 @@ fi
 echo "=== графическое окружение ==="
 for p in xorg-x11-server-Xvfb dbus-x11 ImageMagick; do
   if dnf -y install "$p" >/tmp/dnf.log 2>&1; then
-    echo "  $p — ок"
+    echo "  $p - ок"
   else
-    echo "  $p — НЕ поставился"; tail -3 /tmp/dnf.log; exit 1
+    echo "  $p - НЕ поставился"; tail -3 /tmp/dnf.log; exit 1
   fi
 done
 
@@ -57,7 +57,7 @@ head -25 /tmp/app.log 2>/dev/null || echo "(пусто)"
 echo "=== снимок экрана ==="
 if import -window root /out/fedora-app.png 2>/tmp/import.log; then
   echo "снимок: $(stat -c%s /out/fedora-app.png) байт"
-  # Пустой экран Xvfb — сплошной чёрный и жмётся в считанные килобайты. Нарисованное
+  # Пустой экран Xvfb - сплошной чёрный и жмётся в считанные килобайты. Нарисованное
   # окно даёт заметно больше. Это грубая, но честная проверка «что-то нарисовано».
   # Имя переменной латиницей: кириллические имена bash не принимает, и прошлый прогон
   # из-за этого объявил нарисованный экран пустым.

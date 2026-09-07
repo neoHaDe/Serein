@@ -1,4 +1,4 @@
-//! Windows DPAPI (CryptProtectData) — аналог Electron safeStorage для базового слоя секретов.
+//! Windows DPAPI (CryptProtectData) - аналог Electron safeStorage для базового слоя секретов.
 
 #[cfg(windows)]
 pub fn protect(data: &[u8]) -> Result<Vec<u8>, String> {

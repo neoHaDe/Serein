@@ -110,7 +110,7 @@ export async function openAuxWindow(opts: {
     decorations: false,
     shadow: false,
     // На Windows встроенный перехват перетаскивания глушит HTML5 drag внутри страницы,
-    // а события ОС мы не используем — поэтому выключаем и здесь, как в главном окне.
+    // а события ОС мы не используем - поэтому выключаем и здесь, как в главном окне.
     dragDropEnabled: false,
     skipTaskbar: !auxInTaskbar
   })

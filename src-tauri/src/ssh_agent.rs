@@ -119,7 +119,7 @@ pub fn parse_identities(body: &[u8]) -> Result<Vec<AgentIdentity>, String> {
     for _ in 0..count {
         let blob = take_string(body, &mut pos).ok_or("Обрезанный ключ в ответе SSH-агента")?;
         let comment = take_string(body, &mut pos).ok_or("Обрезанный комментарий в ответе SSH-агента")?;
-        // Первая строка внутри блоба — имя алгоритма («ssh-ed25519», «ssh-rsa», …).
+        // Первая строка внутри блоба - имя алгоритма («ssh-ed25519», «ssh-rsa», …).
         let mut bpos = 0usize;
         let algo = take_string(blob, &mut bpos)
             .map(|a| String::from_utf8_lossy(a).to_string())
@@ -149,7 +149,7 @@ impl AgentIdentity {
     }
 }
 
-/// Ключи, загруженные в локальный агент. Ошибка — если агента нет или он недоступен.
+/// Ключи, загруженные в локальный агент. Ошибка - если агента нет или он недоступен.
 pub async fn list_identities() -> Result<Vec<AgentIdentity>, String> {
     let req = [0, 0, 0, 1, MSG_REQUEST_IDENTITIES];
     let resp = agent_roundtrip(&req).await?;
@@ -168,7 +168,7 @@ pub async fn authenticate_with_agent(
         return Err("В SSH-агенте нет ключей. Добавьте ключ: ssh-add.".into());
     }
 
-    // Профиль может указывать конкретный ключ по отпечатку — тогда не перебираем все
+    // Профиль может указывать конкретный ключ по отпечатку - тогда не перебираем все
     // подряд: лишние попытки на сервере с `MaxAuthTries 2` приводят к отказу ещё до
     // нужного ключа.
     let keys: Vec<_> = match preferred.filter(|p| !p.is_empty()) {
@@ -176,7 +176,7 @@ pub async fn authenticate_with_agent(
             let picked: Vec<_> = keys
                 .into_iter()
                 // `Fingerprint` печатается уже с префиксом `SHA256:`, дописывать его
-                // руками, как раньше, больше не нужно — вышло бы `SHA256:SHA256:…`.
+                // руками, как раньше, больше не нужно - вышло бы `SHA256:SHA256:…`.
                 .filter(|k| k.public_key().fingerprint(Default::default()).to_string() == want)
                 .collect();
             if picked.is_empty() {
@@ -258,7 +258,7 @@ mod tests {
     fn refusal_and_garbage_are_rejected() {
         assert!(parse_identities(&[]).is_err());
         assert!(parse_identities(&[5]).is_err()); // SSH_AGENT_FAILURE
-        // Заявлено 2 ключа, тело содержит один — не паникуем, а сообщаем об обрезке.
+        // Заявлено 2 ключа, тело содержит один - не паникуем, а сообщаем об обрезке.
         let mut truncated = answer(&[("ssh-ed25519", "hade@pc")]);
         truncated[1..5].copy_from_slice(&2u32.to_be_bytes());
         assert!(parse_identities(&truncated).is_err());

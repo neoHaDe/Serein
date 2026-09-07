@@ -21,7 +21,7 @@ function tab(key: string, specs: LeafSpec[]): Tab {
 describe('aggregateServerStatuses', () => {
   it('берёт лучший статус, а не последний встреченный', () => {
     // Сервер открыт дважды: в одной вкладке работает, в другой сорвалось. Точка отвечает
-    // на вопрос «есть ли рабочее соединение», и ответ здесь — да.
+    // на вопрос «есть ли рабочее соединение», и ответ здесь - да.
     const tabs = [
       tab('первая', [{ serverId: 'srv', status: 'error' }]),
       tab('вторая', [{ serverId: 'srv', status: 'connected' }])
@@ -39,7 +39,7 @@ describe('aggregateServerStatuses', () => {
   })
 
   it('закрытую панель не показывает вовсе', () => {
-    // Закрытая панель — это не состояние сервера, а её отсутствие.
+    // Закрытая панель - это не состояние сервера, а её отсутствие.
     const tabs = [tab('a', [{ serverId: 'srv', status: 'closed' }])]
     expect(aggregateServerStatuses(tabs)).toEqual({})
   })

@@ -14,7 +14,7 @@ export function errText(e: unknown): string {
     try {
       return JSON.stringify(e)
     } catch {
-      /* по кругу — отдадим общий текст ниже */
+      /* по кругу - отдадим общий текст ниже */
     }
   }
   return String(e ?? 'Неизвестная ошибка')

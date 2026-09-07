@@ -87,7 +87,7 @@ export function CodeEditor({ sessionId, remotePath, fileName, active, onDirtyCha
         })
         viewRef.current = view
         setPhase('ready')
-        // Хост был display:none во время загрузки — пересчитать размеры после показа.
+        // Хост был display:none во время загрузки - пересчитать размеры после показа.
         requestAnimationFrame(() => {
           view.requestMeasure()
           if (active) view.focus()
@@ -108,7 +108,7 @@ export function CodeEditor({ sessionId, remotePath, fileName, active, onDirtyCha
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, remotePath])
 
-  // При появлении вкладки — пересчитать размеры и вернуть фокус.
+  // При появлении вкладки - пересчитать размеры и вернуть фокус.
   useEffect(() => {
     if (active && viewRef.current) {
       viewRef.current.requestMeasure()
@@ -170,7 +170,7 @@ export function CodeEditor({ sessionId, remotePath, fileName, active, onDirtyCha
       </div>
 
       {phase === 'loading' && <div className="ce-msg">Загрузка файла…</div>}
-      {phase === 'binary' && <div className="ce-msg">Это бинарный файл — откройте его скачиванием.</div>}
+      {phase === 'binary' && <div className="ce-msg">Это бинарный файл - откройте его скачиванием.</div>}
       {phase === 'toolarge' && <div className="ce-msg">Файл слишком большой для встроенного просмотра.</div>}
       {phase === 'error' && <div className="ce-msg error">Ошибка: {msg}</div>}
       {phase === 'image' && imageUrl && (

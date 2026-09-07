@@ -9,7 +9,7 @@ function clampZoom(z: number): number {
   return Math.min(2.2, Math.max(0.7, Math.round(z * 10) / 10))
 }
 
-/** Ctrl/Cmd + колесо, +/-, 0 — как в браузере. Вешается на контейнер. */
+/** Ctrl/Cmd + колесо, +/-, 0 - как в браузере. Вешается на контейнер. */
 export function useCtrlWheelZoom(storageKey: string, fallback = 1): {
   zoom: number
   ref: (el: HTMLElement | null) => void

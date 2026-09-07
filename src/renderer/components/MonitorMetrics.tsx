@@ -78,9 +78,9 @@ function Gauge({ pct, label, detail }: { pct: number; label: string; detail: str
 /**
  * Одна строка средней загрузки.
  *
- * Раньше здесь было голое `0.26` и полоска. Число это — среднее количество задач, которые
+ * Раньше здесь было голое `0.26` и полоска. Число это - среднее количество задач, которые
  * хотели считаться, и само по себе оно не говорит ничего: 0.26 на одноядерной машине это
- * четверть мощности, а на шестнадцати — почти простой. Поэтому теперь сказано прямо:
+ * четверть мощности, а на шестнадцати - почти простой. Поэтому теперь сказано прямо:
  * сколько ядер из скольких занято.
  */
 function LoadRow({
@@ -112,14 +112,14 @@ function LoadRow({
 function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
   const memPct = m.memTotalKb > 0 ? (m.memUsedKb / m.memTotalKb) * 100 : 0
   const memFreeKb = m.memTotalKb > m.memUsedKb ? m.memTotalKb - m.memUsedKb : 0
-  // Средней загрузки в Windows нет как понятия — не «ноль», а нечего показывать.
+  // Средней загрузки в Windows нет как понятия - не «ноль», а нечего показывать.
   const hasLoad = m.platform !== 'windows'
   const diskLabel = 'Диск ' + (m.diskLabel ?? '/')
   // Второй и дальше том показываем отдельно: у сервера редко один диск, и занятость
   // системного ничего не говорит о том, где на самом деле кончается место.
   const extraVolumes = (m.volumes ?? []).filter((v) => v.mount !== m.diskLabel)
   // Гигабайты вместо голого процента: «занято 12%» не отвечает на вопрос, который на
-  // самом деле задают диску, — сколько осталось. У памяти рядом так и показано.
+  // самом деле задают диску, - сколько осталось. У памяти рядом так и показано.
   const mainVolume = (m.volumes ?? []).find((v) => v.mount === m.diskLabel)
   const diskDetail = mainVolume
     ? `${fmtKb(mainVolume.usedKb)} / ${fmtKb(mainVolume.sizeKb)}`
@@ -163,11 +163,11 @@ function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
             </span>
           </div>
           <div className="srv-load-summary">
-            Прямо сейчас занято <b>{m.load[0].toFixed(1)}</b> из {m.cores} —{' '}
+            Прямо сейчас занято <b>{m.load[0].toFixed(1)}</b> из {m.cores} -{' '}
             <span className={'tone-' + loadTone(m.load[0], m.cores)}>
               {loadLabel(m.load[0], m.cores)}
             </span>
-            . Ниже — как было в среднем за минуту, пять и пятнадцать.
+            . Ниже - как было в среднем за минуту, пять и пятнадцать.
           </div>
           <LoadRow label="1 мин" load={m.load[0]} cores={m.cores} />
           <LoadRow label="5 мин" load={m.load[1]} cores={m.cores} />
@@ -203,7 +203,7 @@ function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
  * Карточки железа: процессор, видео, память.
  *
  * Стоят первыми среди карточек не случайно. Когда открываешь незнакомый сервер, первый
- * вопрос — «что это за машина», и только потом «чем она сейчас занята».
+ * вопрос - «что это за машина», и только потом «чем она сейчас занята».
  */
 function HardwareCards({
   hw,
@@ -238,7 +238,7 @@ function HardwareCards({
             <span key={g.name} className="srv-overview-v" title={g.name}>
               {g.name}
               <span className="srv-overview-sub">
-                {/* Незагруженный драйвер — законное состояние, а не ошибка: видео
+                {/* Незагруженный драйвер - законное состояние, а не ошибка: видео
                     работает в базовом режиме, без ускорения. Так и пишем. */}
                 {g.driver ? `драйвер ${g.driver}` : 'драйвер не загружен'}
               </span>
@@ -402,7 +402,7 @@ export function MonitorMetrics({
   onGoTool
 }: {
   sessionId: string
-  /** @deprecated — используй variant="compact" */
+  /** @deprecated - используй variant="compact" */
   compact?: boolean
   variant?: 'default' | 'compact' | 'dashboard'
   showOverviewCards?: boolean
@@ -414,7 +414,7 @@ export function MonitorMetrics({
   const [netRxRate, setNetRxRate] = useState<number | null>(null)
   const [netTxRate, setNetTxRate] = useState<number | null>(null)
   // Железо спрашиваем один раз за сессию: модель процессора не меняется, а метрики
-  // обновляются каждые несколько секунд — тянуть это по таймеру значило бы впустую
+  // обновляются каждые несколько секунд - тянуть это по таймеру значило бы впустую
   // гонять канал. Ошибку не показываем: сведения о железе приятны, но не обязательны,
   // и падать из-за них панели незачем.
   const [hw, setHw] = useState<ServerHardware | null>(null)
@@ -429,7 +429,7 @@ export function MonitorMetrics({
         if (!ушли) setHw(v)
       })
       .catch(() => {
-        /* железо не узнали — панель работает и без него */
+        /* железо не узнали - панель работает и без него */
       })
     return () => {
       ушли = true

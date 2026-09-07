@@ -21,7 +21,7 @@ export const ENV_LABEL: Record<ServerEnv, string> = {
 export interface ServerQuery {
   /** Свободный текст: имя, хост, пользователь, COM-порт. */
   text: string
-  /** Теги: сервер должен нести их все — так фильтр сужается предсказуемо. */
+  /** Теги: сервер должен нести их все - так фильтр сужается предсказуемо. */
   tags: string[]
   /** Среды: подходит любая из перечисленных. */
   envs: ServerEnv[]
@@ -38,7 +38,7 @@ function isEnv(v: string): v is ServerEnv {
  *
  * `tag:web env:prod fav база` → теги `web`, среда `prod`, только избранное, текст «база».
  * Ключ без значения (`tag:`) игнорируется: пользователь ещё печатает, и убирать из выдачи
- * всё подряд на полпути — худшее, что можно сделать.
+ * всё подряд на полпути - худшее, что можно сделать.
  */
 export function parseServerQuery(raw: string): ServerQuery {
   const q: ServerQuery = { text: '', tags: [], envs: [], favoriteOnly: false }
@@ -63,7 +63,7 @@ export function parseServerQuery(raw: string): ServerQuery {
   return q
 }
 
-/** Пустой ли фильтр — то есть показывать ли всё. */
+/** Пустой ли фильтр - то есть показывать ли всё. */
 export function isEmptyQuery(q: ServerQuery): boolean {
   return !q.text && q.tags.length === 0 && q.envs.length === 0 && !q.favoriteOnly
 }
@@ -111,7 +111,7 @@ export function normalizeTags(input: string | string[]): string[] {
   return out
 }
 
-/** Все теги, встречающиеся у серверов — для подсказок и быстрых фильтров. */
+/** Все теги, встречающиеся у серверов - для подсказок и быстрых фильтров. */
 export function collectTags(servers: ServerConfig[]): string[] {
   const seen = new Set<string>()
   for (const s of servers) for (const t of s.tags ?? []) seen.add(t)

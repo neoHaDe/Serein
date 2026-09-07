@@ -1,5 +1,5 @@
 # Минимальный smoke Phase 0.1: фронт компилируется, Rust check проходит.
-# SSH, UI, установщик — не здесь.
+# SSH, UI, установщик - не здесь.
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot

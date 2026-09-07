@@ -37,7 +37,7 @@ function extOf(name: string): string {
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg'])
 
-/** Картинка — превью во вкладке, не скачивание и не текстовый редактор. */
+/** Картинка - превью во вкладке, не скачивание и не текстовый редактор. */
 export function isImageFile(name: string): boolean {
   return IMAGE_EXTS.has(extOf(name))
 }

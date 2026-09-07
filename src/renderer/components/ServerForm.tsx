@@ -71,8 +71,8 @@ function AddTunnelForm({
         <label style={{ flex: 2 }}>
           Тип
           <select value={type} onChange={(e) => setType(e.target.value as TunnelType)}>
-            <option value="local">Local (-L) — локал → удалённый</option>
-            <option value="remote">Remote (-R) — сервер → локал</option>
+            <option value="local">Local (-L) - локал → удалённый</option>
+            <option value="remote">Remote (-R) - сервер → локал</option>
             <option value="dynamic">Dynamic SOCKS5 (-D)</option>
           </select>
         </label>
@@ -182,7 +182,7 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
     }
   }
 
-  // Список тянем только когда он реально нужен — при выборе аутентификации через агент.
+  // Список тянем только когда он реально нужен - при выборе аутентификации через агент.
   useEffect(() => {
     if (authType === 'agent') void loadAgentKeys()
   }, [authType])
@@ -204,7 +204,7 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
       alert('Заполните название')
       return
     }
-    // У COM-порта нет ни хоста, ни пользователя — требуем только имя порта.
+    // У COM-порта нет ни хоста, ни пользователя - требуем только имя порта.
     if (connection === 'serial') {
       if (!serial.port.trim()) {
         alert('Выберите COM-порт')
@@ -302,7 +302,7 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
                   </button>
                 </span>
                 <select value={serial.port} onChange={(e) => patchSerial({ port: e.target.value })}>
-                  <option value="">— Выберите порт —</option>
+                  <option value="">- Выберите порт -</option>
                   {comPorts.map((p) => (
                     <option key={p.port} value={p.port}>
                       {p.port}
@@ -413,7 +413,7 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
             </div>
 
             <div className="agent-hint">
-              Типовая консоль сетевого железа — 9600 8N1 без управления потоком. Платы на CH340
+              Типовая консоль сетевого железа - 9600 8N1 без управления потоком. Платы на CH340
               и подобных часто требуют поднятых DTR/RTS.
             </div>
           </>
@@ -450,16 +450,16 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
                   value={telnetEol}
                   onChange={(e) => setTelnetEol(e.target.value as 'crlf' | 'cr-nul' | 'cr')}
                 >
-                  <option value="crlf">CR LF — по стандарту (подходит почти везде)</option>
-                  <option value="cr-nul">CR NUL — если строки задваиваются</option>
-                  <option value="cr">Только CR — для совсем упрямых железок</option>
+                  <option value="crlf">CR LF - по стандарту (подходит почти везде)</option>
+                  <option value="cr-nul">CR NUL - если строки задваиваются</option>
+                  <option value="cr">Только CR - для совсем упрямых железок</option>
                 </select>
               </label>
             )}
 
             <div className="agent-hint">
               {connection === 'telnet'
-                ? 'Логин и пароль спрашивает сама железка — здесь их указывать негде. Трафик telnet не шифруется: в чужой сети им ходить не стоит.'
+                ? 'Логин и пароль спрашивает сама железка - здесь их указывать негде. Трафик telnet не шифруется: в чужой сети им ходить не стоит.'
                 : 'Байты идут в обе стороны без обработки: ни согласования опций, ни правки перевода строки. Так подключаются к консольным серверам (Cisco и Digi слушают порт 2000+ на каждую линию) и к текстовым протоколам вручную.'}
             </div>
           </>
@@ -539,7 +539,7 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
         <label>
           Подключаться через (jump host / бастион)
           <select value={proxyJump} onChange={(e) => setProxyJump(e.target.value)}>
-            <option value="">— Прямое подключение —</option>
+            <option value="">- Прямое подключение -</option>
             {jumpCandidates.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name} ({s.username}@{s.host})
@@ -559,12 +559,12 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
         </label>
         {proxyJump ? (
           <div className="agent-hint">
-            Не используется: выбран jump-хост, он идёт первым — как в OpenSSH.
+            Не используется: выбран jump-хост, он идёт первым - как в OpenSSH.
           </div>
         ) : (
           proxyCommand.trim() && (
             <div className="agent-hint">
-              Подстановки: <code>%h</code> — хост, <code>%p</code> — порт, <code>%r</code> —
+              Подстановки: <code>%h</code> - хост, <code>%p</code> - порт, <code>%r</code> -
               пользователь. Программа запускается на этом компьютере, её ввод-вывод и служит
               каналом до сервера.
             </div>
@@ -577,7 +577,7 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
             checked={sshCompression}
             onChange={(e) => setSshCompression(e.target.checked)}
           />
-          Сжимать трафик (zlib) — для медленного канала
+          Сжимать трафик (zlib) - для медленного канала
         </label>
 
         <label className="checkbox-row">
@@ -620,13 +620,13 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
                 </button>
               </span>
               <select value={agentKey} onChange={(e) => setAgentKey(e.target.value)}>
-                <option value="">— Любой ключ из агента —</option>
+                <option value="">- Любой ключ из агента -</option>
                 {agentKeys.map((k) => (
                   <option key={k.fingerprint} value={k.fingerprint}>
                     {k.comment || k.algo} · {k.algo} · {k.fingerprint.slice(0, 24)}…
                   </option>
                 ))}
-                {/* Ключ мог быть выбран раньше, а сейчас не загружен в агент —
+                {/* Ключ мог быть выбран раньше, а сейчас не загружен в агент -
                     не теряем настройку сервера молча. */}
                 {agentKey && !agentKeys.some((k) => k.fingerprint === agentKey) && (
                   <option value={agentKey}>{agentKey.slice(0, 24)}… (сейчас не в агенте)</option>

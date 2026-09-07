@@ -60,7 +60,7 @@ describe('фаза сбоя решает, повторять ли', () => {
   const connecting = { kind: 'ssh' as const, status: 'connecting' as const }
 
   it('не повторяет неверный пароль', () => {
-    // Пять попыток с задержками 1–2–4–8–15 с — это шесть неудачных аутентификаций за
+    // Пять попыток с задержками 1–2–4–8–15 с - это шесть неудачных аутентификаций за
     // полминуты: порог типичного fail2ban и блокировки доменной учётной записи.
     expect(shouldScheduleReconnect('connect_fail', connecting, on, undefined, 'auth')).toBe(false)
   })
@@ -108,7 +108,7 @@ describe('обрыв сессии: границы', () => {
   })
 
   it('не повторяет хвост прошлой неудачи', () => {
-    // Панель уже в ошибке или закрыта — это не обрыв рабочего соединения.
+    // Панель уже в ошибке или закрыта - это не обрыв рабочего соединения.
     expect(shouldScheduleReconnect('session_drop', { kind: 'ssh', status: 'error' }, on, drop)).toBe(false)
     expect(shouldScheduleReconnect('session_drop', { kind: 'ssh', status: 'closed' }, on, drop)).toBe(false)
   })

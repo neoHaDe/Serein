@@ -138,7 +138,7 @@ export function TunnelPanel({
                         try {
                           await window.api.tunnel.open(sessionId, t.id)
                         } catch {
-                          /* отмена или ошибка — статус придёт событием */
+                          /* отмена или ошибка - статус придёт событием */
                         }
                         setOpening((prev) => {
                           const next = new Set(prev)

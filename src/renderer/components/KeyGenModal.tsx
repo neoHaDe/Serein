@@ -126,7 +126,7 @@ export function KeyGenModal({ connectedSessions, onClose }: Props): JSX.Element 
               <label>
                 Установить на подключённый сервер (ssh-copy-id)
                 <select value={installTarget} onChange={(e) => setInstallTarget(e.target.value)}>
-                  <option value="">— Выберите сессию —</option>
+                  <option value="">- Выберите сессию -</option>
                   {connectedSessions.map((s) => (
                     <option key={s.sessionId} value={s.sessionId}>
                       {s.title}

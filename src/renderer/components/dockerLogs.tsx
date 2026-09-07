@@ -107,7 +107,7 @@ export function buildErrorReport(text: string, meta?: { host?: string; title?: s
   const errors = text.split('\n').filter((line) => line.trim() && isErrorLine(line))
   const lines = text.split('\n')
   const header = [
-    '# Serein — отчёт по ошибкам',
+    '# Serein - отчёт по ошибкам',
     meta?.title ? `# ${meta.title}` : '',
     meta?.host ? `# Хост: ${meta.host}` : '',
     `# Сформирован: ${new Date().toISOString()}`,

@@ -1,4 +1,4 @@
-# Обычный OpenSSH на Debian — «нормальный» сервер, с которым всё должно работать.
+# Обычный OpenSSH на Debian - «нормальный» сервер, с которым всё должно работать.
 FROM debian:bookworm-slim
 
 RUN apt-get update \

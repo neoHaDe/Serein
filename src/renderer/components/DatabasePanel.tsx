@@ -11,10 +11,10 @@ import { forget, isGone, recall, remember, update } from '../dbMemory'
  *
  * Соединение идёт каналом внутри уже открытой SSH-сессии, поэтому здесь не спрашивают
  * адрес «снаружи»: база слушает петлю сервера, и по умолчанию мы туда и целимся. Правила
- * показа результата и предупреждений живут в `dbQuery.ts` — там же тесты.
+ * показа результата и предупреждений живут в `dbQuery.ts` - там же тесты.
  *
  * Уход на другую вкладку соединение **не рвёт**: оно привязано к SSH-сессии, а не к тому,
- * открыта ли панель. Что показать при возвращении, помнит `dbMemory.ts` — но только внутри
+ * открыта ли панель. Что показать при возвращении, помнит `dbMemory.ts` - но только внутри
  * своего окна. Откреплённая панель живёт в отдельном веб-контексте, и там эта память пуста,
  * поэтому при появлении на пустом месте панель переспрашивает приложение.
  */
@@ -60,7 +60,7 @@ const STARTERS: Record<Kind, { label: string; text: string }[]> = {
 /** Кого подставлять в поле пользователя. У Redis имени обычно нет вовсе. */
 const DEFAULT_USER: Record<Kind, string> = { postgres: 'postgres', mysql: 'root', redis: '' }
 
-/** Подсказки в пустых полях — то же, что подставит бэкенд, если оставить их пустыми. */
+/** Подсказки в пустых полях - то же, что подставит бэкенд, если оставить их пустыми. */
 const DEFAULT_PORT: Record<Kind, number> = { postgres: 5432, mysql: 3306, redis: 6379 }
 const DEFAULT_DB: Record<Kind, string> = { postgres: 'postgres', mysql: 'mysql', redis: '0' }
 
@@ -75,7 +75,7 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
   const [port, setPort] = useState(saved?.form.port ?? '')
   const [user, setUser] = useState(saved?.form.user ?? 'postgres')
   // Пароль намеренно не восстанавливаем: пока соединение живо, он не нужен, а держать
-  // его в памяти дольше формы — плата без выгоды.
+  // его в памяти дольше формы - плата без выгоды.
   const [password, setPassword] = useState('')
   const [database, setDatabase] = useState(saved?.form.database ?? '')
 
@@ -93,7 +93,7 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
    *
    * Это случай откреплённого окна: память модуля там своя и пустая, а база открыта и
    * живёт в приложении. Без этого отделение панели выглядело бы как обрыв связи, хотя
-   * рвать было нечего — и человек полез бы вводить пароль заново.
+   * рвать было нечего - и человек полез бы вводить пароль заново.
    */
   useEffect(() => {
     if (saved) return
@@ -129,7 +129,7 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
   }, [sessionId])
 
   /**
-   * Соединение больше не живо — но не по нашей воле.
+   * Соединение больше не живо - но не по нашей воле.
    *
    * Так бывает, когда SSH-сессия закрылась, пока панель была на другой вкладке: канал
    * жил внутри неё. Держаться за такое соединение значит показывать таблицу, за которой
@@ -140,7 +140,7 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
     forget(sessionId)
     setConnected(null)
     setResult(null)
-    setError('Соединение с базой закрылось вместе с сессией — подключитесь заново')
+    setError('Соединение с базой закрылось вместе с сессией - подключитесь заново')
   }, [sessionId])
 
   const connect = async (): Promise<void> => {
@@ -210,7 +210,7 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
-    // Ctrl+Enter — выполнить: перевод строки в запросе нужен чаще, чем запуск по Enter.
+    // Ctrl+Enter - выполнить: перевод строки в запросе нужен чаще, чем запуск по Enter.
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
       void run()
@@ -287,7 +287,7 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
             </label>
           </div>
           <div className="agent-hint">
-            Подключение идёт внутри этой SSH-сессии: порт наружу открывать не нужно, адрес —
+            Подключение идёт внутри этой SSH-сессии: порт наружу открывать не нужно, адрес -
             такой, каким его видит сам сервер.
           </div>
           {error && <div className="db-error">{error}</div>}

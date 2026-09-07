@@ -20,7 +20,7 @@ const STATUS_DOT: Record<string, string> = {
   error: 'var(--danger)'
 }
 
-/** Псевдогруппа для серверов без группы — всегда последняя в списке. */
+/** Псевдогруппа для серверов без группы - всегда последняя в списке. */
 const UNGROUPED = ''
 const UNGROUPED_TITLE = 'Без группы'
 
@@ -45,7 +45,7 @@ interface Props {
   collapsed?: boolean
   onToggleCollapse?: () => void
   statuses?: Record<string, 'connected' | 'connecting' | 'reconnecting' | 'error'>
-  /** Порядок групп; пустые группы тоже здесь — иначе они бы исчезали. */
+  /** Порядок групп; пустые группы тоже здесь - иначе они бы исчезали. */
   groupOrder: string[]
   collapsedGroups: string[]
   onToggleGroup: (group: string) => void
@@ -57,14 +57,14 @@ interface Props {
   onPatch?: (id: string, patch: Partial<ServerConfig>) => void
   /** Перетаскивание: сервер попал в группу на позицию `index` (в конец, если undefined). */
   onDropServer: (serverId: string, group: string, index?: number) => void
-  /** Новый порядок групп целиком — сайдбар знает, что именно нарисовал. */
+  /** Новый порядок групп целиком - сайдбар знает, что именно нарисовал. */
   onDropGroup: (order: string[]) => void
 }
 
-/** Подпись под именем: у SSH — user@host, у COM-порта — порт и скорость. */
+/** Подпись под именем: у SSH - user@host, у COM-порта - порт и скорость. */
 /** Подсказка строки: к имени и адресу добавляются среда и теги, если они заданы. */
 function serverTooltip(s: ServerConfig): string {
-  const parts = [`${s.name} — ${serverSubtitle(s)}`]
+  const parts = [`${s.name} - ${serverSubtitle(s)}`]
   if (s.env) parts.push(`Среда: ${ENV_LABEL[s.env]}`)
   const tags = s.tags ?? []
   if (tags.length > 0) parts.push(`Теги: ${tags.join(', ')}`)
@@ -76,7 +76,7 @@ function serverSubtitle(s: ServerConfig): string {
     const cfg = s.serial
     return cfg ? `${cfg.port} · ${cfg.baudRate} бод` : 'COM-порт не настроен'
   }
-  // У telnet и сырого TCP пользователя нет — показываем адрес с портом.
+  // У telnet и сырого TCP пользователя нет - показываем адрес с портом.
   if (s.connection === 'telnet') return `telnet ${s.host}:${s.port}`
   if (s.connection === 'raw') return `TCP ${s.host}:${s.port}`
   return `${s.username}@${s.host}`
@@ -87,7 +87,7 @@ interface Row {
   key: string
   kind: 'header' | 'server' | 'empty'
   group: string
-  /** Индекс сервера внутри группы; у заголовков и заглушек — -1. */
+  /** Индекс сервера внутри группы; у заголовков и заглушек - -1. */
   index: number
   /** Координаты в системе содержимого списка (с учётом прокрутки). */
   top: number
@@ -102,7 +102,7 @@ interface Drag {
   index: number
   /** Высота того, что двигаем: на неё расступаются соседи. */
   step: number
-  /** Геометрия элемента на момент захвата — чтобы он точно шёл за курсором. */
+  /** Геометрия элемента на момент захвата - чтобы он точно шёл за курсором. */
   height: number
   top: number
   grabY: number
@@ -151,7 +151,7 @@ export function Sidebar({
   onDropGroup
 }: Props): JSX.Element {
   const [filter, setFilter] = useState('')
-  /** Выделение для групповых действий. Правила — в selection.ts, там же тесты. */
+  /** Выделение для групповых действий. Правила - в selection.ts, там же тесты. */
   const [sel, setSel] = useState<Selection>(EMPTY_SELECTION)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [drag, setDrag] = useState<Drag | null>(null)
@@ -176,11 +176,11 @@ export function Sidebar({
   const movedRef = useRef(false)
 
   const groups = useMemo(() => {
-    // Разбор строки поиска (`tag:`, `env:`, `fav`) живёт в serverFilter — он покрыт тестами.
+    // Разбор строки поиска (`tag:`, `env:`, `fav`) живёт в serverFilter - он покрыт тестами.
     const filtered = filterServers(servers, filter)
 
     const map = new Map<string, ServerConfig[]>()
-    // Пустые группы тоже показываем — иначе только что созданная сразу пропадала бы.
+    // Пустые группы тоже показываем - иначе только что созданная сразу пропадала бы.
     for (const g of groupOrder) map.set(g, [])
     for (const s of filtered) {
       const g = s.group?.trim() || UNGROUPED
@@ -217,7 +217,7 @@ export function Sidebar({
     setSel((prev) => pruneSelection(prev, visibleIds))
   }, [visibleIds])
 
-  // Высота строки сервера — из неё берётся размер подсказки «перетащите сюда».
+  // Высота строки сервера - из неё берётся размер подсказки «перетащите сюда».
   // Считаем по живому списку: она зависит от плотности интерфейса в настройках.
   useLayoutEffect(() => {
     const list = listRef.current
@@ -227,10 +227,10 @@ export function Sidebar({
     if (h > 0) list.style.setProperty('--row-h', `${Math.round(h)}px`)
   }, [servers, collapsed, filter])
 
-  // ——— Перетаскивание ————————————————————————————————————————————————
+  // --- Перетаскивание ------------------------------------------------
   //
   // Порядок в DOM во время перетаскивания не меняется: список переставляется
-  // один раз, при отпускании. Пока тащим — двигаем только картинку через
+  // один раз, при отпускании. Пока тащим - двигаем только картинку через
   // `transform`. Перестройка DOM на каждое движение мыши накладывает анимации
   // друг на друга, и элементы «размазывает» по экрану.
   //
@@ -247,10 +247,10 @@ export function Sidebar({
     )
     if (exact >= 0) return exact
     // В пустой группе щель открываем на месте надписи «перетащите сюда»,
-    // а не под ней — иначе непонятно, куда именно попадёт сервер.
+    // а не под ней - иначе непонятно, куда именно попадёт сервер.
     const empty = rows.findIndex((r) => r.kind === 'empty' && r.group === t.group)
     if (empty >= 0) return empty
-    // В конец группы или в свёрнутую группу — сразу за её последней строкой.
+    // В конец группы или в свёрнутую группу - сразу за её последней строкой.
     let last = -1
     rows.forEach((r, i) => {
       if (r.group === t.group) last = i
@@ -331,12 +331,12 @@ export function Sidebar({
     const d = dragRef.current
     if (!list || !d) return
     const lr = list.getBoundingClientRect()
-    // Список мог прокрутиться — исходная позиция элемента уехала вместе с ним.
+    // Список мог прокрутиться - исходная позиция элемента уехала вместе с ним.
     const top = d.top + lr.top - list.scrollTop
     const want = clientY - d.grabY - top
     const min = lr.top - top
     const max = lr.bottom - d.height - top
-    // Группа может быть выше видимой части списка — тогда зажимать некуда.
+    // Группа может быть выше видимой части списка - тогда зажимать некуда.
     setCarry(max < min ? want : Math.max(min, Math.min(want, max)))
   }, [])
 
@@ -388,7 +388,7 @@ export function Sidebar({
       })
       boxesRef.current = boxes
 
-      // У группы двигается весь блок, у сервера — его строка.
+      // У группы двигается весь блок, у сервера - его строка.
       const own =
         p.kind === 'group'
           ? boxes.find((b) => b.name === p.id)
@@ -404,7 +404,7 @@ export function Sidebar({
         height: own.height,
         top: own.top,
         // Курсор держит элемент за ту же точку, за какую взяли: `own.top - base`
-        // — это экранная координата верха элемента на момент захвата.
+        // - это экранная координата верха элемента на момент захвата.
         grabY: p.y - (own.top - base)
       }
       dragRef.current = d
@@ -444,7 +444,7 @@ export function Sidebar({
       return
     }
     // Где элемент был в момент броска. Список перестроится синхронно, а оттуда
-    // мы доведём его до нового места анимацией — иначе он телепортируется.
+    // мы доведём его до нового места анимацией - иначе он телепортируется.
     const sel =
       d.kind === 'server'
         ? `[data-row="s:${d.id}"]`
@@ -518,7 +518,7 @@ export function Sidebar({
   useEffect(() => () => document.body.classList.remove('row-dragging'), [])
 
   // Список уже перестроен, а элемент только что был в другом месте: ставим его
-  // обратно нулевым кадром и отпускаем — так он доезжает до нового места, а не
+  // обратно нулевым кадром и отпускаем - так он доезжает до нового места, а не
   // прыгает туда. Соседи уже стоят там, где надо: их сдвиг во время перетаскивания
   // равен настоящему изменению вёрстки, поэтому их трогать не нужно.
   useLayoutEffect(() => {
@@ -573,7 +573,7 @@ export function Sidebar({
     e.preventDefault()
     e.stopPropagation()
     // Действие применяется ко всему выделению, только если щёлкнули внутри него.
-    // Правый клик по чужой строке — это работа с ней одной, а не с прошлым выбором.
+    // Правый клик по чужой строке - это работа с ней одной, а не с прошлым выбором.
     const ids = targetsFor(sel, s.id)
     const many = ids.length > 1
     const suffix = many ? ` (${ids.length})` : ''
@@ -585,7 +585,7 @@ export function Sidebar({
         onClick: forEach((id) => onDropServer(id, g))
       }))
     // Метка среды переключается прямо из списка: она нужна раньше, чем кто-то полезет
-    // в форму — чтобы «прод» было видно до того, как в него что-нибудь выполнят.
+    // в форму - чтобы «прод» было видно до того, как в него что-нибудь выполнят.
     const envItems: MenuItem[] = onPatch
       ? [
           ...ENVS.filter((e2) => many || e2 !== s.env).map((e2) => ({
@@ -731,7 +731,7 @@ export function Sidebar({
         onContextMenu={collapsed ? undefined : openPanelMenu}
       >
         {/*
-          Пустой список и пустая выдача фильтра — разные вещи. Раньше на «env:prod» без
+          Пустой список и пустая выдача фильтра - разные вещи. Раньше на «env:prod» без
           подходящих серверов выводилось «Серверов пока нет», и выглядело это так, будто
           профили пропали.
         */}
@@ -746,7 +746,7 @@ export function Sidebar({
 
         {groups.map(([group, items], gi) => {
           const isUngrouped = group === UNGROUPED
-          // В свёрнутой панели заголовков групп нет — если оставить скрытие,
+          // В свёрнутой панели заголовков групп нет - если оставить скрытие,
           // список окажется пустым и до серверов не добраться.
           const folded = !collapsed && collapsedGroups.includes(group)
           const dragged = drag?.kind === 'group' && drag.id === group
@@ -823,7 +823,7 @@ export function Sidebar({
                       }
                       onClick={(e) => {
                         if (movedRef.current) return
-                        // Клик по кнопке строки (звезда, подключение, правка) — это её
+                        // Клик по кнопке строки (звезда, подключение, правка) - это её
                         // действие, а не работа со списком: выделение он менять не должен.
                         if ((e.target as HTMLElement).closest('button')) return
                         if (collapsed) {
@@ -926,7 +926,7 @@ export function Sidebar({
                 </div>
               )}
 
-              {/* В узкой панели заголовков нет — группы разделяем чертой. */}
+              {/* В узкой панели заголовков нет - группы разделяем чертой. */}
               {collapsed && items.length > 0 && <div className="group-divider" />}
             </div>
           )

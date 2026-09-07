@@ -1,5 +1,5 @@
 //! Снимок метрик Linux-сервера одной командой (порт monitor.ts).
-//! P1.3: OS, ядро, сеть, число процессов, упавшие сервисы, Docker — в том же exec.
+//! P1.3: OS, ядро, сеть, число процессов, упавшие сервисы, Docker - в том же exec.
 
 use serde_json::{json, Value};
 
@@ -11,7 +11,7 @@ pub const SAMPLE_CMD: &str = concat!(
     "echo \"D:$(df -P / 2>/dev/null | tail -1 | awk '{print $5}')\"; ",
     // Все смонтированные файловые системы, а не только корень. Отбираем настоящие: без
     // них список тонет в tmpfs, overlay и прочих служебных, которых на сервере с докером
-    // бывает под сотню. Признак простой — устройство начинается с /dev.
+    // бывает под сотню. Признак простой - устройство начинается с /dev.
     "df -PT 2>/dev/null | awk '$2!=\"tmpfs\" && $2!=\"devtmpfs\" && $1 ~ /^\\/dev/ ",
     "{print \"FS:\" $7 \"|\" $3 \"|\" $4 \"|\" $2}'; ",
     "echo \"U:$(cat /proc/uptime 2>/dev/null | awk '{print $1}')\"; ",
@@ -28,7 +28,7 @@ pub const SAMPLE_CMD: &str = concat!(
     "  awk -v d=\"$IF:\" '$1==d {print \"RX:\"$2; print \"TX:\"$10}' /proc/net/dev; ",
     "fi; ",
     // Без systemd строку не печатаем вовсе: «0 упавших служб» там, где служб как понятия
-    // нет, — это не хорошая новость, а выдумка. Панель просто не покажет эту плитку.
+    // нет, - это не хорошая новость, а выдумка. Панель просто не покажет эту плитку.
     "if command -v systemctl >/dev/null 2>&1; then ",
     "  echo \"SF:$(systemctl --failed --no-legend --no-pager 2>/dev/null | wc -l | tr -d ' \\n')\"; ",
     "fi; ",
@@ -112,7 +112,7 @@ pub fn parse(stdout: &str) -> Value {
         }
         let total: u64 = p[1].trim().parse().unwrap_or(0);
         let used: u64 = p[2].trim().parse().unwrap_or(0);
-        // Нулевой размер — это не «пустой диск», а строка, которую мы не разобрали.
+        // Нулевой размер - это не «пустой диск», а строка, которую мы не разобрали.
         if total == 0 {
             continue;
         }
@@ -141,7 +141,7 @@ pub fn parse(stdout: &str) -> Value {
         "memTotalKb": mem_total,
         "memUsedKb": mem_used,
         "diskPct": disk_pct,
-        // Что именно меряет diskPct. У Windows это буква системного тома, здесь — корень.
+        // Что именно меряет diskPct. У Windows это буква системного тома, здесь - корень.
         // Панель по этой метке отличает главный том от остальных и не показывает его дважды.
         "diskLabel": "/",
         "uptimeSec": uptime.round() as u64,

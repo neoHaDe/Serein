@@ -6,7 +6,7 @@ import { errText } from '../errText'
 /**
  * Серверы в сайдбаре: список, CRUD, импорт, группы и порядок.
  *
- * Жило в `App.tsx` вперемешку с вкладками и терминалами. Отдельно — потому что это
+ * Жило в `App.tsx` вперемешку с вкладками и терминалами. Отдельно - потому что это
  * другой домен: профили подключений и их раскладка в списке, без привязки к сессиям.
  */
 
@@ -17,7 +17,7 @@ export interface Operations {
   setServers: React.Dispatch<React.SetStateAction<ServerConfig[]>>
   reloadServers: () => Promise<void>
   saveServer: (cfg: ServerConfig) => Promise<void>
-  /** Точечная правка профиля: избранное, среда, теги — без открытия формы. */
+  /** Точечная правка профиля: избранное, среда, теги - без открытия формы. */
   patchServer: (id: string, patch: Partial<ServerConfig>) => Promise<void>
   deleteServer: (id: string) => Promise<void>
   importServers: (kind: ServerImportKind) => Promise<void>
@@ -102,7 +102,7 @@ export function useOperations(
         alert(
           r.imported
             ? `Импортировано серверов: ${r.imported}`
-            : 'Новых серверов не нашлось — всё уже есть в списке.'
+            : 'Новых серверов не нашлось - всё уже есть в списке.'
         )
       } catch (e) {
         alert(errText(e))
