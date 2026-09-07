@@ -354,3 +354,37 @@ fn базы_закрываются_вместе_со_своей_сессией()
         assert!(db::query(&id, "SELECT 1").await.is_err());
     });
 }
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn открытую_базу_можно_найти_по_сессии() {
+    // Так откреплённое окно узнаёт про соединение: своей памяти у него нет — это
+    // отдельный веб-контекст, — а база открыта и живёт в приложении. Без этого вопроса
+    // отделение панели выглядело бы обрывом связи, хотя рвать было нечего.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let h = ssh::connect_client(vec![s.by_key(s.debian_port)])
+            .await
+            .expect("подключение к серверу");
+        let id = format!("test-{}", uuid::Uuid::new_v4());
+        db::open(
+            id.clone(),
+            "сессия-с-окном",
+            &h,
+            params(Kind::Mysql, &s.mariadb_host, "probe", Some("probe")),
+        )
+        .await
+        .expect("подключение к базе");
+
+        let found = db::for_session("сессия-с-окном").expect("база не нашлась по сессии");
+        assert_eq!(found["id"], id.as_str());
+        assert_eq!(found["kind"], "mysql");
+        assert_eq!(found["port"], 3306);
+
+        // О чужой сессии выдумывать нельзя: там своё окно и, может быть, своя база.
+        assert!(db::for_session("сессия-без-базы").is_none());
+
+        db::close_session("сессия-с-окном");
+        assert!(db::for_session("сессия-с-окном").is_none());
+    });
+}

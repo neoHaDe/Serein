@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon'
 import { WsDetachButton } from './WsDetachButton'
 import { openDetachedWorkspace } from './workspaceWindow'
@@ -14,7 +14,9 @@ import { forget, isGone, recall, remember, update } from '../dbMemory'
  * показа результата и предупреждений живут в `dbQuery.ts` — там же тесты.
  *
  * Уход на другую вкладку соединение **не рвёт**: оно привязано к SSH-сессии, а не к тому,
- * открыта ли панель. Что показать при возвращении, помнит `dbMemory.ts`.
+ * открыта ли панель. Что показать при возвращении, помнит `dbMemory.ts` — но только внутри
+ * своего окна. Откреплённая панель живёт в отдельном веб-контексте, и там эта память пуста,
+ * поэтому при появлении на пустом месте панель переспрашивает приложение.
  */
 
 type Kind = 'postgres' | 'mysql' | 'redis'
@@ -85,6 +87,37 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
 
   const [text, setText] = useState(saved?.text ?? '')
   const [result, setResult] = useState<QueryResult | null>(saved?.result ?? null)
+
+  /**
+   * Подхватывает соединение, о котором панель не знает.
+   *
+   * Это случай откреплённого окна: память модуля там своя и пустая, а база открыта и
+   * живёт в приложении. Без этого отделение панели выглядело бы как обрыв связи, хотя
+   * рвать было нечего — и человек полез бы вводить пароль заново.
+   */
+  useEffect(() => {
+    if (saved) return
+    let ушли = false
+    void window.api.db.current(sessionId).then((live) => {
+      if (ушли || !live) return
+      idRef.current = live.id
+      const shown = { kind: live.kind, host: live.host, port: live.port }
+      setConnected(shown)
+      setHost(live.host)
+      setPort(String(live.port))
+      setKind(live.kind as Kind)
+      remember(sessionId, {
+        connectionId: live.id,
+        info: shown,
+        form: { kind: live.kind, host: live.host, port: String(live.port), user: '', database: '' },
+        text: '',
+        result: null
+      })
+    })
+    return () => {
+      ушли = true
+    }
+  }, [saved, sessionId])
 
   const disconnect = useCallback(() => {
     const id = idRef.current

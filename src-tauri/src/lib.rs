@@ -658,6 +658,15 @@ async fn db_close(id: String) {
     db::close(&id);
 }
 
+/// Что за база уже открыта в этой сессии, если открыта.
+///
+/// Панель спрашивает об этом, когда не помнит ничего сама: в откреплённом окне своя
+/// память, а соединение общее и живёт в приложении.
+#[tauri::command]
+async fn db_current(session_id: String) -> Option<Value> {
+    db::for_session(&session_id)
+}
+
 /// Открывает рабочий стол VNC поверх уже подключённой SSH-сессии.
 ///
 /// Через сессию, а не напрямую, потому что VNC на сервере почти всегда слушает `127.0.0.1`
@@ -1595,7 +1604,7 @@ pub fn run() {
             workspace_processes, workspace_kill, workspace_services, workspace_service_action, workspace_logs,
             workspace_platform,
             vnc_open, vnc_pointer, vnc_key, vnc_refresh, vnc_paste, vnc_close,
-            db_open, db_query, db_close,
+            db_open, db_query, db_close, db_current,
             vault_status, vault_unlock, vault_enable, vault_disable,
             backup_export, backup_import,
             export_text_file,

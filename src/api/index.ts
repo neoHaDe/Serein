@@ -374,7 +374,17 @@ export const api = {
       text: string
     ): Promise<{ columns: string[]; rows: Record<string, unknown>[]; affected: number; ms: number }> =>
       invoke('db_query', { id, text }),
-    close: (id: string): Promise<void> => invoke('db_close', { id })
+    close: (id: string): Promise<void> => invoke('db_close', { id }),
+    /**
+     * Уже открытая база этой сессии, если она есть.
+     *
+     * Спрашиваем приложение, а не свою память: откреплённое окно — отдельный веб-контекст,
+     * и памяти о соединении у него нет, а само соединение живёт и переезд окна переживает.
+     */
+    current: (
+      sessionId: string
+    ): Promise<{ id: string; kind: string; host: string; port: number } | null> =>
+      invoke('db_current', { sessionId })
   },
 
   workspace: {

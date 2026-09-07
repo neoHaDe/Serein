@@ -93,6 +93,10 @@ enum Live {
 /// в карте до конца работы приложения.
 struct Open {
     session_id: String,
+    /// Что показать в шапке: вид базы, адрес и порт. Хранится здесь, потому что панель
+    /// в откреплённом окне — это отдельный веб-контекст, и своей памяти о соединении
+    /// у неё нет. Спросить она может только приложение.
+    info: Value,
     live: Live,
 }
 
@@ -199,8 +203,14 @@ pub async fn open(
         }
     };
     let kind = p.kind;
-    with_sessions(|m| m.insert(id.clone(), Open { session_id: session_id.to_string(), live }));
-    Ok(json!({ "id": id, "kind": kind.as_str(), "host": p.host(), "port": p.port() }))
+    let info = json!({ "id": id, "kind": kind.as_str(), "host": p.host(), "port": p.port() });
+    with_sessions(|m| {
+        m.insert(
+            id.clone(),
+            Open { session_id: session_id.to_string(), info: info.clone(), live },
+        )
+    });
+    Ok(info)
 }
 
 /// Выполняет запрос и возвращает таблицу: колонки, строки и сколько это заняло.
@@ -369,6 +379,20 @@ pub fn close_session(session_id: &str) {
     for open in gone {
         drop_in_runtime(open);
     }
+}
+
+/// Открытая база этой сессии, если она есть.
+///
+/// Нужна, когда панель появляется на пустом месте и не помнит ничего: откреплённое окно
+/// — это отдельный веб-контекст со своей памятью, а соединение живёт в приложении и
+/// переезд окна переживает. Без этого вопроса отделение панели выглядело бы как обрыв
+/// связи, хотя рвать было нечего.
+pub fn for_session(session_id: &str) -> Option<Value> {
+    with_sessions(|m| {
+        m.values()
+            .find(|o| o.session_id == session_id)
+            .map(|o| o.info.clone())
+    })
 }
 
 /// Сколько соединений открыто через эту сессию — для тестов и диагностики.
