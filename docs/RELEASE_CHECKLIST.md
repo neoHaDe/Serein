@@ -34,32 +34,46 @@ wrong order. Every item below exists because it has been missed at least once.
 - [ ] `git tag -a vX.Y.Z` and push the tag.
 - [ ] `gh release create vX.Y.Z --notes-file docs/RELEASE_NOTES_vX.Y.Z.md <four artifacts>`.
       Attach the SBOM files as well.
-- [ ] `npm run manifest -- X.Y.Z "заметки"` — signs whatever is unsigned and writes `latest.json`.
-      If the signing step fails with a bare `try '--help'`, the flags are fine: the npm wrapper
-      mangles arguments on Windows. Sign by hand with `npx tauri signer sign` and re-run.
-- [ ] Upload the updater artifacts to our own mirror — the installer and the AppImage, both
-      named exactly as in the manifest:
+- [ ] `npm run manifest -- X.Y.Z "заметки"` — signs whatever is unsigned and writes **two**
+      manifests. If the signing step fails with a bare `try '--help'`, the flags are fine: the
+      npm wrapper mangles arguments on Windows. Sign by hand with `npx tauri signer sign`
+      and re-run.
+
+      Two manifests, because the updater has no per-file fallback: the URL inside a manifest
+      is a single string. What it does support is a **list of manifests**, tried in order.
+      So `latest.json` carries GitHub URLs and `latest.mirror.json` carries ours, and the app
+      falls back from one host to the other. Signatures are identical in both — minisign signs
+      the bytes of the file, not the address it came from.
+
+      GitHub is first: it is faster and does not load the home server. Ours is second, so a
+      blocked or simply unreachable github.com does not stop updates for anyone. That is also
+      the answer to the registry requirement about foreign parties being able to limit the
+      software: there is no single foreign point of control.
+- [ ] Attach the GitHub-flavoured manifest to the release itself — the primary endpoint reads
+      it from there:
 
       ```
-      scp <bundle>/nsis/Serein_X.Y.Z_x64-setup.exe \
-          <bundle>/appimage/Serein_X.Y.Z_amd64.AppImage \
-          hade@192.168.0.156:/mnt/material/site/updates/terminal/
+      gh release upload vX.Y.Z <bundle>/latest.json --clobber
       ```
-
-      The manifest points here, not at GitHub. That is a registry requirement — no foreign
-      party should be able to switch our updates off — and it also survives the days when
-      github.com is unreachable from Russia. GitHub stays as the human-facing release page.
-      The script prints these exact commands, so copy them from its output rather than
-      retyping paths.
+- [ ] Upload the updater artifacts **and** the mirror manifest to our own host — the installer
+      and the AppImage named exactly as in the manifest, the manifest itself renamed to
+      `latest.json`. The script prints these exact commands; copy them from its output rather
+      than retyping paths.
 - [ ] Compare checksums against the local files. A truncated upload still answers `200`, and a
       broken AppImage looks exactly like a working one until somebody installs it.
-- [ ] **Only after the artifacts are actually uploaded**, copy `latest.json` to the site. This is
+- [ ] **Only after the artifacts are actually uploaded**, put the manifests in place. This is
       the step that turns the release on for everyone: a manifest pointing at files that are not
       there yet breaks auto-update for every user at once.
-- [ ] Verify from outside: `curl https://nehade.xyz/updates/terminal/latest.json` shows the new
-      version and both platforms, **and** every URL in it answers `200` with the right size.
-      Keep the previous manifest as `latest.json.<something>.bak` until the new one is confirmed:
-      rolling back is then one `cp`.
+- [ ] Verify **both** endpoints from outside — each shows the new version, and every URL inside
+      answers `200` with the right size:
+
+      ```
+      curl -sL https://github.com/neoHaDe/Serein/releases/latest/download/latest.json
+      curl -s  https://nehade.xyz/updates/terminal/latest.json
+      ```
+
+      Keep the previous mirror manifest as `latest.json.<something>.bak` until the new one is
+      confirmed: rolling back is then one `cp`.
 
 ## After
 
