@@ -9,6 +9,11 @@ pub const SAMPLE_CMD: &str = concat!(
     "echo \"MT:$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}')\"; ",
     "echo \"MA:$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{print $2}')\"; ",
     "echo \"D:$(df -P / 2>/dev/null | tail -1 | awk '{print $5}')\"; ",
+    // Все смонтированные файловые системы, а не только корень. Отбираем настоящие: без
+    // них список тонет в tmpfs, overlay и прочих служебных, которых на сервере с докером
+    // бывает под сотню. Признак простой — устройство начинается с /dev.
+    "df -PT 2>/dev/null | awk '$2!=\"tmpfs\" && $2!=\"devtmpfs\" && $1 ~ /^\\/dev/ ",
+    "{print \"FS:\" $7 \"|\" $3 \"|\" $4 \"|\" $2}'; ",
     "echo \"U:$(cat /proc/uptime 2>/dev/null | awk '{print $1}')\"; ",
     "A=$(head -1 /proc/stat 2>/dev/null); sleep 0.4; B=$(head -1 /proc/stat 2>/dev/null); ",
     "echo \"CA:$A\"; echo \"CB:$B\"; ",
@@ -97,6 +102,29 @@ pub fn parse(stdout: &str) -> Value {
     let net_tx = opt_u64(&get("TX"));
     let failed_services = opt_u32(&get("SF"));
 
+    // Файловые системы: путь монтирования, всего и занято в килобайтах, тип.
+    let mut volumes: Vec<Value> = Vec::new();
+    for line in stdout.lines() {
+        let Some(rest) = line.trim().strip_prefix("FS:") else { continue };
+        let p: Vec<&str> = rest.split('|').collect();
+        if p.len() < 4 {
+            continue;
+        }
+        let total: u64 = p[1].trim().parse().unwrap_or(0);
+        let used: u64 = p[2].trim().parse().unwrap_or(0);
+        // Нулевой размер — это не «пустой диск», а строка, которую мы не разобрали.
+        if total == 0 {
+            continue;
+        }
+        volumes.push(json!({
+            "mount": p[0].trim(),
+            "sizeKb": total,
+            "usedKb": used,
+            "usePct": ((used as f64 / total as f64) * 100.0).round() as u32,
+            "fs": p[3].trim(),
+        }));
+    }
+
     let dr = opt_i32(&get("DR"));
     let de = opt_i32(&get("DE"));
     let (docker_running, docker_stopped, docker_available) = match (dr, de) {
@@ -113,6 +141,9 @@ pub fn parse(stdout: &str) -> Value {
         "memTotalKb": mem_total,
         "memUsedKb": mem_used,
         "diskPct": disk_pct,
+        // Что именно меряет diskPct. У Windows это буква системного тома, здесь — корень.
+        // Панель по этой метке отличает главный том от остальных и не показывает его дважды.
+        "diskLabel": "/",
         "uptimeSec": uptime.round() as u64,
     });
     if !os.is_empty() {
@@ -135,6 +166,9 @@ pub fn parse(stdout: &str) -> Value {
     }
     if let Some(n) = failed_services {
         out["failedServices"] = json!(n);
+    }
+    if !volumes.is_empty() {
+        out["volumes"] = json!(volumes);
     }
     out["dockerAvailable"] = json!(docker_available);
     if let Some(n) = docker_running {
@@ -177,6 +211,30 @@ mod tests {
         assert_eq!(v["dockerRunning"], 3);
         assert_eq!(v["dockerStopped"], 1);
         assert!(v["dockerAvailable"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn файловые_системы_собираются_с_заполненностью() {
+        let sample = concat!(
+            "N:4\nL:0.1 0.1 0.1\nMT:1000\nMA:500\nD:52%\nU:100\nCA:a\nCB:b\n",
+            "FS:/|100000|52000|ext4\n",
+            "FS:/mnt/material|938000000|310000000|ext4\n"
+        );
+        let v = parse(sample);
+        let vol = v["volumes"].as_array().unwrap();
+        assert_eq!(vol.len(), 2);
+        assert_eq!(vol[0]["mount"], "/");
+        assert_eq!(vol[0]["usePct"], 52);
+        assert_eq!(vol[1]["mount"], "/mnt/material");
+        assert_eq!(vol[1]["fs"], "ext4");
+    }
+
+    #[test]
+    fn неразобранная_строка_не_становится_пустым_диском() {
+        // Нулевой размер значит, что строку не разобрали, а вовсе не «диск пустой».
+        // Показать такой том значило бы соврать про сервер.
+        let v = parse("N:1\nL:0 0 0\nMT:1\nMA:1\nD:0%\nU:1\nCA:a\nCB:b\nFS:/x|0|0|ext4\n");
+        assert!(v.get("volumes").is_none());
     }
 
     #[test]

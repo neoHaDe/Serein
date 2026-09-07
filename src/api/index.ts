@@ -36,6 +36,7 @@ import type {
   SerializedTab,
   AuxLayout,
   ServerMetrics,
+  ServerHardware,
   DockerListResult,
   DockerAction,
   DockerStatsResult,
@@ -126,6 +127,8 @@ export const api = {
     claim: (id: string, windowLabel: string): Promise<void> =>
       invoke('session_claim', { id, windowLabel }),
     monitor: (id: string): Promise<ServerMetrics> => invoke('session_monitor', { id }),
+    /** Железо сервера. Спрашивается один раз: оно не меняется, пока сессия жива. */
+    sysinfo: (id: string): Promise<ServerHardware> => invoke('session_sysinfo', { id }),
     logStatus: (id: string): Promise<boolean> => invoke('session_log_status', { id }),
     logToggle: (id: string, title: string): Promise<{ logging: boolean; path?: string }> =>
       invoke('session_log_toggle', { id, title }),

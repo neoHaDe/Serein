@@ -18,6 +18,7 @@ pub mod monitor;
 mod multihost;
 pub mod mysql;
 mod paths;
+pub mod sysinfo;
 mod proxycmd;
 mod schema;
 mod pty;
@@ -95,6 +96,7 @@ impl AppState {
         self.ops.cancel_prefix(&format!("{id}:"));
         term_out::replay_forget(id);
         platform::forget(id);
+        sysinfo_forget(id);
         db::close_session(id);
         self.owners.release(id);
         if let Some(tx) = crate::sync::lock(&self.ki).remove(id) {
@@ -611,6 +613,46 @@ fn session_log_toggle(id: String, title: String) -> Result<Value, String> {
     }
     let path = term_out::log_start(&id, &title)?;
     Ok(json!({ "logging": true, "path": path }))
+}
+
+/// Железо сервера: процессор, видео, память, виртуализация.
+///
+/// Собирается один раз за сессию и запоминается: модель процессора не меняется, а панель
+/// обзора обновляется каждые несколько секунд — спрашивать это по таймеру значило бы
+/// впустую гонять канал.
+#[tauri::command]
+async fn session_sysinfo(state: State<'_, AppState>, id: String) -> Result<Value, String> {
+    if let Some(v) = sysinfo_cached(&id) {
+        return Ok(v);
+    }
+    let s = state.ssh(&id).ok_or("Сессия не подключена")?;
+    let (kind, _) = platform::of_session(&id, &s.handle).await;
+    if kind == platform::Kind::Windows {
+        return Ok(json!({ "gpus": [], "unsupported": "Сведения о железе Windows-сервера пока не читаем" }));
+    }
+    let (_c, out, _e) = ssh::exec(&s.handle, sysinfo::CMD, Some(s.cancel.subscribe())).await?;
+    let v = sysinfo::parse(&out);
+    crate::sync::lock(&SYSINFO)
+        .get_or_insert_with(Default::default)
+        .insert(id, v.clone());
+    Ok(v)
+}
+
+/// Запомненные сведения о железе. Чистятся вместе с сессией.
+static SYSINFO: std::sync::Mutex<Option<std::collections::HashMap<String, Value>>> =
+    std::sync::Mutex::new(None);
+
+fn sysinfo_cached(id: &str) -> Option<Value> {
+    crate::sync::lock(&SYSINFO)
+        .get_or_insert_with(Default::default)
+        .get(id)
+        .cloned()
+}
+
+fn sysinfo_forget(id: &str) {
+    crate::sync::lock(&SYSINFO)
+        .get_or_insert_with(Default::default)
+        .remove(id);
 }
 
 #[tauri::command]
@@ -1754,6 +1796,7 @@ pub fn run() {
             workspace_platform,
             vnc_open, vnc_pointer, vnc_key, vnc_refresh, vnc_paste, vnc_close,
             db_open, db_query, db_close, db_current,
+            session_sysinfo,
             vault_status, vault_unlock, vault_enable, vault_disable,
             backup_export, backup_import,
             export_text_file,

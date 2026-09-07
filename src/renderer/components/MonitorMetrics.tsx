@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ServerMetrics, WorkspaceTool } from '../../shared/types'
+import type { ServerHardware, ServerMetrics, WorkspaceTool } from '../../shared/types'
 import { Icon } from './Icon'
 import { errText } from '../errText'
 
@@ -75,6 +75,14 @@ function Gauge({ pct, label, detail }: { pct: number; label: string; detail: str
   )
 }
 
+/**
+ * Одна строка средней загрузки.
+ *
+ * Раньше здесь было голое `0.26` и полоска. Число это — среднее количество задач, которые
+ * хотели считаться, и само по себе оно не говорит ничего: 0.26 на одноядерной машине это
+ * четверть мощности, а на шестнадцати — почти простой. Поэтому теперь сказано прямо:
+ * сколько ядер из скольких занято.
+ */
 function LoadRow({
   label,
   load,
@@ -89,10 +97,13 @@ function LoadRow({
   return (
     <div className="srv-load-row">
       <span className="srv-load-label">{label}</span>
-      <div className="srv-load-track" title={`${load.toFixed(2)} на ${cores} яд.`}>
+      <div className="srv-load-track" title={`${load.toFixed(2)} задач в среднем на ${cores} ядрах`}>
         <div className={'srv-load-fill tone-' + t} style={{ width: `${Math.min(100, cap)}%` }} />
       </div>
-      <span className="srv-load-num mono">{load.toFixed(2)}</span>
+      <span className="srv-load-num mono">
+        {load.toFixed(2)}
+        <span className="srv-load-of"> из {cores}</span>
+      </span>
       <span className={'srv-load-tag tone-' + t}>{loadLabel(load, cores)}</span>
     </div>
   )
@@ -101,13 +112,18 @@ function LoadRow({
 function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
   const memPct = m.memTotalKb > 0 ? (m.memUsedKb / m.memTotalKb) * 100 : 0
   const memFreeKb = m.memTotalKb > m.memUsedKb ? m.memTotalKb - m.memUsedKb : 0
-  const load1pct = m.cores > 0 ? (m.load[0] / m.cores) * 100 : 0
   // Средней загрузки в Windows нет как понятия — не «ноль», а нечего показывать.
   const hasLoad = m.platform !== 'windows'
   const diskLabel = 'Диск ' + (m.diskLabel ?? '/')
   // Второй и дальше том показываем отдельно: у сервера редко один диск, и занятость
   // системного ничего не говорит о том, где на самом деле кончается место.
   const extraVolumes = (m.volumes ?? []).filter((v) => v.mount !== m.diskLabel)
+  // Гигабайты вместо голого процента: «занято 12%» не отвечает на вопрос, который на
+  // самом деле задают диску, — сколько осталось. У памяти рядом так и показано.
+  const mainVolume = (m.volumes ?? []).find((v) => v.mount === m.diskLabel)
+  const diskDetail = mainVolume
+    ? `${fmtKb(mainVolume.usedKb)} / ${fmtKb(mainVolume.sizeKb)}`
+    : `занято ${m.diskPct}%`
 
   return (
     <div className="srv-dash">
@@ -118,7 +134,7 @@ function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
           pct={memPct}
           detail={`${fmtKb(m.memUsedKb)} / ${fmtKb(m.memTotalKb)}`}
         />
-        <Gauge label={diskLabel} pct={m.diskPct} detail={`занято ${m.diskPct}%`} />
+        <Gauge label={diskLabel} pct={m.diskPct} detail={diskDetail} />
         <div className="srv-dash-summary">
           <div className="srv-dash-summary-row">
             <span className="srv-dash-summary-k">Свободно RAM</span>
@@ -126,9 +142,9 @@ function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
           </div>
           {hasLoad && (
             <div className="srv-dash-summary-row">
-              <span className="srv-dash-summary-k">Load 1m / ядро</span>
+              <span className="srv-dash-summary-k">Занято ядер</span>
               <span className={'srv-dash-summary-v mono tone-' + loadTone(m.load[0], m.cores)}>
-                {load1pct.toFixed(0)}%
+                {m.load[0].toFixed(1)} из {m.cores}
               </span>
             </div>
           )}
@@ -141,8 +157,17 @@ function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
       {hasLoad && (
         <div className="srv-load-block">
           <div className="srv-load-head">
-            <span>Load average</span>
-            <span className="srv-load-hint">100% = по одной задаче на каждое ядро</span>
+            <span>Средняя загрузка</span>
+            <span className="srv-load-hint">
+              сколько ядер из {m.cores} занято работой в среднем
+            </span>
+          </div>
+          <div className="srv-load-summary">
+            Прямо сейчас занято <b>{m.load[0].toFixed(1)}</b> из {m.cores} —{' '}
+            <span className={'tone-' + loadTone(m.load[0], m.cores)}>
+              {loadLabel(m.load[0], m.cores)}
+            </span>
+            . Ниже — как было в среднем за минуту, пять и пятнадцать.
           </div>
           <LoadRow label="1 мин" load={m.load[0]} cores={m.cores} />
           <LoadRow label="5 мин" load={m.load[1]} cores={m.cores} />
@@ -153,6 +178,7 @@ function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
         <div className="srv-load-block">
           <div className="srv-load-head">
             <span>Остальные тома</span>
+            <span className="srv-load-hint">главный показан кольцом выше</span>
           </div>
           {extraVolumes.map((v) => (
             <div className="srv-load-row" key={v.mount}>
@@ -173,13 +199,81 @@ function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
   )
 }
 
+/**
+ * Карточки железа: процессор, видео, память.
+ *
+ * Стоят первыми среди карточек не случайно. Когда открываешь незнакомый сервер, первый
+ * вопрос — «что это за машина», и только потом «чем она сейчас занята».
+ */
+function HardwareCards({
+  hw,
+  memTotalKb
+}: {
+  hw: ServerHardware
+  memTotalKb: number
+}): JSX.Element {
+  const cpuLine = [
+    hw.cores ? `${hw.cores} ядер` : null,
+    hw.threads ? `${hw.threads} потоков` : null,
+    hw.mhz ? `${(hw.mhz / 1000).toFixed(1)} ГГц` : null
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  const memLine = [hw.memType, hw.memSpeed].filter(Boolean).join(' · ')
+
+  return (
+    <>
+      {hw.cpu && (
+        <div className="srv-overview-card">
+          <span className="srv-overview-k">Процессор</span>
+          <span className="srv-overview-v">{hw.cpu}</span>
+          {cpuLine && <span className="srv-overview-sub">{cpuLine}</span>}
+        </div>
+      )}
+      {hw.gpus.length > 0 && (
+        <div className="srv-overview-card">
+          <span className="srv-overview-k">Видео</span>
+          {hw.gpus.map((g) => (
+            <span key={g.name} className="srv-overview-v" title={g.name}>
+              {g.name}
+              <span className="srv-overview-sub">
+                {/* Незагруженный драйвер — законное состояние, а не ошибка: видео
+                    работает в базовом режиме, без ускорения. Так и пишем. */}
+                {g.driver ? `драйвер ${g.driver}` : 'драйвер не загружен'}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="srv-overview-card">
+        <span className="srv-overview-k">Память</span>
+        <span className="srv-overview-v mono">{fmtKb(memTotalKb)}</span>
+        {memLine ? (
+          <span className="srv-overview-sub">{memLine}</span>
+        ) : (
+          hw.memWhy && <span className="srv-overview-sub">скорость: {hw.memWhy}</span>
+        )}
+      </div>
+      {hw.virt && (
+        <div className="srv-overview-card">
+          <span className="srv-overview-k">Виртуализация</span>
+          <span className="srv-overview-v">{hw.virt}</span>
+        </div>
+      )}
+    </>
+  )
+}
+
 function OverviewCards({
   m,
+  hw,
   netRxRate,
   netTxRate,
   onGoTool
 }: {
   m: ServerMetrics
+  hw: ServerHardware | null
   netRxRate: number | null
   netTxRate: number | null
   onGoTool?: (tool: WorkspaceTool) => void
@@ -212,6 +306,7 @@ function OverviewCards({
 
   return (
     <div className="srv-overview-cards">
+      {hw && <HardwareCards hw={hw} memTotalKb={m.memTotalKb} />}
       {(m.os || m.kernel) && (
         <div className="srv-overview-card">
           <span className="srv-overview-k">ОС и ядро</span>
@@ -273,14 +368,26 @@ function Bar({ label, pct, sub }: { label: string; pct: number; sub: string }): 
 
 function MetricsCompact({ m }: { m: ServerMetrics }): JSX.Element {
   const memPct = m.memTotalKb > 0 ? (m.memUsedKb / m.memTotalKb) * 100 : 0
+  const mainVolume = (m.volumes ?? []).find((v) => v.mount === m.diskLabel)
   return (
     <div className="mon-body docked">
       <Bar label="CPU" pct={m.cpuPct} sub={`${m.cpuPct}% · ${m.cores} ядр.`} />
       <Bar label="RAM" pct={memPct} sub={`${fmtKb(m.memUsedKb)} / ${fmtKb(m.memTotalKb)}`} />
-      <Bar label={'Диск ' + (m.diskLabel ?? '/')} pct={m.diskPct} sub={`${m.diskPct}%`} />
+      <Bar
+        label={'Диск ' + (m.diskLabel ?? '/')}
+        pct={m.diskPct}
+        sub={
+          mainVolume
+            ? `${fmtKb(mainVolume.usedKb)} / ${fmtKb(mainVolume.sizeKb)}`
+            : `${m.diskPct}%`
+        }
+      />
       {m.platform !== 'windows' && (
-        <div className="mon-load">
-          Load avg: <b>{m.load[0].toFixed(2)}</b> · {m.load[1].toFixed(2)} · {m.load[2].toFixed(2)}
+        <div className="mon-load" title="Среднее число задач, ждавших процессор, за 1, 5 и 15 минут">
+          Занято ядер: <b>{m.load[0].toFixed(1)}</b> из {m.cores}
+          <span className="mon-load-rest">
+            {' '}· за 5 мин {m.load[1].toFixed(1)} · за 15 мин {m.load[2].toFixed(1)}
+          </span>
         </div>
       )}
     </div>
@@ -306,8 +413,28 @@ export function MonitorMetrics({
   const [fresh, setFresh] = useState(false)
   const [netRxRate, setNetRxRate] = useState<number | null>(null)
   const [netTxRate, setNetTxRate] = useState<number | null>(null)
+  // Железо спрашиваем один раз за сессию: модель процессора не меняется, а метрики
+  // обновляются каждые несколько секунд — тянуть это по таймеру значило бы впустую
+  // гонять канал. Ошибку не показываем: сведения о железе приятны, но не обязательны,
+  // и падать из-за них панели незачем.
+  const [hw, setHw] = useState<ServerHardware | null>(null)
   const aliveRef = useRef(true)
   const prevNetRef = useRef<{ rx?: number; tx?: number; at: number } | null>(null)
+
+  useEffect(() => {
+    let ушли = false
+    void window.api.session
+      .sysinfo(sessionId)
+      .then((v) => {
+        if (!ушли) setHw(v)
+      })
+      .catch(() => {
+        /* железо не узнали — панель работает и без него */
+      })
+    return () => {
+      ушли = true
+    }
+  }, [sessionId])
 
   useEffect(() => {
     aliveRef.current = true
@@ -388,7 +515,7 @@ export function MonitorMetrics({
       {!err && !m && <div className="hint ws-metrics-err">Сбор метрик…</div>}
       {m && (isDashboard ? <MetricsDashboard m={m} /> : <MetricsCompact m={m} />)}
       {m && showOverviewCards && (
-        <OverviewCards m={m} netRxRate={netRxRate} netTxRate={netTxRate} onGoTool={onGoTool} />
+        <OverviewCards m={m} hw={hw} netRxRate={netRxRate} netTxRate={netTxRate} onGoTool={onGoTool} />
       )}
     </div>
   )

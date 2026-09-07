@@ -430,7 +430,31 @@ export interface ServerMetrics {
   /** Что именно меряет `diskPct`: в Linux корень, в Windows системный том. */
   diskLabel?: string
   /** Все тома. Windows отдаёт их списком — у сервера редко один диск. */
-  volumes?: { mount: string; sizeKb: number; usedKb: number; usePct: number }[]
+  volumes?: { mount: string; sizeKb: number; usedKb: number; usePct: number; fs?: string }[]
+}
+
+/**
+ * Железо сервера: собирается один раз за сессию, дальше не меняется.
+ *
+ * Почти все поля необязательные, и это не небрежность: узнать их получается не везде.
+ * Скорость памяти, например, лежит в таблицах DMI и без прав root недоступна — тогда
+ * приходит `memWhy` с причиной, чтобы человек не гадал, сломалось приложение или нет.
+ */
+export interface ServerHardware {
+  cpu?: string
+  cores?: number
+  /** Показывается только когда потоков больше ядер — иначе это то же число дважды. */
+  threads?: number
+  mhz?: number
+  gpus: { name: string; driver: string | null }[]
+  memSpeed?: string
+  memType?: string
+  /** Почему скорость памяти узнать не вышло. */
+  memWhy?: string
+  /** Тип виртуализации. Отсутствует, если сервер железный. */
+  virt?: string
+  /** Система, для которой мы этого пока не умеем. */
+  unsupported?: string
 }
 
 /** Содержимое удалённого файла для встроенного редактора. */
