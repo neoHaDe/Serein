@@ -199,4 +199,9 @@ export function applyUiTheme(name: string): void {
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v)
   // Маркер светлой темы — для редких случаев, где нужно по-разному вести себя на светлом фоне.
   root.dataset.themeMode = dark ? 'dark' : 'light'
+  // Заодно сообщаем движку, какая схема на странице. Часть элементов формы —
+  // выпадающие списки, кольцо фокуса, полосы прокрутки — рисуется не нашими стилями,
+  // а самим движком, и без этой строки он берёт светлые системные. На Linux это видно
+  // сразу: белые списки посреди тёмного окна, одинаково на Astra и на Fedora.
+  root.style.colorScheme = dark ? 'dark' : 'light'
 }
