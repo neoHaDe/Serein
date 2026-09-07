@@ -40,6 +40,14 @@ interface Props {
   onSelect: (tool: WorkspaceTool) => void
   onReconnect: () => void
   onEditServer: () => void
+  /**
+   * Открыть утилиты, уже нацеленные на этот сервер.
+   *
+   * Стоит внизу, среди быстрых действий, а не в списке инструментов выше: там каждая
+   * кнопка переключает панель, а эта открывает окно. Разное поведение — разное место.
+   * Отсутствует в откреплённом окне: окно утилит живёт в главном.
+   */
+  onOpenTools?: () => void
 }
 
 export function WorkspaceRail({
@@ -49,7 +57,8 @@ export function WorkspaceRail({
   tool,
   onSelect,
   onReconnect,
-  onEditServer
+  onEditServer,
+  onOpenTools
 }: Props): JSX.Element {
   const [copied, setCopied] = useState(false)
   const connected = leaf.status === 'connected' && !!leaf.sessionId
@@ -107,6 +116,16 @@ export function WorkspaceRail({
         {host && (
           <button type="button" className="ws-quick-btn" onClick={() => void copyHost()}>
             {copied ? 'Скопировано' : 'Копировать user@host'}
+          </button>
+        )}
+        {onOpenTools && connected && (
+          <button
+            type="button"
+            className="ws-quick-btn"
+            title="Порт, DNS, TLS — с этого сервера"
+            onClick={onOpenTools}
+          >
+            Утилиты…
           </button>
         )}
       </div>

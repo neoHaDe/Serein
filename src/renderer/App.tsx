@@ -35,6 +35,8 @@ export default function App(): JSX.Element {
   const [showSettings, setShowSettings] = useState(false)
   const [showKeyGen, setShowKeyGen] = useState(false)
   const [showTools, setShowTools] = useState(false)
+  // На какой сервер нацелить утилиты при открытии. Пусто — на свою машину.
+  const [toolsFrom, setToolsFrom] = useState<string | undefined>(undefined)
   const [showGroups, setShowGroups] = useState(false)
   const [sftpWidth, setSftpWidth] = useState(380)
   const [sidebarWidth, setSidebarWidth] = useState(270)
@@ -147,7 +149,10 @@ export default function App(): JSX.Element {
         openLocal: tabsApi.openLocalTab,
         openSettings: () => setShowSettings(true),
         openKeyGen: () => setShowKeyGen(true),
-        openTools: () => setShowTools(true),
+        openTools: () => {
+          setToolsFrom(undefined)
+          setShowTools(true)
+        },
         newServer: () => setEditing(null),
         setWorkspace: tabsApi.setWorkspace,
         focusTab: tabsApi.setActiveKey
@@ -166,6 +171,10 @@ export default function App(): JSX.Element {
         onDelete={ops.deleteServer}
         onOpenSettings={() => setShowSettings(true)}
         onOpenKeyGen={() => setShowKeyGen(true)}
+        onOpenTools={() => {
+          setToolsFrom(undefined)
+          setShowTools(true)
+        }}
         onImport={ops.importServers}
         showPuttyImport={showPuttyImport}
         width={sidebarWidth}
@@ -290,6 +299,14 @@ export default function App(): JSX.Element {
                   onSftpResizeStart={startSftpResize}
                   onOpenInEditor={sessionId ? (rp) => tabsApi.openEditorTab(sessionId, rp) : undefined}
                   onDetached={goTerminal}
+                  onOpenTools={
+                    sessionId
+                      ? () => {
+                          setToolsFrom(sessionId)
+                          setShowTools(true)
+                        }
+                      : undefined
+                  }
                   terminal={
                     <PaneView
                       node={tab.root}
@@ -369,7 +386,13 @@ export default function App(): JSX.Element {
         <KeyGenModal connectedSessions={tabsApi.connectedSessions} onClose={() => setShowKeyGen(false)} />
       )}
 
-      {showTools && <ToolsModal onClose={() => setShowTools(false)} />}
+      {showTools && (
+        <ToolsModal
+          connectedSessions={tabsApi.connectedSessions}
+          defaultFrom={toolsFrom}
+          onClose={() => setShowTools(false)}
+        />
+      )}
 
       {prompts.hostKeyQueue.length > 0 && (
         <HostKeyModal request={prompts.hostKeyQueue[0]} onAnswer={prompts.answerHostKey} />

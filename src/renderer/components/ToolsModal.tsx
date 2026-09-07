@@ -3,7 +3,32 @@ import { errText } from '../errText'
 
 type Tab = 'port' | 'dns' | 'tls' | 'subnet' | 'hash' | 'jwt'
 
+interface ConnectedSession {
+  sessionId: string
+  title: string
+}
+
+/**
+ * Откуда выполнять проверку: со своей машины или глазами одного из серверов.
+ *
+ * Различие не косметическое. «Я не вижу этот адрес» и «его не видит сервер» — разные
+ * новости, и при разборе неполадки нужна почти всегда вторая: у сервера свои маршруты,
+ * свой DNS и свой `/etc/hosts`. Утилита, которая умеет только первое, отвечает не на тот
+ * вопрос, который ей задают.
+ */
+const HERE = 'here'
+
 interface Props {
+  /** Живые SSH-сессии: только через них можно спросить сервер. */
+  connectedSessions: ConnectedSession[]
+  /**
+   * С чего начать выбор «откуда».
+   *
+   * У окна две двери. Из общего меню человек ещё не выбрал сервер — начинаем со своей
+   * машины. Из рельсы сервера он его уже выбрал, открыв вкладку, и спрашивать второй раз
+   * незачем: подставляем этот сервер.
+   */
+  defaultFrom?: string
   onClose: () => void
 }
 
@@ -22,8 +47,42 @@ function JsonOut({ value }: { value: unknown }): JSX.Element {
   )
 }
 
-export function ToolsModal({ onClose }: Props): JSX.Element {
+/** Выбор «откуда». Показывается только там, где вопрос вообще имеет два ответа. */
+function From({
+  value,
+  onChange,
+  sessions
+}: {
+  value: string
+  onChange: (v: string) => void
+  sessions: ConnectedSession[]
+}): JSX.Element {
+  return (
+    <label className="tools-from">
+      Откуда
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value={HERE}>с этой машины</option>
+        {sessions.map((s) => (
+          <option key={s.sessionId} value={s.sessionId}>
+            с сервера: {s.title}
+          </option>
+        ))}
+      </select>
+      {sessions.length === 0 && (
+        <span className="hint">Подключитесь к серверу, чтобы спросить и его тоже</span>
+      )}
+    </label>
+  )
+}
+
+export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): JSX.Element {
   const [tab, setTab] = useState<Tab>('port')
+  // Одна на обе вкладки: человек обычно разбирается с одним сервером за раз.
+  // Сессия могла отвалиться, пока окно было закрыто, — тогда возвращаемся к своей машине,
+  // иначе выбор указывал бы на то, чего уже нет.
+  const [from, setFrom] = useState<string>(() =>
+    defaultFrom && connectedSessions.some((s) => s.sessionId === defaultFrom) ? defaultFrom : HERE
+  )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [out, setOut] = useState<unknown>(null)
@@ -84,8 +143,19 @@ export function ToolsModal({ onClose }: Props): JSX.Element {
                 <input value={portNum} onChange={(e) => setPortNum(e.target.value)} type="number" min={1} max={65535} />
               </label>
             </div>
-            <button className="primary" disabled={busy} onClick={() => void run(() => window.api.tools.portTest(portHost, Number(portNum)))}>
-              Проверить TCP
+            <From value={from} onChange={setFrom} sessions={connectedSessions} />
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() =>
+                void run(() =>
+                  from === HERE
+                    ? window.api.tools.portTest(portHost, Number(portNum))
+                    : window.api.tools.portTestOn(from, portHost, Number(portNum))
+                )
+              }
+            >
+              {from === HERE ? 'Проверить TCP' : 'Проверить TCP с сервера'}
             </button>
           </div>
         )}
@@ -96,8 +166,19 @@ export function ToolsModal({ onClose }: Props): JSX.Element {
               Имя
               <input value={dnsName} onChange={(e) => setDnsName(e.target.value)} placeholder="example.com" />
             </label>
-            <button className="primary" disabled={busy} onClick={() => void run(() => window.api.tools.dnsLookup(dnsName))}>
-              Разрешить
+            <From value={from} onChange={setFrom} sessions={connectedSessions} />
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() =>
+                void run(() =>
+                  from === HERE
+                    ? window.api.tools.dnsLookup(dnsName)
+                    : window.api.tools.dnsLookupOn(from, dnsName)
+                )
+              }
+            >
+              {from === HERE ? 'Разрешить' : 'Разрешить с сервера'}
             </button>
           </div>
         )}

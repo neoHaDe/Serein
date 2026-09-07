@@ -38,6 +38,7 @@ interface Props {
   onDelete: (id: string) => void
   onOpenSettings: () => void
   onOpenKeyGen: () => void
+  onOpenTools: () => void
   onImport: (kind: 'ssh' | 'putty' | 'mobaxterm' | 'xshell' | 'securecrt') => void
   showPuttyImport?: boolean
   width: number
@@ -132,6 +133,7 @@ export function Sidebar({
   onDelete,
   onOpenSettings,
   onOpenKeyGen,
+  onOpenTools,
   onImport,
   showPuttyImport = true,
   width,
@@ -940,6 +942,9 @@ export function Sidebar({
             <button className="icon-btn" title="Генерация ключей" onClick={onOpenKeyGen}>
               <Icon name="key" />
             </button>
+            <button className="icon-btn" title="Утилиты: порт, DNS, TLS, подсеть, хеш, JWT" onClick={onOpenTools}>
+              <Icon name="bolt" />
+            </button>
             <button className="icon-btn" title="Настройки" onClick={onOpenSettings}>
               <Icon name="settings" />
             </button>
@@ -951,6 +956,9 @@ export function Sidebar({
             </button>
             <button className="full-btn" onClick={onOpenKeyGen}>
               <Icon name="key" /> Генерация ключей
+            </button>
+            <button className="full-btn" onClick={onOpenTools}>
+              <Icon name="bolt" /> Утилиты
             </button>
             <button className="full-btn" onClick={onOpenSettings}>
               <Icon name="settings" /> Настройки

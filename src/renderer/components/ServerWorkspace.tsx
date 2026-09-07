@@ -52,6 +52,8 @@ export interface ServerWorkspaceProps {
   panelTitle?: string
   /** Откреплять панели можно только из главного окна: во втором это некуда. */
   onDetached?: () => void
+  /** Открыть утилиты с прицелом на этот сервер. Только из главного окна. */
+  onOpenTools?: () => void
 }
 
 const paneStack: CSSProperties = {
@@ -80,7 +82,8 @@ export function ServerWorkspace(props: ServerWorkspaceProps): JSX.Element {
     onSftpResizeStart,
     onOpenInEditor,
     panelTitle,
-    onDetached
+    onDetached,
+    onOpenTools
   } = props
 
   const showRail = !!leaf
@@ -91,6 +94,7 @@ export function ServerWorkspace(props: ServerWorkspaceProps): JSX.Element {
     <>
       {showRail && leaf && (
         <WorkspaceRail
+          onOpenTools={onOpenTools}
           title={title}
           leaf={leaf}
           server={server}
