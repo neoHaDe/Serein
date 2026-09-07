@@ -425,6 +425,12 @@ export interface ServerMetrics {
   dockerAvailable?: boolean
   dockerRunning?: number
   dockerStopped?: number
+  /** Откуда снят замер: `windows` — значит средней загрузки нет и рисовать её нельзя. */
+  platform?: string
+  /** Что именно меряет `diskPct`: в Linux корень, в Windows системный том. */
+  diskLabel?: string
+  /** Все тома. Windows отдаёт их списком — у сервера редко один диск. */
+  volumes?: { mount: string; sizeKb: number; usedKb: number; usePct: number }[]
 }
 
 /** Содержимое удалённого файла для встроенного редактора. */
@@ -563,15 +569,19 @@ export function parseWorkspaceTool(v: unknown, _sftpOpen?: boolean): WorkspaceTo
 export interface WorkspaceProcess {
   pid: number
   user: string
-  cpu: number
-  mem: number
+  /** null — система этого не сообщает (у BusyBox `ps` нет колонки загрузки). */
+  cpu: number | null
+  mem: number | null
+  /** Рабочий набор в байтах: Windows даёт объём, а не долю. */
+  memBytes?: number
   stat: string
   cmd: string
 }
 
 export interface WorkspaceService {
   name: string
-  unit: string
+  /** Полное имя юнита есть только у systemd; у OpenRC и Windows его нет. */
+  unit?: string
   load: string
   active: string
   sub: string

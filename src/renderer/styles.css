@@ -4528,3 +4528,15 @@ button.secondary:hover {
   font-size: 12px;
   white-space: pre-wrap;
 }
+
+/* Метка системы в шапке обзора: подсказкой висит полная строка вроде «Linux 6.1.0». */
+.ws-platform {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+}

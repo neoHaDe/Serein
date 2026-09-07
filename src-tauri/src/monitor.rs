@@ -14,13 +14,19 @@ pub const SAMPLE_CMD: &str = concat!(
     "echo \"CA:$A\"; echo \"CB:$B\"; ",
     "echo \"OS:$(. /etc/os-release 2>/dev/null; echo ${PRETTY_NAME:-$(uname -sr)}))\"; ",
     "echo \"K:$(uname -r 2>/dev/null)\"; ",
-    "echo \"P:$(ps -e --no-headers 2>/dev/null | wc -l | tr -d ' \\n')\"; ",
+    // Число процессов считаем по /proc, а не через `ps`: у BusyBox свой `ps`, который
+    // не знает ни `-e`, ни `--no-headers`, и вместо счётчика отдавал ноль.
+    "echo \"P:$(ls -d /proc/[0-9]* 2>/dev/null | wc -l | tr -d ' \\n')\"; ",
     "IF=$(ip -o route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i==\"dev\") print $(i+1)}'); ",
     "if [ -n \"$IF\" ] && [ -r /proc/net/dev ]; then ",
     "  echo \"IF:$IF\"; ",
     "  awk -v d=\"$IF:\" '$1==d {print \"RX:\"$2; print \"TX:\"$10}' /proc/net/dev; ",
     "fi; ",
-    "echo \"SF:$(systemctl --failed --no-legend --no-pager 2>/dev/null | wc -l | tr -d ' \\n')\"; ",
+    // Без systemd строку не печатаем вовсе: «0 упавших служб» там, где служб как понятия
+    // нет, — это не хорошая новость, а выдумка. Панель просто не покажет эту плитку.
+    "if command -v systemctl >/dev/null 2>&1; then ",
+    "  echo \"SF:$(systemctl --failed --no-legend --no-pager 2>/dev/null | wc -l | tr -d ' \\n')\"; ",
+    "fi; ",
     "if command -v docker >/dev/null 2>&1; then ",
     "  echo \"DR:$(docker ps -q 2>/dev/null | wc -l | tr -d ' \\n')\"; ",
     "  echo \"DE:$(docker ps -aq --filter status=exited 2>/dev/null | wc -l | tr -d ' \\n')\"; ",

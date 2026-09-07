@@ -3,6 +3,28 @@ import type { WorkspaceProcess } from '../../shared/types'
 import { Icon } from './Icon'
 import { WsDetachButton } from './WsDetachButton'
 import { openDetachedWorkspace } from './workspaceWindow'
+import { metricView } from '../processMetric'
+
+/** Ячейка с долей в процентах. Что именно показывать — решает `processMetric.ts`. */
+function MetricCell({ value, kind }: { value: number | null; kind?: 'mem' }): JSX.Element {
+  const v = metricView(value)
+  if (v.barPct === null) {
+    return (
+      <td className="mono hint" title={v.title}>
+        {v.text}
+      </td>
+    )
+  }
+  return (
+    <td className="mono ws-metric-cell">
+      <span className="ws-metric-num">{v.text}</span>
+      <span
+        className={'ws-metric-bar' + (kind === 'mem' ? ' mem' : '')}
+        style={{ width: `${v.barPct}%` }}
+      />
+    </td>
+  )
+}
 
 export function ProcessPanel({
   sessionId,
@@ -17,6 +39,7 @@ export function ProcessPanel({
 }): JSX.Element {
   const [rows, setRows] = useState<WorkspaceProcess[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('')
   const [busy, setBusy] = useState<number | null>(null)
@@ -25,6 +48,7 @@ export function ProcessPanel({
     setLoading(true)
     const res = await window.api.workspace.processes(sessionId)
     setLoading(false)
+    setNote(res.note ?? null)
     if (res.ok) {
       setRows(res.rows ?? [])
       setError(null)
@@ -85,6 +109,7 @@ export function ProcessPanel({
           {error}
         </div>
       )}
+      {note && <div className="agent-hint">{note}</div>}
       {loading && <div className="hint" style={{ padding: '10px 12px' }}>Загрузка…</div>}
       {!loading && (
         <div className="ws-table-wrap">
@@ -112,14 +137,8 @@ export function ProcessPanel({
                 <tr key={r.pid}>
                   <td className="mono">{r.pid}</td>
                   <td>{r.user}</td>
-                  <td className="mono ws-metric-cell">
-                    <span className="ws-metric-num">{r.cpu.toFixed(1)}</span>
-                    <span className="ws-metric-bar" style={{ width: `${Math.min(100, r.cpu)}%` }} />
-                  </td>
-                  <td className="mono ws-metric-cell">
-                    <span className="ws-metric-num">{r.mem.toFixed(1)}</span>
-                    <span className="ws-metric-bar mem" style={{ width: `${Math.min(100, r.mem)}%` }} />
-                  </td>
+                  <MetricCell value={r.cpu} />
+                  <MetricCell value={r.mem} kind="mem" />
                   <td className="mono">{r.stat}</td>
                   <td className="ws-cmd" title={r.cmd}>
                     {r.cmd}

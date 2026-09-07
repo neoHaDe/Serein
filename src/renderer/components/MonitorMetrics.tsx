@@ -102,6 +102,12 @@ function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
   const memPct = m.memTotalKb > 0 ? (m.memUsedKb / m.memTotalKb) * 100 : 0
   const memFreeKb = m.memTotalKb > m.memUsedKb ? m.memTotalKb - m.memUsedKb : 0
   const load1pct = m.cores > 0 ? (m.load[0] / m.cores) * 100 : 0
+  // Средней загрузки в Windows нет как понятия — не «ноль», а нечего показывать.
+  const hasLoad = m.platform !== 'windows'
+  const diskLabel = 'Диск ' + (m.diskLabel ?? '/')
+  // Второй и дальше том показываем отдельно: у сервера редко один диск, и занятость
+  // системного ничего не говорит о том, где на самом деле кончается место.
+  const extraVolumes = (m.volumes ?? []).filter((v) => v.mount !== m.diskLabel)
 
   return (
     <div className="srv-dash">
@@ -112,33 +118,57 @@ function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
           pct={memPct}
           detail={`${fmtKb(m.memUsedKb)} / ${fmtKb(m.memTotalKb)}`}
         />
-        <Gauge label="Диск /" pct={m.diskPct} detail={`занято ${m.diskPct}%`} />
+        <Gauge label={diskLabel} pct={m.diskPct} detail={`занято ${m.diskPct}%`} />
         <div className="srv-dash-summary">
           <div className="srv-dash-summary-row">
             <span className="srv-dash-summary-k">Свободно RAM</span>
             <span className="srv-dash-summary-v mono">{fmtKb(memFreeKb)}</span>
           </div>
-          <div className="srv-dash-summary-row">
-            <span className="srv-dash-summary-k">Load 1m / ядро</span>
-            <span className={'srv-dash-summary-v mono tone-' + loadTone(m.load[0], m.cores)}>
-              {load1pct.toFixed(0)}%
-            </span>
-          </div>
+          {hasLoad && (
+            <div className="srv-dash-summary-row">
+              <span className="srv-dash-summary-k">Load 1m / ядро</span>
+              <span className={'srv-dash-summary-v mono tone-' + loadTone(m.load[0], m.cores)}>
+                {load1pct.toFixed(0)}%
+              </span>
+            </div>
+          )}
           <div className="srv-dash-summary-row">
             <span className="srv-dash-summary-k">Ядер</span>
             <span className="srv-dash-summary-v mono">{m.cores}</span>
           </div>
         </div>
       </div>
-      <div className="srv-load-block">
-        <div className="srv-load-head">
-          <span>Load average</span>
-          <span className="srv-load-hint">100% = по одной задаче на каждое ядро</span>
+      {hasLoad && (
+        <div className="srv-load-block">
+          <div className="srv-load-head">
+            <span>Load average</span>
+            <span className="srv-load-hint">100% = по одной задаче на каждое ядро</span>
+          </div>
+          <LoadRow label="1 мин" load={m.load[0]} cores={m.cores} />
+          <LoadRow label="5 мин" load={m.load[1]} cores={m.cores} />
+          <LoadRow label="15 мин" load={m.load[2]} cores={m.cores} />
         </div>
-        <LoadRow label="1 мин" load={m.load[0]} cores={m.cores} />
-        <LoadRow label="5 мин" load={m.load[1]} cores={m.cores} />
-        <LoadRow label="15 мин" load={m.load[2]} cores={m.cores} />
-      </div>
+      )}
+      {extraVolumes.length > 0 && (
+        <div className="srv-load-block">
+          <div className="srv-load-head">
+            <span>Остальные тома</span>
+          </div>
+          {extraVolumes.map((v) => (
+            <div className="srv-load-row" key={v.mount}>
+              <span className="srv-load-label mono">{v.mount}</span>
+              <div className="srv-load-track" title={`${fmtKb(v.usedKb)} из ${fmtKb(v.sizeKb)}`}>
+                <div
+                  className={'srv-load-fill tone-' + (v.usePct >= 90 ? 'bad' : v.usePct >= 75 ? 'warn' : 'ok')}
+                  style={{ width: `${Math.min(100, v.usePct)}%` }}
+                />
+              </div>
+              <span className="srv-load-num mono">{v.usePct}%</span>
+              <span className="srv-load-tag">{fmtKb(v.sizeKb)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -159,7 +189,7 @@ function OverviewCards({
     failed === undefined ? 'muted' : failed === 0 ? 'ok' : 'bad'
   const svcLabel =
     failed === undefined
-      ? 'systemctl недоступен'
+      ? 'Список упавших служб недоступен'
       : failed === 0
         ? 'Все сервисы в порядке'
         : `${failed} упало`
@@ -247,10 +277,12 @@ function MetricsCompact({ m }: { m: ServerMetrics }): JSX.Element {
     <div className="mon-body docked">
       <Bar label="CPU" pct={m.cpuPct} sub={`${m.cpuPct}% · ${m.cores} ядр.`} />
       <Bar label="RAM" pct={memPct} sub={`${fmtKb(m.memUsedKb)} / ${fmtKb(m.memTotalKb)}`} />
-      <Bar label="Диск /" pct={m.diskPct} sub={`${m.diskPct}%`} />
-      <div className="mon-load">
-        Load avg: <b>{m.load[0].toFixed(2)}</b> · {m.load[1].toFixed(2)} · {m.load[2].toFixed(2)}
-      </div>
+      <Bar label={'Диск ' + (m.diskLabel ?? '/')} pct={m.diskPct} sub={`${m.diskPct}%`} />
+      {m.platform !== 'windows' && (
+        <div className="mon-load">
+          Load avg: <b>{m.load[0].toFixed(2)}</b> · {m.load[1].toFixed(2)} · {m.load[2].toFixed(2)}
+        </div>
+      )}
     </div>
   )
 }

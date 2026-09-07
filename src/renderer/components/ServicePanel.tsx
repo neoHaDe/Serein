@@ -17,6 +17,7 @@ export function ServicePanel({
 }): JSX.Element {
   const [rows, setRows] = useState<WorkspaceService[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
@@ -25,10 +26,11 @@ export function ServicePanel({
     setLoading(true)
     const res = await window.api.workspace.services(sessionId)
     setLoading(false)
+    setNote(res.note ?? null)
     if (res.ok) {
       setRows(res.rows ?? [])
       setError(null)
-    } else setError(res.error ?? 'systemctl недоступен')
+    } else setError(res.error ?? 'Список служб недоступен')
   }, [sessionId])
 
   useEffect(() => {
@@ -87,6 +89,7 @@ export function ServicePanel({
           {error}
         </div>
       )}
+      {note && <div className="agent-hint">{note}</div>}
       {loading && <div className="hint" style={{ padding: '10px 12px' }}>Загрузка…</div>}
       {!loading && (
         <div className="ws-table-wrap">
@@ -112,7 +115,7 @@ export function ServicePanel({
                 const running = r.active === 'active'
                 const failed = r.active === 'failed' || r.sub === 'failed'
                 return (
-                  <tr key={r.unit}>
+                  <tr key={r.name}>
                     <td className="mono">{r.name}</td>
                     <td>
                       <span

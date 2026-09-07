@@ -14,7 +14,7 @@ mod ownership;
 mod keygen;
 mod knownhosts;
 mod localfs;
-mod monitor;
+pub mod monitor;
 mod multihost;
 mod paths;
 mod proxycmd;
@@ -23,6 +23,7 @@ mod pty;
 mod remoteedit;
 pub mod remote_fs;
 pub mod db;
+pub mod platform;
 pub mod scp;
 pub mod vnc;
 mod serial;
@@ -38,7 +39,7 @@ mod tools;
 mod tunnels;
 mod vault;
 mod vaultkey;
-mod workspace;
+pub mod workspace;
 
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -92,6 +93,7 @@ impl AppState {
         self.transfers.cancel_session(id);
         self.ops.cancel_prefix(&format!("{id}:"));
         term_out::replay_forget(id);
+        platform::forget(id);
         self.owners.release(id);
         if let Some(tx) = crate::sync::lock(&self.ki).remove(id) {
             drop(tx);
@@ -612,6 +614,16 @@ fn session_log_toggle(id: String, title: String) -> Result<Value, String> {
 #[tauri::command]
 async fn session_monitor(state: State<'_, AppState>, id: String) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
+    // Снимок собирается одной командой, но команда у Windows своя: /proc там нет.
+    let (kind, _) = platform::of_session(&id, &s.handle).await;
+    if kind == platform::Kind::Windows {
+        let (_c, out, err) =
+            ssh::exec(&s.handle, platform::cmd::SAMPLE_WINDOWS, Some(s.cancel.subscribe())).await?;
+        if out.trim().is_empty() && !err.trim().is_empty() {
+            return Ok(json!({ "ok": false, "error": err.trim() }));
+        }
+        return Ok(platform::win::parse_sample(&out));
+    }
     let (_c, out, _e) = ssh::exec(&s.handle, monitor::SAMPLE_CMD, Some(s.cancel.subscribe())).await?;
     Ok(monitor::parse(&out))
 }
@@ -708,10 +720,26 @@ fn vnc_close(id: String) {
     vnc::close(&id);
 }
 
+/// Какая система на сервере. Определяется один раз за сессию и кэшируется.
+#[tauri::command]
+async fn workspace_platform(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let (kind, version) = platform::of_session(&session_id, &s.handle).await;
+    Ok(platform::to_json(kind, &version))
+}
+
 #[tauri::command]
 async fn workspace_processes(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    let (code, out, err) = ssh::exec(&s.handle, workspace::PS_CMD, Some(s.cancel.subscribe())).await?;
+    // Набор команд зависит от системы: `ps` на Windows не существует, и слать его туда
+    // значит показать пользователю ошибку вместо таблицы процессов.
+    let (kind, _) = platform::of_session(&session_id, &s.handle).await;
+    let cmd = match kind {
+        platform::Kind::Windows => platform::cmd::PS_WINDOWS,
+        platform::Kind::BusyBox => platform::cmd::PS_BUSYBOX,
+        _ => workspace::PS_CMD,
+    };
+    let (code, out, err) = ssh::exec(&s.handle, cmd, Some(s.cancel.subscribe())).await?;
     if code != 0 && out.trim().is_empty() {
         let error = if err.trim().is_empty() {
             "ps недоступен".to_string()
@@ -720,13 +748,19 @@ async fn workspace_processes(state: State<'_, AppState>, session_id: String) -> 
         };
         return Ok(json!({ "ok": false, "error": error }));
     }
-    Ok(workspace::parse_ps(&out))
+    Ok(match kind {
+        platform::Kind::Windows => platform::win::parse_ps(&out),
+        platform::Kind::BusyBox => platform::busybox::parse_ps(&out),
+        _ => workspace::parse_ps(&out),
+    })
 }
 
 #[tauri::command]
 async fn workspace_kill(state: State<'_, AppState>, session_id: String, pid: u32) -> Result<Value, String> {
-    let cmd = workspace::kill_cmd(pid)?;
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    // `kill` в Windows нет: там процесс снимает PowerShell.
+    let (kind, _) = platform::of_session(&session_id, &s.handle).await;
+    let cmd = platform::kill_cmd(kind, pid)?;
     let (code, _out, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
     if code != 0 {
         let error = if err.trim().is_empty() {
@@ -742,8 +776,18 @@ async fn workspace_kill(state: State<'_, AppState>, session_id: String, pid: u32
 #[tauri::command]
 async fn workspace_services(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    let (code, out, err) = ssh::exec(&s.handle, workspace::SERVICES_CMD, Some(s.cancel.subscribe())).await?;
-    Ok(workspace::parse_services(code, &out, &err))
+    let (kind, _) = platform::of_session(&session_id, &s.handle).await;
+    let cmd = match kind {
+        platform::Kind::Windows => platform::cmd::SERVICES_WINDOWS,
+        platform::Kind::BusyBox => platform::cmd::SERVICES_BUSYBOX,
+        _ => workspace::SERVICES_CMD,
+    };
+    let (code, out, err) = ssh::exec(&s.handle, cmd, Some(s.cancel.subscribe())).await?;
+    Ok(match kind {
+        platform::Kind::Windows => platform::win::parse_services(&out),
+        platform::Kind::BusyBox => platform::busybox::parse_services(&out),
+        _ => workspace::parse_services(code, &out, &err),
+    })
 }
 
 #[tauri::command]
@@ -753,12 +797,14 @@ async fn workspace_service_action(
     name: String,
     action: String,
 ) -> Result<Value, String> {
-    let cmd = workspace::service_cmd(&name, &action)?;
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    // Управлять службой каждая система умеет по-своему: systemctl, rc-service, PowerShell.
+    let (kind, _) = platform::of_session(&session_id, &s.handle).await;
+    let cmd = platform::service_cmd(kind, &name, &action)?;
     let (code, _out, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
     if code != 0 {
         let error = if err.trim().is_empty() {
-            format!("systemctl {action} код {code}")
+            format!("Служба {name}: действие {action} вернуло код {code}")
         } else {
             err.trim().to_string()
         };
@@ -770,6 +816,16 @@ async fn workspace_service_action(
 #[tauri::command]
 async fn workspace_logs(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let (kind, _) = platform::of_session(&session_id, &s.handle).await;
+    // На Windows роль journalctl играет журнал событий, и читается он совсем иначе.
+    if kind == platform::Kind::Windows {
+        let (_c, out, err) =
+            ssh::exec(&s.handle, platform::cmd::LOGS_WINDOWS, Some(s.cancel.subscribe())).await?;
+        if out.trim().is_empty() && !err.trim().is_empty() {
+            return Ok(json!({ "ok": false, "error": err.trim() }));
+        }
+        return Ok(platform::win::parse_logs(&out));
+    }
     let (_code, out, err) = ssh::exec(&s.handle, workspace::LOGS_CMD, Some(s.cancel.subscribe())).await?;
     let text = if out.trim().is_empty() { err } else { out };
     Ok(json!({ "ok": true, "text": text }))
@@ -1533,6 +1589,7 @@ pub fn run() {
             sftp_pause_transfer, sftp_resume_transfer,
             tunnel_list_status, tunnel_open, tunnel_close,
             workspace_processes, workspace_kill, workspace_services, workspace_service_action, workspace_logs,
+            workspace_platform,
             vnc_open, vnc_pointer, vnc_key, vnc_refresh, vnc_paste, vnc_close,
             db_open, db_query, db_close,
             vault_status, vault_unlock, vault_enable, vault_disable,

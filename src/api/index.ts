@@ -378,11 +378,20 @@ export const api = {
   },
 
   workspace: {
-    processes: (sessionId: string): Promise<{ ok: boolean; error?: string; rows?: WorkspaceProcess[] }> =>
+    /** Какая система на сервере: от этого зависит набор команд у панелей. */
+    platform: (sessionId: string): Promise<{ kind: string; version: string }> =>
+      invoke('workspace_platform', { sessionId }),
+    processes: (
+      sessionId: string
+      // `note` — оговорка о том, чего эта система не сообщает: панель показывает её
+      // рядом с таблицей, чтобы прочерк в колонке не читался как «ноль».
+    ): Promise<{ ok: boolean; error?: string; rows?: WorkspaceProcess[]; note?: string }> =>
       invoke('workspace_processes', { sessionId }),
     kill: (sessionId: string, pid: number): Promise<{ ok: boolean; error?: string }> =>
       invoke('workspace_kill', { sessionId, pid }),
-    services: (sessionId: string): Promise<{ ok: boolean; error?: string; rows?: WorkspaceService[] }> =>
+    services: (
+      sessionId: string
+    ): Promise<{ ok: boolean; error?: string; rows?: WorkspaceService[]; note?: string }> =>
       invoke('workspace_services', { sessionId }),
     serviceAction: (
       sessionId: string,
