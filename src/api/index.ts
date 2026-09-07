@@ -428,6 +428,16 @@ export const api = {
     portTest: (host: string, port: number, timeoutMs?: number): Promise<Record<string, unknown>> =>
       invoke('tools_port_test', { host, port, timeoutMs }),
     dnsLookup: (name: string): Promise<Record<string, unknown>> => invoke('tools_dns_lookup', { name }),
+    /**
+     * То же самое, но глазами сервера.
+     *
+     * При разборе неполадки почти всегда важно не «вижу ли я адрес», а «видит ли его
+     * сервер»: у него свои маршруты, свой DNS и свой `/etc/hosts`.
+     */
+    portTestOn: (sessionId: string, host: string, port: number): Promise<Record<string, unknown>> =>
+      invoke('tools_port_test_on', { sessionId, host, port }),
+    dnsLookupOn: (sessionId: string, name: string): Promise<Record<string, unknown>> =>
+      invoke('tools_dns_lookup_on', { sessionId, name }),
     tlsCert: (host: string, port?: number): Promise<Record<string, unknown>> =>
       invoke('tools_tls_cert', { host, port }),
     subnet: (input: string): Promise<Record<string, unknown>> => invoke('tools_subnet', { input }),

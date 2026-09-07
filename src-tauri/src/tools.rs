@@ -1,4 +1,13 @@
-//! Локальные утилиты: порт, DNS, TLS, подсеть, хеши, JWT (P2.1).
+//! Утилиты: порт, DNS, TLS, подсеть, хеши, JWT (P2.1).
+//!
+//! Часть из них умеет отвечать на два разных вопроса. «Доступен ли адрес **с моей
+//! машины**» и «доступен ли он **с сервера**» — это не одно и то же, и при разборе
+//! неполадки почти всегда нужен второй. У конкурентов утилиты работают только с машины
+//! пользователя; у нас уже открыта SSH-сессия, и спросить сервер стоит одного `exec`.
+//!
+//! Команды для сервера собираются в [`remote`], ответы разбираются там же и под тестами:
+//! набор утилит на живых машинах разный, и это не мелочь. На голом Debian нет `nc`, зато
+//! есть `bash` с его `/dev/tcp`; на Alpine ровно наоборот.
 
 use base64::{engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}, Engine};
 use native_tls::{TlsConnector, TlsStream};
@@ -280,6 +289,228 @@ pub fn jwt_decode(token: &str) -> Result<Value, String> {
         "signature": parts.get(2).unwrap_or(&""),
     }))
 }
+
+/// Проверки и команды для запуска утилит **на сервере**.
+pub mod remote {
+    use serde_json::{json, Value};
+
+    /// Проверка хоста перед подстановкой в команду.
+    ///
+    /// Хост уходит в командную строку на чужой машине, поэтому список разрешённого узкий:
+    /// буквы, цифры, точка, дефис и двоеточие для IPv6. Отказ, а не экранирование —
+    /// экранирование легко сделать неполным, а короткий список проверяется взглядом.
+    /// Отдельно запрещено начинать с дефиса: такое имя прочтётся как ключ команды.
+    pub fn check_host(host: &str) -> Result<(), String> {
+        if host.is_empty() || host.len() > 253 {
+            return Err("Пустой или слишком длинный адрес".into());
+        }
+        if host.starts_with('-') {
+            return Err("Адрес не может начинаться с дефиса".into());
+        }
+        if !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '_'))
+        {
+            return Err("В адресе есть символы, которых там быть не может".into());
+        }
+        Ok(())
+    }
+
+    /// Проверка порта на POSIX-системе.
+    ///
+    /// Две ветки не для надёжности ради надёжности: на голом Debian нет `nc`, а на Alpine
+    /// нет `bash` — то есть ни одна из них по отдельности не покрывает даже наш стенд.
+    pub fn port_cmd_posix(host: &str, port: u16, secs: u64) -> String {
+        format!(
+            "if command -v nc >/dev/null 2>&1; then echo TOOL=nc; \
+               nc -z -w {secs} '{host}' {port} >/dev/null 2>&1 && echo R=open || echo R=closed; \
+             elif command -v timeout >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then \
+               echo TOOL=bash; \
+               timeout {secs} bash -c 'exec 3<>/dev/tcp/{host}/{port}' >/dev/null 2>&1 \
+                 && echo R=open || echo R=closed; \
+             else echo TOOL=none; fi"
+        )
+    }
+
+    /// То же для Windows: там ни `nc`, ни `/dev/tcp` не существует.
+    pub fn port_cmd_windows(host: &str, port: u16) -> String {
+        format!(
+            "powershell -NoProfile -NonInteractive -Command \"echo TOOL=powershell; \
+             $r = Test-NetConnection -ComputerName '{host}' -Port {port} -InformationLevel Quiet \
+             -WarningAction SilentlyContinue; if ($r) {{ echo R=open }} else {{ echo R=closed }}\""
+        )
+    }
+
+    /// Разбор ответа проверки порта.
+    pub fn parse_port(host: &str, port: u16, stdout: &str) -> Value {
+        let tool = tag(stdout, "TOOL=").unwrap_or_default();
+        if tool == "none" {
+            return json!({
+                "ok": false,
+                "host": host,
+                "port": port,
+                "from": "server",
+                "error": "На сервере нечем проверить порт: нет ни nc, ни bash",
+            });
+        }
+        match tag(stdout, "R=").as_deref() {
+            Some("open") => json!({ "ok": true, "host": host, "port": port, "from": "server", "tool": tool }),
+            Some("closed") => json!({
+                "ok": false,
+                "host": host,
+                "port": port,
+                "from": "server",
+                "tool": tool,
+                "error": "Порт закрыт или недоступен с сервера",
+            }),
+            // Ответа нет вовсе — команда не выполнилась, и выдавать это за «закрыт»
+            // нельзя: закрытый порт и несостоявшаяся проверка — разные новости.
+            _ => json!({
+                "ok": false,
+                "host": host,
+                "port": port,
+                "from": "server",
+                "error": "Сервер не ответил на проверку",
+            }),
+        }
+    }
+
+    /// Разрешение имени на POSIX-системе.
+    pub fn dns_cmd_posix(name: &str) -> String {
+        format!(
+            "if command -v getent >/dev/null 2>&1; then echo TOOL=getent; \
+               getent ahosts '{name}' 2>/dev/null | awk '{{print \"A=\"$1}}' | sort -u; \
+             elif command -v nslookup >/dev/null 2>&1; then echo TOOL=nslookup; \
+               nslookup '{name}' 2>/dev/null | awk '/^Address: /{{print \"A=\"$2}}'; \
+             else echo TOOL=none; fi"
+        )
+    }
+
+    pub fn dns_cmd_windows(name: &str) -> String {
+        format!(
+            "powershell -NoProfile -NonInteractive -Command \"echo TOOL=powershell; \
+             Resolve-DnsName -Name '{name}' -ErrorAction SilentlyContinue | \
+             Where-Object {{ $_.IPAddress }} | ForEach-Object {{ echo \\\"A=$($_.IPAddress)\\\" }}\""
+        )
+    }
+
+    /// Разбор ответа разрешения имени.
+    pub fn parse_dns(name: &str, stdout: &str) -> Value {
+        let tool = tag(stdout, "TOOL=").unwrap_or_default();
+        if tool == "none" {
+            return json!({
+                "name": name,
+                "from": "server",
+                "error": "На сервере нечем разрешить имя: нет ни getent, ни nslookup",
+            });
+        }
+        let mut addrs: Vec<String> = Vec::new();
+        for line in stdout.lines() {
+            if let Some(a) = line.trim().strip_prefix("A=") {
+                let a = a.trim().to_string();
+                // Один и тот же адрес приезжает по разу на каждый тип сокета.
+                if !a.is_empty() && !addrs.contains(&a) {
+                    addrs.push(a);
+                }
+            }
+        }
+        json!({ "name": name, "from": "server", "tool": tool, "addresses": addrs })
+    }
+
+    /// Значение первой строки, начинающейся с метки.
+    fn tag(stdout: &str, prefix: &str) -> Option<String> {
+        stdout
+            .lines()
+            .find_map(|l| l.trim().strip_prefix(prefix))
+            .map(|v| v.trim().to_string())
+    }
+}
+
+#[cfg(test)]
+mod remote_tests {
+    use super::remote::*;
+
+    #[test]
+    fn адрес_с_посторонними_символами_не_уходит_в_команду() {
+        // Адрес подставляется в командную строку на чужой машине. Отказ здесь дешевле
+        // любого экранирования: список разрешённого проверяется взглядом.
+        assert!(check_host("example.com").is_ok());
+        assert!(check_host("192.168.0.1").is_ok());
+        assert!(check_host("fe80::1").is_ok());
+        assert!(check_host("a'; rm -rf / #").is_err());
+        assert!(check_host("$(whoami)").is_err());
+        assert!(check_host("`id`").is_err());
+        assert!(check_host("a b").is_err());
+        assert!(check_host("").is_err());
+    }
+
+    #[test]
+    fn адрес_с_дефиса_прочтётся_как_ключ() {
+        assert!(check_host("-z").is_err());
+    }
+
+    #[test]
+    fn открытый_и_закрытый_порт_различаются() {
+        let v = parse_port("db", 3306, "TOOL=nc
+R=open
+");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["tool"], "nc");
+        assert_eq!(v["from"], "server");
+
+        let v = parse_port("db", 3306, "TOOL=bash
+R=closed
+");
+        assert_eq!(v["ok"], false);
+        assert!(v["error"].as_str().unwrap().contains("закрыт"));
+    }
+
+    #[test]
+    fn несостоявшаяся_проверка_не_выдаётся_за_закрытый_порт() {
+        // Это разные новости: «порт закрыт» и «мы не смогли проверить».
+        let v = parse_port("db", 3306, "TOOL=none
+");
+        assert_eq!(v["ok"], false);
+        assert!(v["error"].as_str().unwrap().contains("нечем"));
+
+        let v = parse_port("db", 3306, "");
+        assert_eq!(v["ok"], false);
+        assert!(v["error"].as_str().unwrap().contains("не ответил"));
+    }
+
+    #[test]
+    fn адреса_из_getent_не_повторяются() {
+        // `getent ahosts` печатает один адрес по разу на каждый тип сокета.
+        let out = "TOOL=getent
+A=93.184.216.34
+A=93.184.216.34
+A=2606:2800:220::1
+";
+        let v = parse_dns("example.com", out);
+        let a = v["addresses"].as_array().unwrap();
+        assert_eq!(a.len(), 2);
+        assert_eq!(a[0], "93.184.216.34");
+    }
+
+    #[test]
+    fn отсутствие_утилит_разрешения_имени_объясняется() {
+        let v = parse_dns("example.com", "TOOL=none
+");
+        assert!(v["error"].as_str().unwrap().contains("нечем"));
+        assert!(v.get("addresses").is_none());
+    }
+
+    #[test]
+    fn команда_проверки_порта_умеет_обе_ветки() {
+        // На голом Debian нет `nc`, на Alpine нет `bash` — ни одна ветка по отдельности
+        // не покрывает даже наш стенд.
+        let c = port_cmd_posix("example.com", 443, 3);
+        assert!(c.contains("nc -z"));
+        assert!(c.contains("/dev/tcp/example.com/443"));
+        assert!(c.contains("TOOL=none"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
