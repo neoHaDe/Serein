@@ -35,6 +35,9 @@ pub struct Stand {
     pub mysql_host: String,
     /// Веб-служба внутри сети стенда: снаружи её адреса не существует.
     pub web_host: String,
+    /// Каталог LDAP. Его порт опубликован: клиент ходит к нему напрямую, не каналом.
+    pub ldap_url: String,
+    pub ldap_base: String,
 }
 
 fn env(name: &str) -> String {
@@ -69,6 +72,8 @@ impl Stand {
             mariadb_host: env("SEREIN_STAND_MARIADB_HOST"),
             mysql_host: env("SEREIN_STAND_MYSQL_HOST"),
             web_host: env("SEREIN_STAND_WEB_HOST"),
+            ldap_url: env("SEREIN_STAND_LDAP_URL"),
+            ldap_base: env("SEREIN_STAND_LDAP_BASE"),
         }
     }
 

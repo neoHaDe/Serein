@@ -244,3 +244,92 @@ fn закрытая_дверь_не_выдаётся_за_ответ_служб�
         assert!(!v["error"].as_str().unwrap_or("").is_empty(), "отказ без причины: {v}");
     });
 }
+
+// ---------------- Каталог LDAP ----------------
+//
+// Клиент каталога, в отличие от баз, открывает сокет сам — поэтому порт стенда
+// опубликован, и запрос идёт напрямую, как он и пойдёт у пользователя.
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn каталог_отвечает_на_анонимный_запрос() {
+    // Первый вопрос, который задают каталогу: отвечает ли он вообще. Анонимный поиск по
+    // корню на это и отвечает, не требуя учётных данных.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let v = serein_lib::ldap::search(serein_lib::ldap::Params {
+            url: s.ldap_url.clone(),
+            bind_dn: None,
+            password: None,
+            base: Some(String::new()),
+            filter: Some("(objectClass=*)".into()),
+        })
+        .await
+        .expect("каталог не ответил");
+        assert!(v["found"].as_u64().unwrap_or(0) > 0, "корневая запись пуста: {v}");
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn поиск_находит_запись_в_ветке() {
+    // Второй вопрос: есть ли там такая запись. В стенде заведён demo_user — его и ищем
+    // по условию, а не перебором всего дерева.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let v = serein_lib::ldap::search(serein_lib::ldap::Params {
+            url: s.ldap_url.clone(),
+            bind_dn: Some("cn=Directory Manager".into()),
+            password: Some("probe-pass".into()),
+            base: Some(s.ldap_base.clone()),
+            filter: Some("(uid=demo_user)".into()),
+        })
+        .await
+        .expect("поиск не прошёл");
+        let entries = v["entries"].as_array().expect("нет списка записей");
+        assert_eq!(entries.len(), 1, "ожидали ровно одну запись: {v}");
+        let dn = entries[0]["dn"].as_str().unwrap_or("");
+        assert!(dn.contains("uid=demo_user"), "нашли не то: {dn}");
+        // Атрибуты обязаны приехать: без них ответ «запись есть» бесполезен.
+        assert!(!entries[0]["attrs"].as_array().unwrap().is_empty(), "запись без атрибутов");
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn неверный_пароль_каталога_отвергается_с_текстом() {
+    // Отказ во входе — самый частый исход при разборе неполадок, и он должен объясняться,
+    // а не выглядеть как молчание каталога.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let err = serein_lib::ldap::search(serein_lib::ldap::Params {
+            url: s.ldap_url.clone(),
+            bind_dn: Some("cn=Directory Manager".into()),
+            password: Some("не тот пароль".into()),
+            base: Some(s.ldap_base.clone()),
+            filter: None,
+        })
+        .await
+        .unwrap_err();
+        assert!(err.contains("не пустил") || err.to_lowercase().contains("credentials"), "{err}");
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn несуществующая_ветка_отличается_от_пустого_ответа() {
+    // «Такой ветки нет» и «в ветке ничего не нашлось» — разные новости, и вторую нельзя
+    // выдавать за первую: человек станет искать ошибку в условии, а её там нет.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let r = serein_lib::ldap::search(serein_lib::ldap::Params {
+            url: s.ldap_url.clone(),
+            bind_dn: Some("cn=Directory Manager".into()),
+            password: Some("probe-pass".into()),
+            base: Some("dc=такого,dc=нет".into()),
+            filter: None,
+        })
+        .await;
+        assert!(r.is_err(), "несуществующая ветка выдана за пустую: {r:?}");
+    });
+}

@@ -30,7 +30,7 @@ done
 # Базы данных наружу портов не публикуют, поэтому их готовность спрашиваем у самого
 # compose. MySQL 8 при первом запуске создаёт системные таблицы десятки секунд, и без
 # этого ожидания тесты стартовали бы раньше, чем база начнёт отвечать.
-for svc in mariadb mysql web; do
+for svc in mariadb mysql web ldap; do
   echo -n "жду $svc "
   for _ in $(seq 1 90); do
     state=$(docker compose ps --format '{{.Health}}' "$svc" 2>/dev/null | head -1)
@@ -39,6 +39,13 @@ for svc in mariadb mysql web; do
     sleep 2
   done
 done
+
+# Ветку каталога образ сам не заводит — создаём её и наполняем примерами. Команда
+# идемпотентная по смыслу: на повторном запуске она откажет, и это нормально, ветка уже
+# есть. Без неё поиск возвращал бы «No such object», и тест проверял бы пустоту.
+docker compose exec -T ldap dsconf localhost backend create \
+  --suffix dc=probe,dc=local --be-name userRoot --create-suffix --create-entries \
+  >/dev/null 2>&1 || true
 
 cat <<VARS
 
@@ -57,6 +64,9 @@ cat <<VARS
   export SEREIN_STAND_MARIADB_HOST=mariadb
   export SEREIN_STAND_MYSQL_HOST=mysql
   export SEREIN_STAND_WEB_HOST=web
+  # Каталог, в отличие от баз, доступен напрямую: клиент открывает сокет сам.
+  export SEREIN_STAND_LDAP_URL=ldap://127.0.0.1:13389
+  export SEREIN_STAND_LDAP_BASE=dc=probe,dc=local
   export SEREIN_STAND_HOSTKEY_PORT=2203
   export SEREIN_STAND_NOSFTP_PORT=2204
   export SEREIN_STAND_VNC_PORT=2205

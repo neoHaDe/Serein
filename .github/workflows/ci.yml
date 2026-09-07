@@ -167,6 +167,8 @@ jobs:
           SEREIN_STAND_MARIADB_HOST: mariadb
           SEREIN_STAND_MYSQL_HOST: mysql
           SEREIN_STAND_WEB_HOST: web
+          SEREIN_STAND_LDAP_URL: ldap://127.0.0.1:13389
+          SEREIN_STAND_LDAP_BASE: dc=probe,dc=local
           SEREIN_STAND_USER: probe
           SEREIN_STAND_PASSWORD: probe-pass
         run: |
