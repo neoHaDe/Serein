@@ -438,6 +438,16 @@ export const api = {
       invoke('tools_port_test_on', { sessionId, host, port }),
     dnsLookupOn: (sessionId: string, name: string): Promise<Record<string, unknown>> =>
       invoke('tools_dns_lookup_on', { sessionId, name }),
+    /** Просмотр диапазона портов. За раз — не больше 1024, это ограничение по смыслу. */
+    portScan: (host: string, from: number, to: number): Promise<Record<string, unknown>> =>
+      invoke('tools_port_scan', { host, from, to }),
+    portScanOn: (
+      sessionId: string,
+      host: string,
+      from: number,
+      to: number
+    ): Promise<Record<string, unknown>> =>
+      invoke('tools_port_scan_on', { sessionId, host, from, to }),
     tlsCert: (host: string, port?: number): Promise<Record<string, unknown>> =>
       invoke('tools_tls_cert', { host, port }),
     subnet: (input: string): Promise<Record<string, unknown>> => invoke('tools_subnet', { input }),

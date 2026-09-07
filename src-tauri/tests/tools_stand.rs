@@ -112,3 +112,27 @@ fn несуществующее_имя_не_выдаёт_пустой_списо
         assert!(v["addresses"].as_array().unwrap().is_empty(), "ответ:\n{out}");
     });
 }
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn скан_диапазона_находит_ровно_открытый_порт() {
+    // Узкий диапазон вокруг порта базы: 3306 обязан найтись, соседние — нет. Проверяем на
+    // обеих машинах, потому что ветки команд у них разные, и ошибка в одной из них
+    // выглядела бы как «на этом сервере ничего не открыто».
+    let s = Stand::from_env();
+    rt().block_on(async {
+        for (порт, ветка) in [(s.debian_port, "bash"), (s.alpine_port, "nc")] {
+            let cmd = remote::scan_cmd_posix(&s.mariadb_host, 3304, 3307, 1);
+            let out = run(&s, порт, &cmd).await;
+            let v = remote::parse_scan(&s.mariadb_host, 3304, 3307, &out);
+            assert_eq!(v["tool"], ветка, "не та ветка команд, ответ:\n{out}");
+            let open: Vec<u64> = v["open"]
+                .as_array()
+                .expect("нет списка портов")
+                .iter()
+                .map(|p| p.as_u64().unwrap())
+                .collect();
+            assert_eq!(open, vec![3306], "ответ стенда:\n{out}");
+        }
+    });
+}

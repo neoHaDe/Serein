@@ -1366,6 +1366,42 @@ async fn tools_dns_lookup(name: String) -> Result<Value, String> {
 async fn tools_tls_cert(host: String, port: Option<u16>) -> Result<Value, String> {
     tools::tls_cert(host, port).await
 }
+/// Просмотр диапазона портов со своей машины.
+#[tauri::command]
+async fn tools_port_scan(
+    host: String,
+    from: u16,
+    to: u16,
+    timeout_ms: Option<u64>,
+) -> Result<Value, String> {
+    tools::port_scan(host, from, to, timeout_ms).await
+}
+
+/// Просмотр диапазона портов **с сервера**.
+///
+/// Проверки там идут по очереди, поэтому диапазон стоит держать узким: сотня портов на
+/// недоступном хосте с секундным таймаутом — это полторы минуты ожидания.
+#[tauri::command]
+async fn tools_port_scan_on(
+    state: State<'_, AppState>,
+    session_id: String,
+    host: String,
+    from: u16,
+    to: u16,
+) -> Result<Value, String> {
+    let (host, _) = tools::parse_host_port(&host, from)?;
+    tools::remote::check_host(&host)?;
+    let (from, to) = tools::parse_range(from, to)?;
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let (kind, _) = platform::of_session(&session_id, &s.handle).await;
+    if kind == platform::Kind::Windows {
+        return Err("Просмотр диапазона портов с Windows-сервера пока не поддержан".into());
+    }
+    let cmd = tools::remote::scan_cmd_posix(&host, from, to, 1);
+    let (_c, out, _e) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
+    Ok(tools::remote::parse_scan(&host, from, to, &out))
+}
+
 /// Проверка порта **с сервера**, а не со своей машины.
 ///
 /// Разница не косметическая: при разборе неполадки почти всегда важно, видит ли адрес
@@ -1655,7 +1691,7 @@ pub fn run() {
             servers_import_ssh_config, servers_import_putty,
             servers_import_mobaxterm, servers_import_xshell, servers_import_securecrt,
             tools_port_test, tools_dns_lookup, tools_tls_cert, tools_subnet, tools_hash, tools_jwt_decode,
-            tools_port_test_on, tools_dns_lookup_on,
+            tools_port_test_on, tools_dns_lookup_on, tools_port_scan, tools_port_scan_on,
             app_platform, app_paths, app_install_kind, multi_exec, multi_exec_cancel,
             windows_nudge_group, windows_raise_group, windows_restore_minimized, windows_count_minimized,
             clipboard_write, clipboard_read

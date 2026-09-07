@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { errText } from '../errText'
 
-type Tab = 'port' | 'dns' | 'tls' | 'subnet' | 'hash' | 'jwt'
+type Tab = 'port' | 'scan' | 'dns' | 'tls' | 'subnet' | 'hash' | 'jwt'
 
 interface ConnectedSession {
   sessionId: string
@@ -34,6 +34,7 @@ interface Props {
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'port', label: 'Порт' },
+  { id: 'scan', label: 'Диапазон' },
   { id: 'dns', label: 'DNS' },
   { id: 'tls', label: 'TLS' },
   { id: 'subnet', label: 'Подсеть' },
@@ -89,6 +90,9 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
 
   const [portHost, setPortHost] = useState('127.0.0.1')
   const [portNum, setPortNum] = useState('22')
+  const [scanHost, setScanHost] = useState('127.0.0.1')
+  const [scanFrom, setScanFrom] = useState('1')
+  const [scanTo, setScanTo] = useState('1024')
   const [dnsName, setDnsName] = useState('example.com')
   const [tlsHost, setTlsHost] = useState('nehade.xyz')
   const [tlsPort, setTlsPort] = useState('443')
@@ -156,6 +160,43 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
               }
             >
               {from === HERE ? 'Проверить TCP' : 'Проверить TCP с сервера'}
+            </button>
+          </div>
+        )}
+
+        {tab === 'scan' && (
+          <div className="tools-pane">
+            <label>
+              Хост
+              <input value={scanHost} onChange={(e) => setScanHost(e.target.value)} placeholder="host" />
+            </label>
+            <div className="row">
+              <label style={{ flex: 1 }}>
+                С порта
+                <input value={scanFrom} onChange={(e) => setScanFrom(e.target.value)} type="number" min={1} max={65535} />
+              </label>
+              <label style={{ flex: 1 }}>
+                По порт
+                <input value={scanTo} onChange={(e) => setScanTo(e.target.value)} type="number" min={1} max={65535} />
+              </label>
+            </div>
+            <From value={from} onChange={setFrom} sessions={connectedSessions} />
+            <p className="hint">
+              За раз — не больше 1024 портов. С сервера проверки идут по очереди, поэтому там
+              диапазон лучше держать узким: сотня закрытых портов — это около полутора минут.
+            </p>
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() =>
+                void run(() =>
+                  from === HERE
+                    ? window.api.tools.portScan(scanHost, Number(scanFrom), Number(scanTo))
+                    : window.api.tools.portScanOn(from, scanHost, Number(scanFrom), Number(scanTo))
+                )
+              }
+            >
+              {busy ? 'Смотрю…' : from === HERE ? 'Просмотреть' : 'Просмотреть с сервера'}
             </button>
           </div>
         )}

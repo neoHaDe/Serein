@@ -558,7 +558,13 @@ export function useTabs({
       tabs.flatMap((t) =>
         allLeaves(t.root)
           .filter((l) => l.kind === 'ssh' && l.status === 'connected' && l.sessionId)
-          .map((l) => ({ sessionId: l.sessionId!, title: `${t.title} — ${l.title}` }))
+          // Имя панели дописываем только если оно отличается от имени вкладки. В одиночной
+          // вкладке они совпадают, и выходило «home-srv — home-srv»: половина строки ни о
+          // чём. Разделять их нужно лишь когда во вкладке несколько панелей.
+          .map((l) => ({
+            sessionId: l.sessionId!,
+            title: l.title && l.title !== t.title ? `${t.title} — ${l.title}` : t.title
+          }))
       ),
     [tabs]
   )

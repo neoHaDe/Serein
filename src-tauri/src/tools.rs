@@ -81,6 +81,76 @@ pub async fn port_test(host: String, port: u16, timeout_ms: Option<u64>) -> Resu
     }
 }
 
+/// Сколько портов позволено просмотреть за один раз.
+///
+/// Ограничение не техническое, а по смыслу. Скан на тысячи портов — это уже другая задача
+/// и другой инструмент (nmap), а здесь он занял бы минуты и выглядел бы как зависшее окно.
+/// Полный диапазон в 65 тысяч портов через SSH-канал не осилит никакая панель.
+pub const MAX_SCAN_PORTS: u32 = 1024;
+
+/// Разбор и проверка диапазона портов.
+pub fn parse_range(from: u16, to: u16) -> Result<(u16, u16), String> {
+    if from == 0 || to == 0 {
+        return Err("Порт 0 не существует".into());
+    }
+    if from > to {
+        return Err("Начало диапазона больше конца".into());
+    }
+    let count = to as u32 - from as u32 + 1;
+    if count > MAX_SCAN_PORTS {
+        return Err(format!(
+            "За раз можно просмотреть не больше {MAX_SCAN_PORTS} портов, а тут {count}"
+        ));
+    }
+    Ok((from, to))
+}
+
+/// Просмотр диапазона портов со своей машины.
+///
+/// Порты проверяются пачками, а не по очереди: тысяча последовательных попыток с таймаутом
+/// в секунду — это шестнадцать минут, и никто столько не ждёт. Ширина пачки выбрана так,
+/// чтобы не упереться в предел открытых сокетов на слабой машине.
+pub async fn port_scan(
+    host: String,
+    from: u16,
+    to: u16,
+    timeout_ms: Option<u64>,
+) -> Result<Value, String> {
+    let (host, _) = parse_host_port(&host, from)?;
+    let (from, to) = parse_range(from, to)?;
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(1000).clamp(100, 10_000));
+
+    let started = std::time::Instant::now();
+    let mut open: Vec<u16> = Vec::new();
+    let mut ports = from..=to;
+    loop {
+        let batch: Vec<u16> = ports.by_ref().take(128).collect();
+        if batch.is_empty() {
+            break;
+        }
+        let checks = batch.into_iter().map(|port| {
+            let addr = format!("{host}:{port}");
+            async move {
+                match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr)).await {
+                    Ok(Ok(_)) => Some(port),
+                    _ => None,
+                }
+            }
+        });
+        open.extend(futures::future::join_all(checks).await.into_iter().flatten());
+    }
+    open.sort_unstable();
+
+    Ok(json!({
+        "host": host,
+        "from": from,
+        "to": to,
+        "open": open,
+        "scanned": to as u32 - from as u32 + 1,
+        "ms": started.elapsed().as_millis(),
+    }))
+}
+
 pub async fn dns_lookup(name: String) -> Result<Value, String> {
     let name = name.trim().trim_end_matches('.').to_string();
     if name.is_empty() {
@@ -375,6 +445,60 @@ pub mod remote {
         }
     }
 
+    /// Просмотр диапазона портов на POSIX-системе.
+    ///
+    /// Проверки идут по очереди, а не пачкой: раскладывать их в фоновые процессы оболочки
+    /// значит рисковать упереться в лимит процессов на чужой машине ради чужой задачи.
+    /// Поэтому и таймаут здесь короче, и диапазон разумно держать узким.
+    pub fn scan_cmd_posix(host: &str, from: u16, to: u16, secs: u64) -> String {
+        format!(
+            "if command -v nc >/dev/null 2>&1; then echo TOOL=nc; \
+               p={from}; while [ $p -le {to} ]; do \
+                 nc -z -w {secs} '{host}' $p >/dev/null 2>&1 && echo P=$p; \
+                 p=$((p+1)); done; \
+             elif command -v timeout >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then \
+               echo TOOL=bash; \
+               p={from}; while [ $p -le {to} ]; do \
+                 timeout {secs} bash -c \"exec 3<>/dev/tcp/{host}/$p\" >/dev/null 2>&1 && echo P=$p; \
+                 p=$((p+1)); done; \
+             else echo TOOL=none; fi"
+        )
+    }
+
+    /// Разбор ответа просмотра диапазона.
+    pub fn parse_scan(host: &str, from: u16, to: u16, stdout: &str) -> Value {
+        let tool = tag(stdout, "TOOL=").unwrap_or_default();
+        if tool == "none" {
+            return json!({
+                "host": host,
+                "from": from,
+                "to": to,
+                "from_server": true,
+                "error": "На сервере нечем проверить порты: нет ни nc, ни bash",
+            });
+        }
+        let mut open: Vec<u16> = Vec::new();
+        for line in stdout.lines() {
+            if let Some(p) = line.trim().strip_prefix("P=") {
+                if let Ok(n) = p.trim().parse::<u16>() {
+                    if (from..=to).contains(&n) && !open.contains(&n) {
+                        open.push(n);
+                    }
+                }
+            }
+        }
+        open.sort_unstable();
+        json!({
+            "host": host,
+            "from": from,
+            "to": to,
+            "from_server": true,
+            "tool": tool,
+            "open": open,
+            "scanned": to as u32 - from as u32 + 1,
+        })
+    }
+
     /// Разрешение имени на POSIX-системе.
     pub fn dns_cmd_posix(name: &str) -> String {
         format!(
@@ -498,6 +622,87 @@ A=2606:2800:220::1
 ");
         assert!(v["error"].as_str().unwrap().contains("нечем"));
         assert!(v.get("addresses").is_none());
+    }
+
+    #[test]
+    fn скан_со_своей_машины_находит_живой_сокет() {
+        // Разбор ответов сервера проверяется отдельно, а здесь — сам обход диапазона:
+        // пачки, таймаут, сборка списка. Сокет поднимаем сами, чтобы тест не зависел от
+        // того, что случайно слушает на машине.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = l.local_addr().unwrap().port();
+            // Диапазон вокруг него: соседние порты почти наверняка свободны, и если тест
+            // однажды поймает чужой — это будет видно по лишнему числу в списке.
+            let from = port.saturating_sub(2).max(1);
+            let to = port.saturating_add(2);
+            let v = super::port_scan("127.0.0.1".into(), from, to, Some(300))
+                .await
+                .expect("скан");
+            let open: Vec<u64> = v["open"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p.as_u64().unwrap())
+                .collect();
+            assert!(open.contains(&(port as u64)), "не нашли свой же сокет: {v}");
+            assert_eq!(v["scanned"], (to as u32 - from as u32 + 1));
+        });
+    }
+
+    #[test]
+    fn диапазон_проверяется_до_начала_работы() {
+        use super::parse_range;
+        assert!(parse_range(1, 1024).is_ok());
+        assert!(parse_range(22, 22).is_ok());
+        // Начало больше конца — это не пустой диапазон, а опечатка.
+        assert!(parse_range(100, 10).is_err());
+        assert!(parse_range(0, 10).is_err());
+        // Тысячи портов — задача для nmap, а не для окна утилит.
+        assert!(parse_range(1, 5000).is_err());
+        let err = parse_range(1, 5000).unwrap_err();
+        assert!(err.contains("5000"), "в отказе нет размера диапазона: {err}");
+    }
+
+    #[test]
+    fn открытые_порты_собираются_и_сортируются() {
+        let out = "TOOL=nc
+P=80
+P=22
+P=22
+P=443
+";
+        let v = parse_scan("srv", 1, 1024, out);
+        let open: Vec<u64> = v["open"].as_array().unwrap().iter().map(|p| p.as_u64().unwrap()).collect();
+        // По возрастанию и без повторов: список читают глазами.
+        assert_eq!(open, vec![22, 80, 443]);
+        assert_eq!(v["scanned"], 1024);
+    }
+
+    #[test]
+    fn порт_вне_запрошенного_диапазона_отбрасывается() {
+        // Если в ответе оказалось что-то за пределами запроса, значит мы читаем не то,
+        // и молча подмешивать это в список нельзя.
+        let v = parse_scan("srv", 20, 25, "TOOL=nc
+P=22
+P=8080
+");
+        let open = v["open"].as_array().unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0], 22);
+    }
+
+    #[test]
+    fn скан_без_утилит_объясняется_а_не_выдаёт_пустой_список() {
+        // Пустой список означал бы «всё закрыто» — это другое утверждение.
+        let v = parse_scan("srv", 1, 10, "TOOL=none
+");
+        assert!(v.get("open").is_none());
+        assert!(v["error"].as_str().unwrap().contains("нечем"));
     }
 
     #[test]
