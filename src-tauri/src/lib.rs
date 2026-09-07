@@ -8,11 +8,13 @@ mod docker;
 mod docker_compose;
 mod dpapi;
 mod error;
+pub mod filediff;
 mod importers;
 mod os_secrets;
 mod ownership;
 mod keygen;
 mod knownhosts;
+pub mod ldap;
 mod localfs;
 pub mod monitor;
 mod multihost;
@@ -1450,6 +1452,80 @@ async fn tools_http_on(
     Ok(tools::remote::parse_http(&целый, &out))
 }
 
+/// Откуда брать файл для сравнения.
+///
+/// Смысл утилиты именно в разнородности сторон: сравнить конфиг на двух серверах или
+/// локальную правку с тем, что доехало, — вопросы, которые задают чаще всего, и ни один
+/// из них не решается сравнением двух файлов на одной машине.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiffSide {
+    /// Пусто — файл на этой машине; иначе идентификатор открытой SSH-сессии.
+    #[serde(default)]
+    session_id: Option<String>,
+    path: String,
+}
+
+impl DiffSide {
+    /// Подпись стороны для показа: путь и, если это сервер, откуда он.
+    fn label(&self) -> String {
+        match self.session_id.as_deref().filter(|s| !s.is_empty()) {
+            Some(_) => format!("сервер: {}", self.path),
+            None => format!("эта машина: {}", self.path),
+        }
+    }
+}
+
+async fn diff_side_text(state: &State<'_, AppState>, side: &DiffSide) -> Result<String, String> {
+    match side.session_id.as_deref().filter(|s| !s.is_empty()) {
+        Some(id) => {
+            let s = state.ssh(id).ok_or("Сессия не подключена")?;
+            let v = remote_fs::read_file(&s.remote_fs, &s.handle, &side.path).await?;
+            // Слишком большой файл читалка отдаёт с пометкой и без содержимого. Сравнивать
+            // обрезанное значило бы показать различия, которых в файлах нет.
+            if v.get("tooLarge").and_then(|b| b.as_bool()).unwrap_or(false) {
+                return Err(format!("Файл {} слишком большой для сравнения", side.path));
+            }
+            Ok(v.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string())
+        }
+        None => tokio::fs::read_to_string(&side.path)
+            .await
+            .map_err(|e| format!("Не удалось прочитать {}: {e}", side.path)),
+    }
+}
+
+/// Сравнение двух файлов. Каждая сторона — эта машина или любая открытая сессия.
+#[tauri::command]
+async fn tools_diff(
+    state: State<'_, AppState>,
+    a: DiffSide,
+    b: DiffSide,
+) -> Result<Value, String> {
+    let (ta, tb) = (diff_side_text(&state, &a).await?, diff_side_text(&state, &b).await?);
+    // Двоичные файлы не сравниваем построчно: получился бы мусор, не отвечающий ни на
+    // один вопрос. Но сказать, совпадают ли они, всё равно можем.
+    if filediff::looks_binary(&ta) || filediff::looks_binary(&tb) {
+        return Ok(json!({
+            "a": a.label(),
+            "b": b.label(),
+            "same": ta == tb,
+            "binary": true,
+            "note": "Похоже на двоичные файлы — построчное сравнение для них бессмысленно",
+        }));
+    }
+    Ok(filediff::compare(&a.label(), &ta, &b.label(), &tb))
+}
+
+/// Запрос к каталогу LDAP.
+///
+/// Только со своей машины: варианта «с сервера» здесь нет, и это осознанно. LDAP — это
+/// ASN.1, готовый клиент открытый поток не принимает, а писать разбор протокола ради
+/// второго варианта несоразмерно пользе. В интерфейсе об этом сказано прямо.
+#[tauri::command]
+async fn tools_ldap(params: ldap::Params) -> Result<Value, String> {
+    ldap::search(params).await
+}
+
 /// Маршрут до адреса со своей машины.
 #[tauri::command]
 async fn tools_trace(host: String, hops: Option<u8>) -> Result<Value, String> {
@@ -1804,7 +1880,7 @@ pub fn run() {
             servers_import_ssh_config, servers_import_putty,
             servers_import_mobaxterm, servers_import_xshell, servers_import_securecrt,
             tools_port_test, tools_dns_lookup, tools_tls_cert, tools_subnet, tools_hash, tools_jwt_decode,
-            tools_port_test_on, tools_dns_lookup_on, tools_port_scan, tools_port_scan_on, tools_trace, tools_trace_on, tools_http, tools_http_on,
+            tools_port_test_on, tools_dns_lookup_on, tools_port_scan, tools_port_scan_on, tools_trace, tools_trace_on, tools_http, tools_http_on, tools_ldap, tools_diff,
             app_platform, app_paths, app_install_kind, multi_exec, multi_exec_cancel,
             windows_nudge_group, windows_raise_group, windows_restore_minimized, windows_count_minimized,
             clipboard_write, clipboard_read

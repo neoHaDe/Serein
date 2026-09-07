@@ -441,6 +441,35 @@ export const api = {
       invoke('tools_port_test_on', { sessionId, host, port }),
     dnsLookupOn: (sessionId: string, name: string): Promise<Record<string, unknown>> =>
       invoke('tools_dns_lookup_on', { sessionId, name }),
+    /**
+     * Запрос к каталогу LDAP. Только с этой машины: готовый клиент открытый поток не
+     * принимает, а писать разбор ASN.1 ради варианта «с сервера» несоразмерно пользе.
+     */
+    ldap: (params: {
+      url: string
+      bindDn?: string
+      password?: string
+      base?: string
+      filter?: string
+    }): Promise<Record<string, unknown>> => invoke('tools_ldap', { params }),
+    /**
+     * Сравнение двух файлов. Каждая сторона — эта машина (`sessionId` пуст) либо открытая
+     * сессия. Смысл именно в разнородности: «тот же ли конфиг на двух серверах».
+     */
+    diff: (
+      a: { sessionId?: string; path: string },
+      b: { sessionId?: string; path: string }
+    ): Promise<Record<string, unknown>> => invoke('tools_diff', { a, b }),
+    /**
+     * Выбрать файл на этой машине системным диалогом.
+     *
+     * `null` — человек передумал. Отличать это от ошибки важно: молча ничего не делать
+     * при отказе правильно, а при ошибке — нет.
+     */
+    pickLocalFile: async (): Promise<string | null> => {
+      const sel = await openDialog({ multiple: false, directory: false, title: 'Выберите файл' })
+      return typeof sel === 'string' ? sel : null
+    },
     /** Просмотр диапазона портов. За раз — не больше 1024, это ограничение по смыслу. */
     portScan: (host: string, from: number, to: number): Promise<Record<string, unknown>> =>
       invoke('tools_port_scan', { host, from, to }),

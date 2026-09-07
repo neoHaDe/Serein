@@ -4783,3 +4783,79 @@ button.secondary:hover {
   font-size: 11px;
   color: var(--text);
 }
+
+/* Стороны сравнения: две одинаковых группы полей подряд. Без рамки и подписи они
+   сливаются в одну длинную форму, и непонятно, где кончается первый файл. */
+.tools-diff-side {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 10px 12px 12px;
+  background: var(--bg);
+}
+.tools-diff-label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+/* Обзор файлов на сервере: список каталога в модальном окне. Только выбор — для работы
+   с файлами есть полная панель, здесь нужен один ответ, какой путь взять. */
+.picker-modal {
+  width: 560px;
+  max-width: 92vw;
+}
+.picker-path {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.picker-path input {
+  flex: 1;
+  margin-top: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.picker-list {
+  height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+}
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+}
+.picker-row:hover {
+  background: var(--panel-2);
+}
+.picker-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-size {
+  color: var(--muted);
+  font-size: 11px;
+}
+.picker-empty {
+  padding: 14px;
+}
+/* Кнопка выбора стоит в одну линию с полем пути, а не под ним. */
+.picker-open {
+  align-self: flex-end;
+  margin-bottom: 1px;
+}

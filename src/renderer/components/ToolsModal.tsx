@@ -2,8 +2,20 @@ import { useState } from 'react'
 import { errText } from '../errText'
 import type { IconName } from './Icon'
 import { Icon } from './Icon'
+import { RemoteFilePicker } from './RemoteFilePicker'
 
-type Tab = 'port' | 'scan' | 'trace' | 'http' | 'dns' | 'tls' | 'subnet' | 'hash' | 'jwt'
+type Tab =
+  | 'port'
+  | 'scan'
+  | 'trace'
+  | 'http'
+  | 'dns'
+  | 'tls'
+  | 'ldap'
+  | 'diff'
+  | 'subnet'
+  | 'hash'
+  | 'jwt'
 
 interface ConnectedSession {
   sessionId: string
@@ -49,6 +61,8 @@ const TABS: { id: Tab; label: string; icon: IconName; hint: string; local?: true
   { id: 'http', label: 'HTTP', icon: 'external', hint: 'Что отвечает служба' },
   { id: 'dns', label: 'DNS', icon: 'search', hint: 'В какой адрес разрешается имя' },
   { id: 'tls', label: 'TLS', icon: 'key', hint: 'Чей сертификат и до какого числа' },
+  { id: 'ldap', label: 'LDAP', icon: 'server', hint: 'Пускает ли каталог и есть ли запись' },
+  { id: 'diff', label: 'Сравнить файлы', icon: 'copy', hint: 'Одинаковы ли и чем отличаются' },
   { id: 'subnet', label: 'Подсеть', icon: 'broadcast', hint: 'Границы сети по маске', local: true },
   { id: 'hash', label: 'Хеш', icon: 'snippets', hint: 'Контрольная сумма текста', local: true },
   { id: 'jwt', label: 'JWT', icon: 'file', hint: 'Что внутри токена', local: true }
@@ -88,6 +102,84 @@ function From({
   )
 }
 
+/**
+ * Одна сторона сравнения: где лежит файл и какой.
+ *
+ * Выбор машины и путь стоят рядом не для красоты — путь без указания машины ничего не
+ * значит, а `/etc/nginx/nginx.conf` есть на каждом сервере и везде разный.
+ */
+function DiffSide({
+  label,
+  value,
+  onChange,
+  sessions
+}: {
+  label: string
+  value: { sessionId: string; path: string }
+  onChange: (v: { sessionId: string; path: string }) => void
+  sessions: ConnectedSession[]
+}): JSX.Element {
+  const [picking, setPicking] = useState(false)
+
+  // Набранный руками путь — способ ошибиться дважды: опечататься и не заметить, что файла
+  // там нет. «Не удалось прочитать» в ответ на это не объясняет ничего.
+  const pick = async (): Promise<void> => {
+    if (value.sessionId) {
+      setPicking(true)
+      return
+    }
+    const chosen = await window.api.tools.pickLocalFile()
+    if (chosen) onChange({ ...value, path: chosen })
+  }
+
+  return (
+    <div className="tools-diff-side">
+      <span className="tools-diff-label">{label}</span>
+      <div className="row">
+        <label style={{ flex: 1 }}>
+          Где
+          <select
+            value={value.sessionId}
+            onChange={(e) => {
+              // Путь со старой машины на новой почти наверняка не существует, и оставлять
+              // его значило бы предлагать заведомо неверное.
+              onChange({ sessionId: e.target.value, path: '' })
+            }}
+          >
+            <option value="">на этой машине</option>
+            {sessions.map((s) => (
+              <option key={s.sessionId} value={s.sessionId}>
+                {s.title}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label style={{ flex: 2 }}>
+          Путь
+          <input
+            value={value.path}
+            onChange={(e) => onChange({ ...value, path: e.target.value })}
+            placeholder={value.sessionId ? '/etc/nginx/nginx.conf' : 'C:\\путь\\файл.conf'}
+          />
+        </label>
+        <button className="mini picker-open" title="Выбрать файл" onClick={() => void pick()}>
+          <Icon name="folder-open" size={14} />
+        </button>
+      </div>
+      {picking && value.sessionId && (
+        <RemoteFilePicker
+          sessionId={value.sessionId}
+          onPick={(p) => {
+            onChange({ ...value, path: p })
+            setPicking(false)
+          }}
+          onClose={() => setPicking(false)}
+        />
+      )}
+    </div>
+  )
+}
+
 export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): JSX.Element {
   const [tab, setTab] = useState<Tab>('port')
   // Одна на обе вкладки: человек обычно разбирается с одним сервером за раз.
@@ -116,6 +208,13 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
   const [hashAlgo, setHashAlgo] = useState('sha256')
   const [hashText, setHashText] = useState('')
   const [jwtToken, setJwtToken] = useState('')
+  const [ldapUrl, setLdapUrl] = useState('ldap://127.0.0.1:389')
+  const [ldapDn, setLdapDn] = useState('')
+  const [ldapPass, setLdapPass] = useState('')
+  const [ldapBase, setLdapBase] = useState('')
+  const [ldapFilter, setLdapFilter] = useState('(objectClass=*)')
+  const [diffA, setDiffA] = useState({ sessionId: '', path: '' })
+  const [diffB, setDiffB] = useState({ sessionId: '', path: '' })
 
   const run = async (fn: () => Promise<unknown>): Promise<void> => {
     setBusy(true)
@@ -359,6 +458,76 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
               onClick={() => void run(() => window.api.tools.tlsCert(tlsHost, Number(tlsPort) || 443))}
             >
               Получить сертификат
+            </button>
+          </div>
+        )}
+
+        {tab === 'ldap' && (
+          <div className="tools-pane">
+            <label>
+              Адрес каталога
+              <input value={ldapUrl} onChange={(e) => setLdapUrl(e.target.value)} placeholder="ldap://dc.example.com" />
+            </label>
+            <div className="row">
+              <label style={{ flex: 1 }}>
+                Учётная запись (пусто — анонимно)
+                <input value={ldapDn} onChange={(e) => setLdapDn(e.target.value)} placeholder="cn=admin,dc=example,dc=com" />
+              </label>
+              <label style={{ flex: 1 }}>
+                Пароль
+                <input type="password" value={ldapPass} onChange={(e) => setLdapPass(e.target.value)} />
+              </label>
+            </div>
+            <div className="row">
+              <label style={{ flex: 1 }}>
+                Откуда искать
+                <input value={ldapBase} onChange={(e) => setLdapBase(e.target.value)} placeholder="dc=example,dc=com" />
+              </label>
+              <label style={{ flex: 1 }}>
+                Условие
+                <input value={ldapFilter} onChange={(e) => setLdapFilter(e.target.value)} />
+              </label>
+            </div>
+            <p className="hint">
+              Запрос идёт <b>с этой машины</b>, выбора «откуда» здесь нет: готовый клиент
+              каталога не умеет работать через SSH-канал. Показываются первые 50 записей —
+              каталог организации отдаёт их тысячами.
+            </p>
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() =>
+                void run(() =>
+                  window.api.tools.ldap({
+                    url: ldapUrl,
+                    bindDn: ldapDn,
+                    password: ldapPass,
+                    base: ldapBase,
+                    filter: ldapFilter
+                  })
+                )
+              }
+            >
+              {busy ? 'Спрашиваю каталог…' : 'Найти'}
+            </button>
+          </div>
+        )}
+
+        {tab === 'diff' && (
+          <div className="tools-pane">
+            <DiffSide label="Первый файл" value={diffA} onChange={setDiffA} sessions={connectedSessions} />
+            <DiffSide label="Второй файл" value={diffB} onChange={setDiffB} sessions={connectedSessions} />
+            <p className="hint">
+              Каждая сторона — эта машина или любой подключённый сервер. Смысл именно в этом:
+              вопрос обычно звучит как «тот же ли конфиг на двух серверах» или «доехала ли
+              правка», а не «сравни два файла у себя».
+            </p>
+            <button
+              className="primary"
+              disabled={busy || !diffA.path.trim() || !diffB.path.trim()}
+              onClick={() => void run(() => window.api.tools.diff(diffA, diffB))}
+            >
+              {busy ? 'Сравниваю…' : 'Сравнить'}
             </button>
           </div>
         )}
