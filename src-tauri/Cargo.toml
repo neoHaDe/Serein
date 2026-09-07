@@ -57,6 +57,14 @@ dunce = "1"
 vnc-rs = "0.5"
 tokio-postgres = "0.7"
 redis = { version = "1", features = ["tokio-comp"] }
+# MySQL/MariaDB: клиента целиком здесь нет намеренно. Ни mysql_async, ни sqlx не умеют
+# принимать готовый поток — сокет они открывают сами, а нам нужен канал внутри SSH.
+# mysql_common даёт разбор пакетов и скрэмблы без единого системного вызова, поэтому
+# рукопожатие и запросы живут в src/mysql.rs, а протокол — здесь.
+# default-features выключены: умолчание тянет zlib через C-сборку (сжатие нам не нужно),
+# а фича client_ed25519 привела бы curve25519-dalek — тот самый конфликт, из-за которого
+# отложен RDP.
+mysql_common = { version = "0.38", default-features = false }
 
 [target.'cfg(not(windows))'.dependencies]
 # Буфер обмена вне Windows: на Windows работаем напрямую через Win32, там arboard лишний.

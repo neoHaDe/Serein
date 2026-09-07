@@ -1,4 +1,5 @@
-//! Базы данных рядом с сервером: PostgreSQL и Redis через уже открытую SSH-сессию.
+//! Базы данных рядом с сервером: PostgreSQL, MySQL/MariaDB и Redis через уже открытую
+//! SSH-сессию.
 //!
 //! Смысл ровно в слове «через». Базу почти никогда не выставляют в сеть: она слушает
 //! `127.0.0.1` или внутренний адрес, и добраться до неё можно только с самого сервера.
@@ -8,6 +9,8 @@
 //!
 //! Клиенты выбраны по одному признаку — они принимают **готовый поток**, а не сами лезут
 //! в сеть по адресу. Без этого канал внутрь не отдать, и пришлось бы возвращаться к пробросу.
+//! У MySQL такого клиента не нашлось вовсе, поэтому его протокол разобран у нас — см.
+//! [`crate::mysql`], там же объяснено, почему выбран этот путь, а не проброс порта.
 
 use crate::ssh::SharedHandle;
 use serde_json::{json, Map, Value};
@@ -20,6 +23,8 @@ use tokio::sync::Mutex as AsyncMutex;
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     Postgres,
+    /// MySQL и MariaDB — один протокол и один порт, различать их клиенту незачем.
+    Mysql,
     Redis,
 }
 
@@ -28,6 +33,7 @@ impl Kind {
     pub fn default_port(self) -> u16 {
         match self {
             Kind::Postgres => 5432,
+            Kind::Mysql => 3306,
             Kind::Redis => 6379,
         }
     }
@@ -35,6 +41,7 @@ impl Kind {
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Postgres => "postgres",
+            Kind::Mysql => "mysql",
             Kind::Redis => "redis",
         }
     }
@@ -54,7 +61,7 @@ pub struct Params {
     pub user: Option<String>,
     #[serde(default)]
     pub password: Option<String>,
-    /// Имя базы (PostgreSQL) или номер базы (Redis).
+    /// Имя базы (PostgreSQL, MySQL) или номер базы (Redis).
     #[serde(default)]
     pub database: Option<String>,
 }
@@ -69,16 +76,44 @@ impl Params {
     }
 }
 
+type MysqlConn = crate::mysql::Conn<russh::ChannelStream<russh::client::Msg>>;
+
 enum Live {
     Postgres(Arc<tokio_postgres::Client>),
+    /// Под замком, а не как у PostgreSQL: наш клиент MySQL держит один поток и
+    /// разговаривает по нему строго по очереди — запрос, потом ответ.
+    Mysql(Arc<AsyncMutex<MysqlConn>>),
     Redis(Arc<AsyncMutex<redis::aio::MultiplexedConnection>>),
 }
 
-static SESSIONS: Mutex<Option<HashMap<String, Live>>> = Mutex::new(None);
+/// Открытое соединение вместе с тем, через какую SSH-сессию оно идёт.
+///
+/// Принадлежность нужна не для порядка: канал живёт внутри сессии, и когда сессия
+/// закрывается, соединение с базой становится мёртвым. Без этой пометки оно осталось бы
+/// в карте до конца работы приложения.
+struct Open {
+    session_id: String,
+    live: Live,
+}
 
-fn with_sessions<T>(f: impl FnOnce(&mut HashMap<String, Live>) -> T) -> T {
+static SESSIONS: Mutex<Option<HashMap<String, Open>>> = Mutex::new(None);
+
+fn with_sessions<T>(f: impl FnOnce(&mut HashMap<String, Open>) -> T) -> T {
     let mut g = crate::sync::lock(&SESSIONS);
     f(g.get_or_insert_with(HashMap::new))
+}
+
+/// Роняет соединение внутри асинхронного рантайма.
+///
+/// Не блажь, а обязательное условие. `russh` в деструкторе канала вызывает
+/// `tokio::spawn`, чтобы вежливо отправить серверу «закрываю». Вне рантайма этот вызов
+/// паникует, а паника в деструкторе не разворачивается — процесс просто падает целиком.
+/// Команда закрытия панели приходит с главного потока, поэтому ронять здесь, где придётся,
+/// нельзя: одно нажатие крестика убивало бы приложение.
+fn drop_in_runtime(open: Open) {
+    tauri::async_runtime::spawn(async move {
+        drop(open);
+    });
 }
 
 /// Открывает канал до базы со стороны сервера.
@@ -98,7 +133,12 @@ async fn channel(
 }
 
 /// Подключается к базе и запоминает соединение под выданным идентификатором.
-pub async fn open(id: String, handle: &SharedHandle, p: Params) -> Result<Value, String> {
+pub async fn open(
+    id: String,
+    session_id: &str,
+    handle: &SharedHandle,
+    p: Params,
+) -> Result<Value, String> {
     let stream = channel(handle, p.host(), p.port()).await?;
     let live = match p.kind {
         Kind::Postgres => {
@@ -122,6 +162,16 @@ pub async fn open(id: String, handle: &SharedHandle, p: Params) -> Result<Value,
                 let _ = conn.await;
             });
             Live::Postgres(Arc::new(client))
+        }
+        Kind::Mysql => {
+            let conn = crate::mysql::Conn::connect(
+                stream,
+                p.user.as_deref().unwrap_or("root"),
+                p.password.as_deref().unwrap_or(""),
+                p.database.as_deref(),
+            )
+            .await?;
+            Live::Mysql(Arc::new(AsyncMutex::new(conn)))
         }
         Kind::Redis => {
             let mut info = redis::RedisConnectionInfo::default();
@@ -149,14 +199,15 @@ pub async fn open(id: String, handle: &SharedHandle, p: Params) -> Result<Value,
         }
     };
     let kind = p.kind;
-    with_sessions(|m| m.insert(id.clone(), live));
+    with_sessions(|m| m.insert(id.clone(), Open { session_id: session_id.to_string(), live }));
     Ok(json!({ "id": id, "kind": kind.as_str(), "host": p.host(), "port": p.port() }))
 }
 
 /// Выполняет запрос и возвращает таблицу: колонки, строки и сколько это заняло.
 pub async fn query(id: &str, text: &str) -> Result<Value, String> {
-    let live = with_sessions(|m| match m.get(id) {
+    let live = with_sessions(|m| match m.get(id).map(|o| &o.live) {
         Some(Live::Postgres(c)) => Some(Live::Postgres(c.clone())),
+        Some(Live::Mysql(c)) => Some(Live::Mysql(c.clone())),
         Some(Live::Redis(c)) => Some(Live::Redis(c.clone())),
         None => None,
     })
@@ -165,6 +216,7 @@ pub async fn query(id: &str, text: &str) -> Result<Value, String> {
     let started = std::time::Instant::now();
     let mut out = match live {
         Live::Postgres(c) => pg_query(&c, text).await?,
+        Live::Mysql(c) => mysql_query(&c, text).await?,
         Live::Redis(c) => redis_query(&c, text).await?,
     };
     if let Some(o) = out.as_object_mut() {
@@ -200,6 +252,26 @@ async fn pg_query(client: &tokio_postgres::Client, sql: &str) -> Result<Value, S
         }
     }
     Ok(json!({ "columns": columns, "rows": rows, "affected": affected }))
+}
+
+async fn mysql_query(conn: &AsyncMutex<MysqlConn>, sql: &str) -> Result<Value, String> {
+    let out = {
+        let mut g = conn.lock().await;
+        g.query(sql).await?
+    };
+    let rows: Vec<Value> = out
+        .rows
+        .into_iter()
+        .map(|r| {
+            let mut obj = Map::new();
+            for (name, cell) in out.columns.iter().zip(r) {
+                // NULL и пустая строка — разные вещи, как и у PostgreSQL.
+                obj.insert(name.clone(), cell.map(Value::String).unwrap_or(Value::Null));
+            }
+            Value::Object(obj)
+        })
+        .collect();
+    Ok(json!({ "columns": out.columns, "rows": rows, "affected": out.affected }))
 }
 
 async fn redis_query(
@@ -276,9 +348,32 @@ pub fn split_command(line: &str) -> Vec<String> {
 }
 
 pub fn close(id: &str) {
-    with_sessions(|m| {
-        m.remove(id);
+    if let Some(open) = with_sessions(|m| m.remove(id)) {
+        drop_in_runtime(open);
+    }
+}
+
+/// Закрывает все базы, открытые через указанную SSH-сессию.
+///
+/// Их каналы живут внутри неё, и пережить её они не могут — а вот остаться в карте
+/// мёртвыми вполне. Тогда следующий запрос уходил бы в никуда и ждал ответа.
+pub fn close_session(session_id: &str) {
+    let gone: Vec<Open> = with_sessions(|m| {
+        let ids: Vec<String> = m
+            .iter()
+            .filter(|(_, o)| o.session_id == session_id)
+            .map(|(k, _)| k.clone())
+            .collect();
+        ids.iter().filter_map(|k| m.remove(k)).collect()
     });
+    for open in gone {
+        drop_in_runtime(open);
+    }
+}
+
+/// Сколько соединений открыто через эту сессию — для тестов и диагностики.
+pub fn count_for_session(session_id: &str) -> usize {
+    with_sessions(|m| m.values().filter(|o| o.session_id == session_id).count())
 }
 
 fn pg_err(e: &tokio_postgres::Error) -> String {

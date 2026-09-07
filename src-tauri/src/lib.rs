@@ -16,6 +16,7 @@ mod knownhosts;
 mod localfs;
 pub mod monitor;
 mod multihost;
+pub mod mysql;
 mod paths;
 mod proxycmd;
 mod schema;
@@ -94,6 +95,7 @@ impl AppState {
         self.ops.cancel_prefix(&format!("{id}:"));
         term_out::replay_forget(id);
         platform::forget(id);
+        db::close_session(id);
         self.owners.release(id);
         if let Some(tx) = crate::sync::lock(&self.ki).remove(id) {
             drop(tx);
@@ -640,7 +642,7 @@ async fn db_open(
 ) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let id = format!("db-{}", uuid::Uuid::new_v4());
-    db::open(id, &s.handle, params).await
+    db::open(id, &session_id, &s.handle, params).await
 }
 
 /// Выполняет запрос: SQL для PostgreSQL, команду для Redis.
@@ -649,8 +651,10 @@ async fn db_query(id: String, text: String) -> Result<Value, String> {
     db::query(&id, &text).await
 }
 
+/// Закрытие идёт асинхронной командой не для красоты: деструктор SSH-канала обращается
+/// к рантайму Tokio, и с главного потока это роняло всё приложение целиком.
 #[tauri::command]
-fn db_close(id: String) {
+async fn db_close(id: String) {
     db::close(&id);
 }
 

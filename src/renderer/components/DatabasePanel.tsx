@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { Icon } from './Icon'
 import { WsDetachButton } from './WsDetachButton'
 import { openDetachedWorkspace } from './workspaceWindow'
 import { errText } from '../errText'
 import { cellText, isNull, needsConfirm, summarize, type QueryResult } from '../dbQuery'
+import { forget, isGone, recall, remember, update } from '../dbMemory'
 
 /**
  * Базы данных рядом с сервером.
@@ -11,9 +12,12 @@ import { cellText, isNull, needsConfirm, summarize, type QueryResult } from '../
  * Соединение идёт каналом внутри уже открытой SSH-сессии, поэтому здесь не спрашивают
  * адрес «снаружи»: база слушает петлю сервера, и по умолчанию мы туда и целимся. Правила
  * показа результата и предупреждений живут в `dbQuery.ts` — там же тесты.
+ *
+ * Уход на другую вкладку соединение **не рвёт**: оно привязано к SSH-сессии, а не к тому,
+ * открыта ли панель. Что показать при возвращении, помнит `dbMemory.ts`.
  */
 
-type Kind = 'postgres' | 'redis'
+type Kind = 'postgres' | 'mysql' | 'redis'
 
 interface Props {
   sessionId: string
@@ -25,6 +29,7 @@ interface Props {
 /** Подсказки в поле запроса: у SQL и у Redis разный язык, и пустой экран бесполезен. */
 const HINT: Record<Kind, string> = {
   postgres: 'SELECT * FROM pg_stat_activity LIMIT 20;',
+  mysql: 'SHOW FULL PROCESSLIST;',
   redis: 'INFO server'
 }
 
@@ -36,6 +41,12 @@ const STARTERS: Record<Kind, { label: string; text: string }[]> = {
     { label: 'Активные запросы', text: "SELECT pid, usename, state, query FROM pg_stat_activity WHERE state <> 'idle'" },
     { label: 'Версия', text: 'SELECT version()' }
   ],
+  mysql: [
+    { label: 'Таблицы', text: "SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema NOT IN ('mysql','information_schema','performance_schema','sys') ORDER BY 1, 2" },
+    { label: 'Размеры баз', text: 'SELECT table_schema AS база, ROUND(SUM(data_length + index_length) / 1024 / 1024) AS мегабайт FROM information_schema.tables GROUP BY table_schema ORDER BY 2 DESC' },
+    { label: 'Активные запросы', text: 'SHOW FULL PROCESSLIST' },
+    { label: 'Версия', text: 'SELECT VERSION() AS версия' }
+  ],
   redis: [
     { label: 'Сервер', text: 'INFO server' },
     { label: 'Память', text: 'INFO memory' },
@@ -44,33 +55,60 @@ const STARTERS: Record<Kind, { label: string; text: string }[]> = {
   ]
 }
 
+/** Кого подставлять в поле пользователя. У Redis имени обычно нет вовсе. */
+const DEFAULT_USER: Record<Kind, string> = { postgres: 'postgres', mysql: 'root', redis: '' }
+
+/** Подсказки в пустых полях — то же, что подставит бэкенд, если оставить их пустыми. */
+const DEFAULT_PORT: Record<Kind, number> = { postgres: 5432, mysql: 3306, redis: 6379 }
+const DEFAULT_DB: Record<Kind, string> = { postgres: 'postgres', mysql: 'mysql', redis: '0' }
+
 export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props): JSX.Element {
-  const idRef = useRef<string | null>(null)
+  // Что было открыто в прошлый раз на этой же сессии. Читаем один раз при создании
+  // панели: дальше состояние живёт в React, а сюда только записывается.
+  const saved = useRef(recall(sessionId)).current
+  const idRef = useRef<string | null>(saved?.connectionId ?? null)
 
-  const [kind, setKind] = useState<Kind>('postgres')
-  const [host, setHost] = useState('127.0.0.1')
-  const [port, setPort] = useState('')
-  const [user, setUser] = useState('postgres')
+  const [kind, setKind] = useState<Kind>((saved?.form.kind as Kind) ?? 'postgres')
+  const [host, setHost] = useState(saved?.form.host ?? '127.0.0.1')
+  const [port, setPort] = useState(saved?.form.port ?? '')
+  const [user, setUser] = useState(saved?.form.user ?? 'postgres')
+  // Пароль намеренно не восстанавливаем: пока соединение живо, он не нужен, а держать
+  // его в памяти дольше формы — плата без выгоды.
   const [password, setPassword] = useState('')
-  const [database, setDatabase] = useState('')
+  const [database, setDatabase] = useState(saved?.form.database ?? '')
 
-  const [connected, setConnected] = useState<{ kind: string; host: string; port: number } | null>(null)
+  const [connected, setConnected] = useState<{ kind: string; host: string; port: number } | null>(
+    saved?.info ?? null
+  )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  const [text, setText] = useState('')
-  const [result, setResult] = useState<QueryResult | null>(null)
+  const [text, setText] = useState(saved?.text ?? '')
+  const [result, setResult] = useState<QueryResult | null>(saved?.result ?? null)
 
   const disconnect = useCallback(() => {
     const id = idRef.current
     idRef.current = null
     if (id) void window.api.db.close(id)
+    forget(sessionId)
     setConnected(null)
     setResult(null)
-  }, [])
+  }, [sessionId])
 
-  // Сессия закрылась — соединение с базой шло внутри неё и тоже больше не живо.
-  useEffect(() => () => disconnect(), [disconnect])
+  /**
+   * Соединение больше не живо — но не по нашей воле.
+   *
+   * Так бывает, когда SSH-сессия закрылась, пока панель была на другой вкладке: канал
+   * жил внутри неё. Держаться за такое соединение значит показывать таблицу, за которой
+   * ничего нет, поэтому возвращаемся к форме и говорим почему.
+   */
+  const connectionGone = useCallback(() => {
+    idRef.current = null
+    forget(sessionId)
+    setConnected(null)
+    setResult(null)
+    setError('Соединение с базой закрылось вместе с сессией — подключитесь заново')
+  }, [sessionId])
 
   const connect = async (): Promise<void> => {
     setBusy(true)
@@ -85,7 +123,15 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
         database
       })
       idRef.current = info.id
-      setConnected({ kind: info.kind, host: info.host, port: info.port })
+      const shown = { kind: info.kind, host: info.host, port: info.port }
+      setConnected(shown)
+      remember(sessionId, {
+        connectionId: info.id,
+        info: shown,
+        form: { kind, host, port, user, database },
+        text,
+        result: null
+      })
     } catch (e) {
       setError(errText(e))
     } finally {
@@ -107,9 +153,18 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
     try {
       const out = await window.api.db.query(id, query)
       setResult(out)
+      // Помним именно содержимое поля, а не выполненный запрос: заготовки из списка
+      // текст в поле не меняют, и подменять его при возвращении было бы неожиданно.
+      update(sessionId, { result: out })
     } catch (e) {
-      setError(errText(e))
+      const msg = errText(e)
+      if (isGone(msg)) {
+        connectionGone()
+        return
+      }
+      setError(msg)
       setResult(null)
+      update(sessionId, { result: null })
     } finally {
       setBusy(false)
     }
@@ -161,10 +216,11 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
                   const k = e.target.value as Kind
                   setKind(k)
                   // Пользователь по умолчанию свой у каждой базы, а у Redis его обычно нет.
-                  setUser(k === 'postgres' ? 'postgres' : '')
+                  setUser(DEFAULT_USER[k])
                 }}
               >
                 <option value="postgres">PostgreSQL</option>
+                <option value="mysql">MySQL / MariaDB</option>
                 <option value="redis">Redis</option>
               </select>
             </label>
@@ -177,7 +233,7 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
               <input
                 value={port}
                 onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))}
-                placeholder={kind === 'postgres' ? '5432' : '6379'}
+                placeholder={String(DEFAULT_PORT[kind])}
               />
             </label>
             <label>
@@ -189,11 +245,11 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
             </label>
             <label>
-              {kind === 'postgres' ? 'База' : 'Номер базы'}
+              {kind === 'redis' ? 'Номер базы' : 'База'}
               <input
                 value={database}
                 onChange={(e) => setDatabase(e.target.value)}
-                placeholder={kind === 'postgres' ? 'postgres' : '0'}
+                placeholder={DEFAULT_DB[kind]}
               />
             </label>
           </div>
@@ -223,7 +279,10 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
               value={text}
               placeholder={HINT[kind]}
               spellCheck={false}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => {
+                setText(e.target.value)
+                update(sessionId, { text: e.target.value })
+              }}
               onKeyDown={onKeyDown}
             />
             <button className="primary" disabled={busy} onClick={() => void run()}>
