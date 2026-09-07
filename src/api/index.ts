@@ -441,6 +441,11 @@ export const api = {
     /** Просмотр диапазона портов. За раз — не больше 1024, это ограничение по смыслу. */
     portScan: (host: string, from: number, to: number): Promise<Record<string, unknown>> =>
       invoke('tools_port_scan', { host, from, to }),
+    /** Маршрут до адреса. `hops` — предел числа узлов, по умолчанию 15. */
+    trace: (host: string, hops?: number): Promise<Record<string, unknown>> =>
+      invoke('tools_trace', { host, hops }),
+    traceOn: (sessionId: string, host: string, hops?: number): Promise<Record<string, unknown>> =>
+      invoke('tools_trace_on', { sessionId, host, hops }),
     portScanOn: (
       sessionId: string,
       host: string,

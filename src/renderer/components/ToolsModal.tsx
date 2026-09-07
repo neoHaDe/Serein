@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { errText } from '../errText'
 
-type Tab = 'port' | 'scan' | 'dns' | 'tls' | 'subnet' | 'hash' | 'jwt'
+type Tab = 'port' | 'scan' | 'trace' | 'dns' | 'tls' | 'subnet' | 'hash' | 'jwt'
 
 interface ConnectedSession {
   sessionId: string
@@ -35,6 +35,7 @@ interface Props {
 const TABS: { id: Tab; label: string }[] = [
   { id: 'port', label: 'Порт' },
   { id: 'scan', label: 'Диапазон' },
+  { id: 'trace', label: 'Маршрут' },
   { id: 'dns', label: 'DNS' },
   { id: 'tls', label: 'TLS' },
   { id: 'subnet', label: 'Подсеть' },
@@ -93,6 +94,8 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
   const [scanHost, setScanHost] = useState('127.0.0.1')
   const [scanFrom, setScanFrom] = useState('1')
   const [scanTo, setScanTo] = useState('1024')
+  const [traceHost, setTraceHost] = useState('1.1.1.1')
+  const [traceHops, setTraceHops] = useState('15')
   const [dnsName, setDnsName] = useState('example.com')
   const [tlsHost, setTlsHost] = useState('nehade.xyz')
   const [tlsPort, setTlsPort] = useState('443')
@@ -197,6 +200,40 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
               }
             >
               {busy ? 'Смотрю…' : from === HERE ? 'Просмотреть' : 'Просмотреть с сервера'}
+            </button>
+          </div>
+        )}
+
+        {tab === 'trace' && (
+          <div className="tools-pane">
+            <div className="row">
+              <label style={{ flex: 2 }}>
+                Хост
+                <input value={traceHost} onChange={(e) => setTraceHost(e.target.value)} placeholder="1.1.1.1" />
+              </label>
+              <label style={{ flex: 1 }}>
+                Узлов
+                <input value={traceHops} onChange={(e) => setTraceHops(e.target.value)} type="number" min={1} max={30} />
+              </label>
+            </div>
+            <From value={from} onChange={setFrom} sessions={connectedSessions} />
+            <p className="hint">
+              Маршрут строит системная программа: <code>tracert</code> на Windows,
+              <code> traceroute</code> на юниксах. На минимальных серверах её может не быть
+              вовсе — тогда это будет сказано прямо, а не показано пустым списком.
+            </p>
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() =>
+                void run(() =>
+                  from === HERE
+                    ? window.api.tools.trace(traceHost, Number(traceHops))
+                    : window.api.tools.traceOn(from, traceHost, Number(traceHops))
+                )
+              }
+            >
+              {busy ? 'Строю маршрут…' : from === HERE ? 'Построить маршрут' : 'Построить с сервера'}
             </button>
           </div>
         )}

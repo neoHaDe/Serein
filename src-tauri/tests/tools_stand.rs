@@ -136,3 +136,52 @@ fn скан_диапазона_находит_ровно_открытый_пор
         }
     });
 }
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn alpine_не_выдаёт_отказ_в_правах_за_пустой_маршрут() {
+    // Этот тест написан по следам живой проверки. Вручную `traceroute` на Alpine работал —
+    // потому что `docker exec` заходит под root. По SSH мы приходим обычным пользователем,
+    // и сырой сокет ему открыть не дают. Разбор отдавал на это пустой список узлов, то
+    // есть «маршрута нет» вместо «маршрут не построили» — ровно та ложь, которой здесь
+    // быть не должно.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let cmd = remote::trace_cmd_posix(&s.mariadb_host, 5);
+        let out = run(&s, s.alpine_port, &cmd).await;
+        let v = remote::parse_trace(&s.mariadb_host, &out);
+
+        if v.get("hops").is_some() {
+            // Если однажды на образе появится tracepath или traceroute станет setuid —
+            // маршрут построится, и это тоже верный исход. Тогда он обязан быть непустым.
+            let hops = v["hops"].as_array().unwrap();
+            assert!(!hops.is_empty(), "пустой список узлов выдан за маршрут: {v}");
+            assert!(hops[0]["addr"].is_string(), "у первого узла нет адреса: {v}");
+        } else {
+            let err = v["error"].as_str().unwrap_or("");
+            assert!(!err.is_empty(), "отказ без объяснения: {v}");
+            assert!(
+                err.contains("not permitted") || err.contains("нечем"),
+                "непонятная причина отказа: {err}"
+            );
+        }
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn debian_честно_говорит_что_маршрут_строить_нечем() {
+    // На этом образе нет ни traceroute, ни tracepath, ни ping. Это обычный минимальный
+    // Debian, а не редкость, и пустой список узлов читался бы как «маршрута нет».
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let cmd = remote::trace_cmd_posix(&s.mariadb_host, 5);
+        let out = run(&s, s.debian_port, &cmd).await;
+        let v = remote::parse_trace(&s.mariadb_host, &out);
+        assert!(v.get("hops").is_none(), "взялся маршрут там, где нечем: {v}");
+        assert!(
+            v["error"].as_str().unwrap_or("").contains("нечем"),
+            "отказ без объяснения: {v}"
+        );
+    });
+}

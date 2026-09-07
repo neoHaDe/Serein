@@ -151,6 +151,45 @@ pub async fn port_scan(
     }))
 }
 
+/// Трассировка со своей машины.
+///
+/// Через системную программу, а не своими пакетами: чтобы построить маршрут самому, нужен
+/// сырой сокет и управление TTL, а это права администратора на Linux и лишний повод для
+/// вопросов на любой машине. `tracert` на Windows есть всегда, `traceroute` на юниксах —
+/// почти всегда; если нет, скажем об этом словами.
+///
+/// Вывод разбирается тем же кодом, что и серверный: слова там не читаются, только номер
+/// узла, адрес и время, — поэтому язык системы значения не имеет.
+pub async fn trace(host: String, hops: Option<u8>) -> Result<Value, String> {
+    let (host, _) = parse_host_port(&host, 0)?;
+    remote::check_host(&host)?;
+    let hops = hops.unwrap_or(15).clamp(1, 30);
+
+    let (prog, args) = if cfg!(windows) {
+        ("tracert", vec!["-d".into(), "-h".into(), hops.to_string(), "-w".into(), "1000".into(), host.clone()])
+    } else {
+        ("traceroute", vec!["-n".into(), "-m".into(), hops.to_string(), "-w".into(), "1".into(), "-q".into(), "1".into(), host.clone()])
+    };
+
+    let out = tokio::process::Command::new(prog)
+        .args(&args)
+        .output()
+        .await
+        .map_err(|e| format!("Не удалось запустить {prog}: {e}"))?;
+
+    // Программы пишут маршрут и в stdout, и (при отказах) в stderr — берём оба.
+    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+    if text.trim().is_empty() {
+        text = String::from_utf8_lossy(&out.stderr).to_string();
+    }
+    let mut v = remote::parse_trace(&host, &format!("TOOL={prog}\n{text}"));
+    if let Some(o) = v.as_object_mut() {
+        // Пометка «с сервера» здесь неверна: это наша машина.
+        o.insert("from_server".into(), json!(false));
+    }
+    Ok(v)
+}
+
 pub async fn dns_lookup(name: String) -> Result<Value, String> {
     let name = name.trim().trim_end_matches('.').to_string();
     if name.is_empty() {
@@ -499,6 +538,31 @@ pub mod remote {
         })
     }
 
+    /// Трассировка на POSIX-системе.
+    ///
+    /// Программ для неё несколько, и есть машины, где нет ни одной: на голом Debian нет
+    /// ни `traceroute`, ни `tracepath`, ни даже `ping`. Это не редкость, а обычный
+    /// минимальный образ, и ответ «нечем» здесь такой же законный, как список узлов.
+    pub fn trace_cmd_posix(host: &str, hops: u8) -> String {
+        // `tracepath` идёт первым не по алфавиту: он затем и написан, чтобы работать без
+        // прав root, а `traceroute` открывает сырой сокет и обычному пользователю почти
+        // везде отказывает. Живой стенд это и показал: по SSH мы приходим не root.
+        format!(
+            "if command -v tracepath >/dev/null 2>&1; then echo TOOL=tracepath; \
+               tracepath -n -m {hops} '{host}' 2>&1; \
+             elif command -v traceroute >/dev/null 2>&1; then echo TOOL=traceroute; \
+               traceroute -n -m {hops} -w 1 -q 1 '{host}' 2>&1; \
+             else echo TOOL=none; fi"
+        )
+    }
+
+    pub fn trace_cmd_windows(host: &str, hops: u8) -> String {
+        format!(
+            "powershell -NoProfile -NonInteractive -Command \"echo TOOL=tracert; \
+             tracert -d -h {hops} -w 1000 '{host}'\""
+        )
+    }
+
     /// Разрешение имени на POSIX-системе.
     pub fn dns_cmd_posix(name: &str) -> String {
         format!(
@@ -539,6 +603,101 @@ pub mod remote {
             }
         }
         json!({ "name": name, "from": "server", "tool": tool, "addresses": addrs })
+    }
+
+    /// Разбор вывода трассировки.
+    ///
+    /// Разбирается не формат конкретной программы, а то общее, что есть у всех трёх:
+    /// номер узла в начале строки, адрес где-то в ней и время в миллисекундах. У
+    /// `traceroute`, `tracepath` и `tracert` порядок и обрамление разные — у последней
+    /// адрес вообще в конце строки, — но эти три вещи есть у каждой. Заодно разбор не
+    /// зависит от языка системы: слова мы не читаем.
+    pub fn parse_trace(host: &str, stdout: &str) -> Value {
+        let tool = tag(stdout, "TOOL=").unwrap_or_default();
+        if tool == "none" {
+            return json!({
+                "host": host,
+                "from_server": true,
+                "error": "На сервере нечем построить маршрут: нет ни traceroute, ни tracepath",
+            });
+        }
+        let mut hops: Vec<Value> = Vec::new();
+        for line in stdout.lines() {
+            let t = line.trim();
+            let Some(num) = leading_number(t) else { continue };
+            let addr = t.split_whitespace().find_map(clean_addr);
+            let ms = first_ms(t);
+            hops.push(json!({
+                "n": num,
+                // Узел мог не ответить — это законный исход, и звёздочки в выводе значат
+                // именно его. Пустой адрес честнее выдуманного.
+                "addr": addr,
+                "ms": ms,
+            }));
+        }
+        if hops.is_empty() {
+            // Ни одного узла — это не «маршрут пустой», такого не бывает. Значит программа
+            // не отработала, и сказать почему надо её же словами. Самый частый случай:
+            // `traceroute` есть, но открыть сырой сокет обычному пользователю не дают.
+            let сказано = stdout
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty() && !l.starts_with("TOOL="))
+                .unwrap_or("программа ничего не ответила");
+            let низкий = сказано.to_lowercase();
+            let подсказка =
+                if низкий.contains("not permitted") || низкий.contains("permission denied") {
+                    " — нужны права root либо установленный tracepath, он умеет без них"
+                } else {
+                    ""
+                };
+            return json!({
+                "host": host,
+                "from_server": true,
+                "tool": tool,
+                "error": format!("Маршрут построить не удалось: {сказано}{подсказка}"),
+            });
+        }
+        json!({ "host": host, "from_server": true, "tool": tool, "hops": hops })
+    }
+
+    /// Номер узла в начале строки. `1:` у tracepath, `1` у остальных.
+    fn leading_number(line: &str) -> Option<u32> {
+        let first = line.split_whitespace().next()?;
+        first.trim_end_matches(&[':', '?'][..]).parse().ok()
+    }
+
+    /// Адрес, если этот кусок строки на него похож.
+    fn clean_addr(word: &str) -> Option<String> {
+        let w = word.trim_matches(&['(', ')', ',', '[', ']'][..]);
+        w.parse::<std::net::IpAddr>().ok().map(|ip| ip.to_string())
+    }
+
+    /// Первое время в миллисекундах: `0.402 ms`, `1ms` или `<1 ms`.
+    fn first_ms(line: &str) -> Option<f64> {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        for (i, w) in words.iter().enumerate() {
+            if let Some(num) = w.strip_suffix("ms") {
+                // `1ms` — число приклеено к единице.
+                if let Some(v) = number(num) {
+                    return Some(v);
+                }
+            }
+            // `0.402 ms` — число и единица порознь.
+            if *w == "ms" && i > 0 {
+                if let Some(v) = number(words[i - 1]) {
+                    return Some(v);
+                }
+            }
+        }
+        None
+    }
+
+    /// Число из куска строки. Учитывает две привычки живых программ: запятую вместо точки
+    /// на русской локали и `<1` в значении «меньше миллисекунды» у `tracert`. Без второго
+    /// у быстрых узлов время просто пропадало.
+    fn number(word: &str) -> Option<f64> {
+        word.trim().trim_start_matches('<').replace(',', ".").parse().ok()
     }
 
     /// Значение первой строки, начинающейся с метки.
@@ -622,6 +781,117 @@ A=2606:2800:220::1
 ");
         assert!(v["error"].as_str().unwrap().contains("нечем"));
         assert!(v.get("addresses").is_none());
+    }
+
+    #[test]
+    fn маршрут_читается_у_всех_трёх_программ() {
+        // Форматы разные, общее только три вещи: номер узла, адрес и время. У tracert
+        // адрес вообще в конце строки, а у traceroute — в начале и в скобках.
+        let tr = "TOOL=traceroute\n 1  172.23.0.1  0.004 ms\n 2  192.168.0.1  0.402 ms\n";
+        let v = parse_trace("1.1.1.1", tr);
+        let hops = v["hops"].as_array().unwrap();
+        assert_eq!(hops.len(), 2);
+        assert_eq!(hops[0]["n"], 1);
+        assert_eq!(hops[0]["addr"], "172.23.0.1");
+        assert_eq!(hops[1]["ms"], 0.402);
+
+        let win = "TOOL=tracert\n  1     1 ms     1 ms     1 ms  192.168.0.1\n";
+        let v = parse_trace("1.1.1.1", win);
+        let h = &v["hops"][0];
+        assert_eq!(h["n"], 1);
+        // Адрес в конце строки — его всё равно надо найти.
+        assert_eq!(h["addr"], "192.168.0.1");
+        assert_eq!(h["ms"], 1.0);
+
+        let tp = "TOOL=tracepath\n 1:  192.168.0.1  0.123ms\n";
+        let v = parse_trace("1.1.1.1", tp);
+        assert_eq!(v["hops"][0]["n"], 1);
+        assert_eq!(v["hops"][0]["ms"], 0.123);
+    }
+
+    #[test]
+    fn настоящий_вывод_tracert_разбирается_целиком() {
+        // Снято с живой машины, не придумано. Здесь сразу три особенности: заголовок и
+        // хвост без номера узла, `<1 ms` у быстрых узлов и молчащий узел со звёздочками.
+        let out = concat!(
+            "TOOL=tracert\n",
+            "Tracing route to 1.1.1.1 over a maximum of 4 hops\n",
+            "\n",
+            "  1     1 ms    <1 ms    <1 ms  10.20.0.1 \n",
+            "  2     *        *        *     Request timed out.\n",
+            "  3     2 ms     1 ms     1 ms  93.100.100.1 \n",
+            "  4     1 ms     1 ms     1 ms  93.100.0.132 \n",
+            "\n",
+            "Trace complete.\n"
+        );
+        let v = parse_trace("1.1.1.1", out);
+        let hops = v["hops"].as_array().unwrap();
+        // Ровно четыре: заголовок и «Trace complete» узлами не являются.
+        assert_eq!(hops.len(), 4, "лишние или потерянные узлы: {v}");
+        assert_eq!(hops[0]["addr"], "10.20.0.1");
+        assert_eq!(hops[1]["n"], 2);
+        assert!(hops[1]["addr"].is_null(), "у молчащего узла взялся адрес");
+        assert_eq!(hops[3]["addr"], "93.100.0.132");
+    }
+
+    #[test]
+    fn меньше_миллисекунды_это_число_а_не_пропуск() {
+        // `<1 ms` — обычная запись Windows. Раньше время у таких узлов терялось целиком.
+        let v = parse_trace("x", "TOOL=tracert\n  1    <1 ms    <1 ms    <1 ms  10.0.0.1\n");
+        assert_eq!(v["hops"][0]["ms"], 1.0);
+    }
+
+    #[test]
+    fn молчащий_узел_остаётся_без_адреса_а_не_пропадает() {
+        // Звёздочки означают «узел не ответил». Пропустить такую строку значит сдвинуть
+        // нумерацию и соврать о длине маршрута.
+        let out = "TOOL=traceroute\n 1  10.0.0.1  0.5 ms\n 2  * * *\n 3  1.1.1.1  7.0 ms\n";
+        let v = parse_trace("1.1.1.1", out);
+        let hops = v["hops"].as_array().unwrap();
+        assert_eq!(hops.len(), 3);
+        assert!(hops[1]["addr"].is_null(), "у молчащего узла взялся адрес");
+        assert!(hops[1]["ms"].is_null());
+        assert_eq!(hops[2]["n"], 3);
+    }
+
+    #[test]
+    fn заголовок_traceroute_не_считается_узлом() {
+        // Первая строка вывода — «traceroute to 1.1.1.1 (1.1.1.1), 3 hops max…». Номера
+        // узла в начале у неё нет, и попасть в список она не должна.
+        let out = "TOOL=traceroute\ntraceroute to 1.1.1.1 (1.1.1.1), 3 hops max, 46 byte packets\n 1  10.0.0.1  0.5 ms\n";
+        let v = parse_trace("1.1.1.1", out);
+        assert_eq!(v["hops"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn отказ_в_правах_не_выдаётся_за_пустой_маршрут() {
+        // Живой стенд поймал ровно это: `traceroute` на месте, но обычному пользователю
+        // не дают открыть сырой сокет. Раньше отсюда получался пустой список узлов —
+        // то есть «маршрута нет», хотя на деле его просто не построили.
+        let out = "TOOL=traceroute\ntraceroute: socket(AF_INET,3,1): Operation not permitted\n";
+        let v = parse_trace("1.1.1.1", out);
+        assert!(v.get("hops").is_none(), "взялся маршрут: {v}");
+        let err = v["error"].as_str().unwrap();
+        assert!(err.contains("Operation not permitted"), "потеряли слова программы: {err}");
+        assert!(err.contains("tracepath"), "нет подсказки, чем это лечится: {err}");
+    }
+
+    #[test]
+    fn непривилегированная_программа_идёт_первой() {
+        // Порядок важен: `tracepath` затем и написан, чтобы работать без прав root.
+        let c = trace_cmd_posix("1.1.1.1", 5);
+        let tp = c.find("tracepath").expect("нет tracepath");
+        let tr = c.find("traceroute").expect("нет traceroute");
+        assert!(tp < tr, "traceroute проверяется раньше tracepath");
+    }
+
+    #[test]
+    fn отсутствие_traceroute_объясняется_словами() {
+        // На голом Debian нет ни traceroute, ни tracepath, ни ping. Это обычный образ,
+        // а не редкость, и пустой список тут читался бы как «маршрута нет».
+        let v = parse_trace("1.1.1.1", "TOOL=none\n");
+        assert!(v.get("hops").is_none());
+        assert!(v["error"].as_str().unwrap().contains("нечем"));
     }
 
     #[test]

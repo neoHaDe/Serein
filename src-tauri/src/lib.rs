@@ -1366,6 +1366,34 @@ async fn tools_dns_lookup(name: String) -> Result<Value, String> {
 async fn tools_tls_cert(host: String, port: Option<u16>) -> Result<Value, String> {
     tools::tls_cert(host, port).await
 }
+/// Маршрут до адреса со своей машины.
+#[tauri::command]
+async fn tools_trace(host: String, hops: Option<u8>) -> Result<Value, String> {
+    tools::trace(host, hops).await
+}
+
+/// Маршрут до адреса **с сервера**: у него свои маршруты, и это как раз тот случай,
+/// когда ответ со своей машины ничего не говорит о чужой.
+#[tauri::command]
+async fn tools_trace_on(
+    state: State<'_, AppState>,
+    session_id: String,
+    host: String,
+    hops: Option<u8>,
+) -> Result<Value, String> {
+    let (host, _) = tools::parse_host_port(&host, 0)?;
+    tools::remote::check_host(&host)?;
+    let hops = hops.unwrap_or(15).clamp(1, 30);
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let (kind, _) = platform::of_session(&session_id, &s.handle).await;
+    let cmd = match kind {
+        platform::Kind::Windows => tools::remote::trace_cmd_windows(&host, hops),
+        _ => tools::remote::trace_cmd_posix(&host, hops),
+    };
+    let (_c, out, _e) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
+    Ok(tools::remote::parse_trace(&host, &out))
+}
+
 /// Просмотр диапазона портов со своей машины.
 #[tauri::command]
 async fn tools_port_scan(
@@ -1691,7 +1719,7 @@ pub fn run() {
             servers_import_ssh_config, servers_import_putty,
             servers_import_mobaxterm, servers_import_xshell, servers_import_securecrt,
             tools_port_test, tools_dns_lookup, tools_tls_cert, tools_subnet, tools_hash, tools_jwt_decode,
-            tools_port_test_on, tools_dns_lookup_on, tools_port_scan, tools_port_scan_on,
+            tools_port_test_on, tools_dns_lookup_on, tools_port_scan, tools_port_scan_on, tools_trace, tools_trace_on,
             app_platform, app_paths, app_install_kind, multi_exec, multi_exec_cancel,
             windows_nudge_group, windows_raise_group, windows_restore_minimized, windows_count_minimized,
             clipboard_write, clipboard_read
