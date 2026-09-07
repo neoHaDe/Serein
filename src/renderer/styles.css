@@ -2029,7 +2029,11 @@ html.aux-win #root {
   margin-bottom: 12px;
 }
 .modal input,
-.modal select {
+.modal select,
+/* Текстовое поле в этот список не входило, и потому оставалось системно-белым: подпись
+   вставала сбоку от него, а не над ним. Видно это было только на тех вкладках, где такое
+   поле есть, — оттого и держалось долго. */
+.modal textarea {
   display: block;
   width: 100%;
   margin-top: 5px;
@@ -2043,8 +2047,16 @@ html.aux-win #root {
   font-size: 13px;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
+/* Только для текстового поля: высота и моноширинный шрифт. В общем правиле этому не
+   место — там от него раздувались обычные поля во всех диалогах разом. */
+.modal textarea {
+  min-height: 88px;
+  resize: vertical;
+  font-family: var(--font-mono);
+}
 .modal input:focus,
-.modal select:focus {
+.modal select:focus,
+.modal textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.14);
 }
@@ -2084,6 +2096,21 @@ html.aux-win #root {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 10px;
+}
+/* Второстепенные кнопки диалогов («Закрыть», «Отмена») не имели стиля вовсе и рисовались
+   системными — белыми прямоугольниками посреди тёмного окна. Правило одно на все диалоги:
+   дефект был общий, и чинить его только в одном окне значило бы развести их внешний вид. */
+.modal-actions button:not(.primary):not(.mini):not(.danger) {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 9px 18px;
+  font-size: 13px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.modal-actions button:not(.primary):not(.mini):not(.danger):hover {
+  border-color: var(--accent);
 }
 button.primary {
   background: var(--accent);
@@ -4578,4 +4605,71 @@ button.secondary:hover {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 6px;
+}
+
+/* Утилиты. Своих правил у окна не было вовсе — оно держалось на общих для модальных
+   окон, из-за чего вкладки, панели и вывод стояли слипшимися. */
+.tools-modal {
+  min-width: 520px;
+}
+.tools-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.tools-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* У подписи есть свой отступ снизу от общих правил диалога, а у панели — промежуток
+   между элементами. Вместе выходил двойной зазор, из-за которого поля казались
+   разбросанными по всему окну. */
+.tools-pane label {
+  margin-bottom: 0;
+}
+/* Выбор «откуда» стоит особняком: это не параметр проверки, а вопрос о том, чьими
+   глазами смотреть, — и путать его с полями ввода не следует. */
+.tools-from {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  font-size: 12px;
+  color: var(--muted);
+}
+.tools-from .hint {
+  font-size: 11px;
+}
+/* Ответ утилиты — машинный текст: моноширинный, с прокруткой и без переносов посреди
+   адреса. */
+.tools-out {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  max-height: 300px;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Ошибка утилиты: своего правила не было, и она сливалась с обычным текстом. */
+.tools-error {
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: rgba(var(--danger-rgb), 0.12);
+  border: 1px solid rgba(var(--danger-rgb), 0.35);
+  color: var(--danger);
+  font-size: 12px;
 }
