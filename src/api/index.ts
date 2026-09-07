@@ -441,6 +441,17 @@ export const api = {
     /** Просмотр диапазона портов. За раз — не больше 1024, это ограничение по смыслу. */
     portScan: (host: string, from: number, to: number): Promise<Record<string, unknown>> =>
       invoke('tools_port_scan', { host, from, to }),
+    /**
+     * HTTP-запрос: код ответа, заголовки, время, цепочка переходов.
+     *
+     * Со своей машины запрос делается своими силами и показывает каждый переход отдельно.
+     * С сервера — через `curl` или `wget`, и там виден только итог: чужими программами
+     * цепочку не разложить.
+     */
+    http: (url: string, method?: string, maxRedirects?: number): Promise<Record<string, unknown>> =>
+      invoke('tools_http', { url, method, maxRedirects }),
+    httpOn: (sessionId: string, url: string, method?: string): Promise<Record<string, unknown>> =>
+      invoke('tools_http_on', { sessionId, url, method }),
     /** Маршрут до адреса. `hops` — предел числа узлов, по умолчанию 15. */
     trace: (host: string, hops?: number): Promise<Record<string, unknown>> =>
       invoke('tools_trace', { host, hops }),

@@ -185,3 +185,62 @@ fn debian_честно_говорит_что_маршрут_строить_не�
         );
     });
 }
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn alpine_делает_http_запрос_через_wget() {
+    // Веб-служба стенда наружу не опубликована: с машины, где идут тесты, её адреса не
+    // существует вовсе. Это и есть тот вопрос, ради которого утилита умеет «с сервера».
+    // На Alpine нет `curl`, только busybox-`wget` — значит работает вторая ветка.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let url = format!("http://{}:80/", s.web_host);
+        let cmd = remote::http_cmd_posix(&url, "GET", 5);
+        let out = run(&s, s.alpine_port, &cmd).await;
+        let v = remote::parse_http(&url, &out);
+        assert_eq!(v["tool"], "wget", "ожидали ветку wget, ответ:\n{out}");
+        assert_eq!(v["status"], 200, "ответ стенда:\n{out}");
+        let names: Vec<String> = v["headers"]
+            .as_array()
+            .expect("нет заголовков")
+            .iter()
+            .map(|h| h["name"].as_str().unwrap_or("").to_lowercase())
+            .collect();
+        assert!(names.contains(&"content-type".to_string()), "нет Content-Type: {v}");
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn debian_честно_говорит_что_запрос_делать_нечем() {
+    // На минимальном Debian нет ни `curl`, ни `wget`. Это обычный образ, а не редкость,
+    // и молчаливый пустой ответ читался бы как «служба не отвечает».
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let url = format!("http://{}:80/", s.web_host);
+        let cmd = remote::http_cmd_posix(&url, "GET", 5);
+        let out = run(&s, s.debian_port, &cmd).await;
+        let v = remote::parse_http(&url, &out);
+        assert!(v.get("status").is_none(), "взялся код ответа там, где нечем: {v}");
+        assert!(
+            v["error"].as_str().unwrap_or("").contains("нечем"),
+            "отказ без объяснения: {v}"
+        );
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn закрытая_дверь_не_выдаётся_за_ответ_службы() {
+    // Порт есть, но HTTP там не живёт. Кода ответа не будет, и вместо него должно быть
+    // сказано словами самой программы — иначе непонятно, служба легла или адрес не тот.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let url = format!("http://{}:9/", s.web_host);
+        let cmd = remote::http_cmd_posix(&url, "GET", 3);
+        let out = run(&s, s.alpine_port, &cmd).await;
+        let v = remote::parse_http(&url, &out);
+        assert!(v.get("status").is_none(), "выдумали код ответа: {v}");
+        assert!(!v["error"].as_str().unwrap_or("").is_empty(), "отказ без причины: {v}");
+    });
+}

@@ -267,6 +267,275 @@ fn tls_fetch_sync(host: String, port: u16) -> Result<Value, String> {
     }))
 }
 
+/// Разобранный адрес запроса.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Url {
+    pub secure: bool,
+    pub host: String,
+    pub port: u16,
+    /// Путь вместе со строкой запроса, всегда начинается со слэша.
+    pub path: String,
+}
+
+/// Разбор адреса. Без схемы считаем `http` — так короче для человека, который просто
+/// хочет проверить, отвечает ли служба.
+pub fn parse_url(input: &str) -> Result<Url, String> {
+    let raw = input.trim();
+    if raw.is_empty() {
+        return Err("Пустой адрес".into());
+    }
+    let (secure, rest) = match raw.split_once("://") {
+        Some(("https", r)) => (true, r),
+        Some(("http", r)) => (false, r),
+        Some((s, _)) => return Err(format!("Такую схему мы не умеем: {s}")),
+        None => (false, raw),
+    };
+    if rest.is_empty() {
+        return Err("В адресе нет узла".into());
+    }
+    let (hostport, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], rest[i..].to_string()),
+        None => (rest, "/".to_string()),
+    };
+    // Учётные данные в адресе не поддерживаем намеренно: они утекли бы в журнал и в
+    // историю, а для проверки доступности не нужны вовсе.
+    if hostport.contains('@') {
+        return Err("Логин и пароль в адресе не поддерживаются".into());
+    }
+    let (host, port) = parse_host_port(hostport, if secure { 443 } else { 80 })?;
+    remote::check_host(&host)?;
+    Ok(Url { secure, host, port, path })
+}
+
+/// Строка запроса HTTP/1.1.
+///
+/// `Connection: close` не роскошь: без него сервер держит соединение открытым, и читать
+/// ответ пришлось бы строго по длине тела — а её может и не быть. `Accept-Encoding` не
+/// шлём вовсе: сжатый ответ пришлось бы распаковывать ради того, чтобы показать первые
+/// строки, и это лишняя зависимость в диагностическом инструменте.
+pub fn request_line(method: &str, u: &Url) -> String {
+    let host = if (u.secure && u.port == 443) || (!u.secure && u.port == 80) {
+        u.host.clone()
+    } else {
+        format!("{}:{}", u.host, u.port)
+    };
+    format!(
+        "{method} {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Serein\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+        u.path
+    )
+}
+
+/// Разбор ответа: строка состояния, заголовки и где начинается тело.
+pub fn parse_response(raw: &[u8]) -> Result<(u16, String, Vec<(String, String)>, usize), String> {
+    let split = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or("Ответ оборвался до конца заголовков")?;
+    let head = String::from_utf8_lossy(&raw[..split]);
+    let mut lines = head.lines();
+    let status = lines.next().ok_or("Пустой ответ")?;
+
+    let mut parts = status.split_whitespace();
+    let _proto = parts.next().ok_or("Нет строки состояния")?;
+    let code: u16 = parts
+        .next()
+        .ok_or("Нет кода ответа")?
+        .parse()
+        .map_err(|_| "Код ответа не число".to_string())?;
+    let reason = parts.collect::<Vec<_>>().join(" ");
+
+    let mut headers = Vec::new();
+    for line in lines {
+        if let Some((k, v)) = line.split_once(':') {
+            headers.push((k.trim().to_string(), v.trim().to_string()));
+        }
+    }
+    Ok((code, reason, headers, split + 4))
+}
+
+/// Значение заголовка без учёта регистра имени.
+pub fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+}
+
+/// Склейка тела, разбитого на куски.
+///
+/// Без этого в предпросмотре видны служебные размеры кусков вперемешку с текстом, и
+/// выглядит это как испорченный ответ, хотя ответ в порядке.
+pub fn dechunk(body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut rest = body;
+    loop {
+        let Some(eol) = rest.windows(2).position(|w| w == b"\r\n") else { break };
+        let size_line = String::from_utf8_lossy(&rest[..eol]);
+        // После размера может идти «;расширение» — оно нас не касается.
+        let size_hex = size_line.split(';').next().unwrap_or("").trim();
+        let Ok(size) = usize::from_str_radix(size_hex, 16) else { break };
+        rest = &rest[eol + 2..];
+        if size == 0 || rest.len() < size {
+            out.extend_from_slice(&rest[..size.min(rest.len())]);
+            break;
+        }
+        out.extend_from_slice(&rest[..size]);
+        rest = &rest[size..];
+        if rest.starts_with(b"\r\n") {
+            rest = &rest[2..];
+        }
+    }
+    out
+}
+
+/// Сколько байт тела оставлять для показа.
+const BODY_PREVIEW: usize = 2048;
+
+/// Один запрос без переходов: соединиться, отправить, прочитать до закрытия.
+async fn http_once(u: &Url, method: &str, timeout: Duration) -> Result<(Value, Option<String>), String> {
+    let started = std::time::Instant::now();
+    let addr = format!("{}:{}", u.host, u.port);
+    let raw = if u.secure {
+        let host = u.host.clone();
+        let req = request_line(method, u);
+        tokio::time::timeout(
+            timeout,
+            tokio::task::spawn_blocking(move || https_exchange(&addr, &host, &req)),
+        )
+        .await
+        .map_err(|_| "Истекло время ожидания".to_string())?
+        .map_err(|e| e.to_string())??
+    } else {
+        let req = request_line(method, u);
+        tokio::time::timeout(timeout, http_exchange(&addr, &req))
+            .await
+            .map_err(|_| "Истекло время ожидания".to_string())??
+    };
+
+    let (code, reason, headers, body_at) = parse_response(&raw)?;
+    let body = &raw[body_at..];
+    let chunked = header(&headers, "transfer-encoding")
+        .map(|v| v.to_lowercase().contains("chunked"))
+        .unwrap_or(false);
+    let body = if chunked { dechunk(body) } else { body.to_vec() };
+
+    let next = if (300..400).contains(&code) {
+        header(&headers, "location").map(str::to_string)
+    } else {
+        None
+    };
+
+    let preview: String = String::from_utf8_lossy(&body[..body.len().min(BODY_PREVIEW)]).to_string();
+    let head_json: Vec<Value> = headers
+        .iter()
+        .map(|(k, v)| json!({ "name": k, "value": v }))
+        .collect();
+
+    Ok((
+        json!({
+            "url": format!("{}://{}{}", if u.secure { "https" } else { "http" }, u.host, u.path),
+            "status": code,
+            "reason": reason,
+            "headers": head_json,
+            "bodyBytes": body.len(),
+            "bodyPreview": preview,
+            "truncated": body.len() > BODY_PREVIEW,
+            "ms": started.elapsed().as_millis(),
+        }),
+        next,
+    ))
+}
+
+async fn http_exchange(addr: &str, req: &str) -> Result<Vec<u8>, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut sock = tokio::net::TcpStream::connect(addr)
+        .await
+        .map_err(|e| format!("Не удалось соединиться: {e}"))?;
+    sock.write_all(req.as_bytes())
+        .await
+        .map_err(|e| format!("Не удалось отправить запрос: {e}"))?;
+    let mut out = Vec::new();
+    sock.read_to_end(&mut out)
+        .await
+        .map_err(|e| format!("Ответ оборвался: {e}"))?;
+    Ok(out)
+}
+
+/// То же по TLS. Синхронно и в отдельном потоке: `native-tls` здесь уже используется для
+/// разбора сертификатов, и второй библиотеки ради этого заводить незачем.
+fn https_exchange(addr: &str, host: &str, req: &str) -> Result<Vec<u8>, String> {
+    use std::io::{Read, Write};
+    let sock = TcpStream::connect(addr).map_err(|e| format!("Не удалось соединиться: {e}"))?;
+    let conn = TlsConnector::new().map_err(|e| format!("TLS: {e}"))?;
+    let mut tls: TlsStream<TcpStream> = conn
+        .connect(host, sock)
+        .map_err(|e| format!("Рукопожатие TLS не состоялось: {e}"))?;
+    tls.write_all(req.as_bytes())
+        .map_err(|e| format!("Не удалось отправить запрос: {e}"))?;
+    let mut out = Vec::new();
+    // Обрыв TLS без положенного прощания — обычное дело у серверов, закрывающих
+    // соединение. Уже прочитанное при этом верно, и терять его из-за формальности нельзя.
+    if let Err(e) = tls.read_to_end(&mut out) {
+        if out.is_empty() {
+            return Err(format!("Ответ оборвался: {e}"));
+        }
+    }
+    Ok(out)
+}
+
+/// Запрос со своей машины, с переходами по `Location`.
+///
+/// Переходы показываются цепочкой, а не прячутся: половина вопросов к службе — это
+/// «куда меня в итоге увело» и «на каком шаге сломалось».
+pub async fn http_probe(
+    url: String,
+    method: Option<String>,
+    max_redirects: Option<u8>,
+) -> Result<Value, String> {
+    let method = method.unwrap_or_else(|| "GET".into()).to_uppercase();
+    if !matches!(method.as_str(), "GET" | "HEAD") {
+        return Err("Пока умеем только GET и HEAD".into());
+    }
+    let limit = max_redirects.unwrap_or(5).min(10);
+    let timeout = Duration::from_secs(10);
+
+    let mut steps: Vec<Value> = Vec::new();
+    let mut u = parse_url(&url)?;
+    for _ in 0..=limit {
+        let (step, next) = http_once(&u, &method, timeout).await?;
+        steps.push(step);
+        let Some(loc) = next else {
+            return Ok(json!({ "from_server": false, "steps": steps }));
+        };
+        u = resolve_redirect(&u, &loc)?;
+    }
+    Ok(json!({
+        "from_server": false,
+        "steps": steps,
+        "error": format!("Переходов больше {limit} — дальше не пошли"),
+    }))
+}
+
+/// Куда ведёт `Location`. Он бывает и полным адресом, и просто путём.
+pub fn resolve_redirect(from: &Url, location: &str) -> Result<Url, String> {
+    let loc = location.trim();
+    if loc.starts_with("http://") || loc.starts_with("https://") {
+        return parse_url(loc);
+    }
+    if let Some(rest) = loc.strip_prefix("//") {
+        let scheme = if from.secure { "https" } else { "http" };
+        return parse_url(&format!("{scheme}://{rest}"));
+    }
+    let path = if loc.starts_with('/') {
+        loc.to_string()
+    } else {
+        // Относительный путь считается от каталога текущего.
+        let base = from.path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+        format!("{base}/{loc}")
+    };
+    Ok(Url { secure: from.secure, host: from.host.clone(), port: from.port, path })
+}
+
 pub async fn tls_cert(host: String, port: Option<u16>) -> Result<Value, String> {
     let (host, port) = parse_host_port(&host, port.unwrap_or(443))?;
     tokio::task::spawn_blocking(move || tls_fetch_sync(host, port))
@@ -563,6 +832,89 @@ pub mod remote {
         )
     }
 
+    /// HTTP-запрос с сервера.
+    ///
+    /// `curl` есть почти везде, но именно «почти»: на минимальном Debian нет ни его, ни
+    /// `wget`. Поэтому две ветки и честный отказ третьей. У busybox-`wget` заголовки
+    /// уходят в поток ошибок, оттого и `2>&1`.
+    pub fn http_cmd_posix(url: &str, method: &str, secs: u64) -> String {
+        let head = if method == "HEAD" { "--head" } else { "" };
+        let wget_spider = if method == "HEAD" { "--spider" } else { "" };
+        format!(
+            "if command -v curl >/dev/null 2>&1; then echo TOOL=curl; \
+               curl -sS -i {head} --max-time {secs} '{url}' 2>&1; \
+             elif command -v wget >/dev/null 2>&1; then echo TOOL=wget; \
+               wget -S {wget_spider} -T {secs} -O - '{url}' 2>&1; \
+             else echo TOOL=none; fi"
+        )
+    }
+
+    /// Разбор ответа сервера на HTTP-запрос.
+    ///
+    /// Вывод у `curl` и `wget` разный: первый печатает ответ как есть, второй — с
+    /// отступами и своими строками. Общее — строка `HTTP/…` с кодом и заголовки под ней,
+    /// по ним и ориентируемся.
+    pub fn parse_http(url: &str, stdout: &str) -> Value {
+        let tool = tag(stdout, "TOOL=").unwrap_or_default();
+        if tool == "none" {
+            return json!({
+                "url": url,
+                "from_server": true,
+                "error": "На сервере нечем сделать запрос: нет ни curl, ни wget",
+            });
+        }
+        let mut status: Option<u16> = None;
+        let mut reason = String::new();
+        let mut headers: Vec<Value> = Vec::new();
+        for line in stdout.lines() {
+            let t = line.trim();
+            if let Some(rest) = t.strip_prefix("HTTP/") {
+                // «1.1 301 Moved Permanently» — берём последний встреченный ответ:
+                // при переходах их несколько, и интересен итог.
+                let mut p = rest.split_whitespace();
+                let _ver = p.next();
+                if let Some(code) = p.next().and_then(|c| c.parse::<u16>().ok()) {
+                    status = Some(code);
+                    reason = p.collect::<Vec<_>>().join(" ");
+                    headers.clear();
+                }
+                continue;
+            }
+            if status.is_some() {
+                if let Some((k, v)) = t.split_once(':') {
+                    if !k.is_empty() && !k.contains(' ') {
+                        headers.push(json!({ "name": k.trim(), "value": v.trim() }));
+                    }
+                }
+            }
+        }
+        match status {
+            Some(code) => json!({
+                "url": url,
+                "from_server": true,
+                "tool": tool,
+                "status": code,
+                "reason": reason,
+                "headers": headers,
+            }),
+            // Кода нет — значит до ответа дело не дошло. Показываем, что сказала сама
+            // программа: «не резолвится», «отказано в соединении» и прочее по делу.
+            None => {
+                let сказано = stdout
+                    .lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty() && !l.starts_with("TOOL="))
+                    .unwrap_or("программа ничего не ответила");
+                json!({
+                    "url": url,
+                    "from_server": true,
+                    "tool": tool,
+                    "error": format!("Запрос не состоялся: {сказано}"),
+                })
+            }
+        }
+    }
+
     /// Разрешение имени на POSIX-системе.
     pub fn dns_cmd_posix(name: &str) -> String {
         format!(
@@ -781,6 +1133,231 @@ A=2606:2800:220::1
 ");
         assert!(v["error"].as_str().unwrap().contains("нечем"));
         assert!(v.get("addresses").is_none());
+    }
+
+    #[test]
+    fn свой_запрос_проходит_цепочку_переходов() {
+        // Разбор проверяется отдельно, а здесь — весь путь целиком: соединение, отправка,
+        // чтение до закрытия, переход по Location и склейка тела по кускам. Сервер
+        // поднимаем свой, чтобы тест не зависел ни от сети, ни от чужой службы.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = l.local_addr().unwrap().port();
+
+            tokio::spawn(async move {
+                for шаг in 0..2 {
+                    let Ok((mut sock, _)) = l.accept().await else { return };
+                    let mut buf = [0u8; 1024];
+                    let _ = sock.read(&mut buf).await;
+                    let ответ: &[u8] = if шаг == 0 {
+                        b"HTTP/1.1 301 Moved Permanently\r\nLocation: /final\r\nContent-Length: 0\r\n\r\n"
+                    } else {
+                        // Тело кусками: ровно тот случай, где без склейки в предпросмотре
+                        // видны служебные числа.
+                        b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nHello\r\n0\r\n\r\n"
+                    };
+                    let _ = sock.write_all(ответ).await;
+                    let _ = sock.shutdown().await;
+                }
+            });
+
+            let v = super::http_probe(format!("http://127.0.0.1:{port}/"), None, Some(3))
+                .await
+                .expect("запрос");
+            let steps = v["steps"].as_array().expect("нет шагов");
+            assert_eq!(steps.len(), 2, "переход не показан отдельным шагом: {v}");
+            assert_eq!(steps[0]["status"], 301);
+            assert_eq!(steps[1]["status"], 200);
+            // Куда увело — видно по адресу второго шага.
+            assert!(
+                steps[1]["url"].as_str().unwrap().ends_with("/final"),
+                "потеряли адрес перехода: {v}"
+            );
+            // И тело собрано без служебных чисел.
+            assert_eq!(steps[1]["bodyPreview"], "Hello");
+            assert_eq!(steps[1]["bodyBytes"], 5);
+        });
+    }
+
+    #[test]
+    fn бесконечный_переход_обрывается_а_не_крутится() {
+        // Сервер, который вечно шлёт на себя же. Без предела запрос не вернулся бы никогда.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = l.local_addr().unwrap().port();
+            tokio::spawn(async move {
+                while let Ok((mut sock, _)) = l.accept().await {
+                    let mut buf = [0u8; 1024];
+                    let _ = sock.read(&mut buf).await;
+                    let _ = sock
+                        .write_all(b"HTTP/1.1 302 Found\r\nLocation: /\r\nContent-Length: 0\r\n\r\n")
+                        .await;
+                    let _ = sock.shutdown().await;
+                }
+            });
+
+            let v = super::http_probe(format!("http://127.0.0.1:{port}/"), None, Some(2))
+                .await
+                .expect("запрос");
+            assert_eq!(v["steps"].as_array().unwrap().len(), 3, "предел переходов не сработал");
+            assert!(v["error"].as_str().unwrap().contains("Переходов больше"));
+        });
+    }
+
+    #[test]
+    fn адрес_разбирается_и_без_схемы() {
+        use super::parse_url;
+        let u = parse_url("example.com").unwrap();
+        // Без схемы — обычный http: человек проверяет, отвечает ли служба, а не пишет ссылку.
+        assert!(!u.secure);
+        assert_eq!(u.port, 80);
+        assert_eq!(u.path, "/");
+
+        let u = parse_url("https://example.com/health?x=1").unwrap();
+        assert!(u.secure);
+        assert_eq!(u.port, 443);
+        // Строка запроса — часть пути, отрывать её нельзя.
+        assert_eq!(u.path, "/health?x=1");
+
+        let u = parse_url("http://example.com:8080/a").unwrap();
+        assert_eq!(u.port, 8080);
+    }
+
+    #[test]
+    fn чужие_схемы_и_учётные_данные_отвергаются() {
+        use super::parse_url;
+        // `file://` и прочее из окна утилит открывать нечего.
+        assert!(parse_url("ftp://example.com").is_err());
+        assert!(parse_url("file:///etc/passwd").is_err());
+        // Логин с паролем в адресе утёк бы в журнал, а для проверки не нужен.
+        assert!(parse_url("http://user:pass@example.com").is_err());
+        assert!(parse_url("").is_err());
+        // Тот же узкий набор символов, что и у остальных утилит.
+        assert!(parse_url("http://exam ple.com").is_err());
+    }
+
+    #[test]
+    fn заголовок_host_без_порта_по_умолчанию() {
+        use super::{parse_url, request_line};
+        // Приписать `:443` к https-адресу — верный способ получить чужой виртуальный хост
+        // или отказ: в заголовке порт по умолчанию не пишут.
+        let r = request_line("GET", &parse_url("https://example.com/a").unwrap());
+        assert!(r.contains("Host: example.com\r\n"), "{r}");
+        let r = request_line("GET", &parse_url("http://example.com:8080/a").unwrap());
+        assert!(r.contains("Host: example.com:8080\r\n"), "{r}");
+        // Соединение просим закрыть: иначе непонятно, где кончился ответ.
+        assert!(r.contains("Connection: close"));
+    }
+
+    #[test]
+    fn переход_считается_и_от_пути_и_от_корня() {
+        use super::{parse_url, resolve_redirect};
+        let base = parse_url("https://example.com/a/b").unwrap();
+
+        // Полный адрес — берётся целиком, вместе со сменой узла.
+        let u = resolve_redirect(&base, "http://other.org/x").unwrap();
+        assert_eq!(u.host, "other.org");
+        assert!(!u.secure);
+
+        // От корня.
+        assert_eq!(resolve_redirect(&base, "/x").unwrap().path, "/x");
+
+        // Относительный — от каталога текущего пути, а не от самого пути.
+        assert_eq!(resolve_redirect(&base, "c").unwrap().path, "/a/c");
+
+        // Без схемы, но с узлом — схему наследуем.
+        let u = resolve_redirect(&base, "//cdn.example.com/y").unwrap();
+        assert_eq!(u.host, "cdn.example.com");
+        assert!(u.secure, "потеряли https при переходе");
+    }
+
+    #[test]
+    fn ответ_разбирается_на_состояние_заголовки_и_тело() {
+        use super::{header, parse_response};
+        let raw = "HTTP/1.1 301 Moved Permanently\r\nLocation: /new\r\nContent-Type: text/html\r\n\r\nтело"
+            .as_bytes();
+        let (code, reason, headers, at) = parse_response(raw).unwrap();
+        assert_eq!(code, 301);
+        assert_eq!(reason, "Moved Permanently");
+        // Имя заголовка регистронезависимо — сервера пишут как хотят.
+        assert_eq!(header(&headers, "location"), Some("/new"));
+        assert_eq!(header(&headers, "CONTENT-TYPE"), Some("text/html"));
+        assert_eq!(&raw[at..], "тело".as_bytes());
+    }
+
+    #[test]
+    fn оборванный_ответ_не_выдаётся_за_разобранный() {
+        use super::parse_response;
+        assert!(parse_response(b"HTTP/1.1 200 OK\r\nX: 1").is_err());
+        assert!(parse_response(b"").is_err());
+    }
+
+    #[test]
+    fn тело_по_кускам_склеивается_без_служебных_чисел() {
+        use super::dechunk;
+        // Без склейки в предпросмотре видны размеры кусков вперемешку с текстом, и ответ
+        // выглядит испорченным, хотя он в порядке.
+        let body = b"5\r\nHello\r\n6\r\n world\r\n0\r\n\r\n";
+        assert_eq!(String::from_utf8_lossy(&dechunk(body)), "Hello world");
+
+        // Кириллица считается по байтам, а не по буквам: «Да» — это четыре байта.
+        let body = "4\r\nДа\r\n0\r\n\r\n".as_bytes();
+        assert_eq!(String::from_utf8_lossy(&dechunk(body)), "Да");
+        // Расширение после размера куска нас не касается.
+        let body = b"3;ext=1\r\nabc\r\n0\r\n\r\n";
+        assert_eq!(String::from_utf8_lossy(&dechunk(body)), "abc");
+    }
+
+    #[test]
+    fn ответ_curl_читается_вместе_с_переходами() {
+        let out = concat!(
+            "TOOL=curl\n",
+            "HTTP/1.1 301 Moved Permanently\r\n",
+            "Location: https://example.com/\r\n",
+            "\r\n",
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Type: text/html\r\n",
+            "\r\n"
+        );
+        let v = parse_http("http://example.com", out);
+        // При переходах ответов несколько, а интересен итог — последний.
+        assert_eq!(v["status"], 200);
+        let names: Vec<&str> = v["headers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"Content-Type"), "{v}");
+        assert!(!names.contains(&"Location"), "заголовки прошлого шага не должны остаться");
+    }
+
+    #[test]
+    fn несостоявшийся_запрос_объясняется_словами_программы() {
+        // Кода ответа нет — значит до сервера не дошло. Показать «ошибка» без подробностей
+        // здесь бесполезно: вся ценность в том, что именно сказал curl.
+        let out = "TOOL=curl\ncurl: (6) Could not resolve host: нет-такого.invalid\n";
+        let v = parse_http("http://нет-такого.invalid", out);
+        assert!(v.get("status").is_none());
+        assert!(v["error"].as_str().unwrap().contains("Could not resolve host"));
+    }
+
+    #[test]
+    fn отсутствие_curl_и_wget_объясняется() {
+        // На минимальном Debian нет ни того, ни другого — это обычный образ.
+        let v = parse_http("http://example.com", "TOOL=none\n");
+        assert!(v.get("status").is_none());
+        assert!(v["error"].as_str().unwrap().contains("нечем"));
     }
 
     #[test]

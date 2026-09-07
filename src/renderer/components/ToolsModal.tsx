@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { errText } from '../errText'
 
-type Tab = 'port' | 'scan' | 'trace' | 'dns' | 'tls' | 'subnet' | 'hash' | 'jwt'
+type Tab = 'port' | 'scan' | 'trace' | 'http' | 'dns' | 'tls' | 'subnet' | 'hash' | 'jwt'
 
 interface ConnectedSession {
   sessionId: string
@@ -36,6 +36,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'port', label: 'Порт' },
   { id: 'scan', label: 'Диапазон' },
   { id: 'trace', label: 'Маршрут' },
+  { id: 'http', label: 'HTTP' },
   { id: 'dns', label: 'DNS' },
   { id: 'tls', label: 'TLS' },
   { id: 'subnet', label: 'Подсеть' },
@@ -96,6 +97,8 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
   const [scanTo, setScanTo] = useState('1024')
   const [traceHost, setTraceHost] = useState('1.1.1.1')
   const [traceHops, setTraceHops] = useState('15')
+  const [httpUrl, setHttpUrl] = useState('https://example.com')
+  const [httpMethod, setHttpMethod] = useState('GET')
   const [dnsName, setDnsName] = useState('example.com')
   const [tlsHost, setTlsHost] = useState('nehade.xyz')
   const [tlsPort, setTlsPort] = useState('443')
@@ -234,6 +237,47 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
               }
             >
               {busy ? 'Строю маршрут…' : from === HERE ? 'Построить маршрут' : 'Построить с сервера'}
+            </button>
+          </div>
+        )}
+
+        {tab === 'http' && (
+          <div className="tools-pane">
+            <div className="row">
+              <label style={{ flex: 3 }}>
+                Адрес
+                <input
+                  value={httpUrl}
+                  onChange={(e) => setHttpUrl(e.target.value)}
+                  placeholder="https://example.com/health"
+                />
+              </label>
+              <label style={{ flex: 1 }}>
+                Метод
+                <select value={httpMethod} onChange={(e) => setHttpMethod(e.target.value)}>
+                  <option value="GET">GET</option>
+                  <option value="HEAD">HEAD</option>
+                </select>
+              </label>
+            </div>
+            <From value={from} onChange={setFrom} sessions={connectedSessions} />
+            <p className="hint">
+              Со своей машины запрос идёт своими силами, и каждый переход по редиректу виден
+              отдельным шагом. С сервера — через <code>curl</code> или <code>wget</code>, и там
+              будет только итог: чужими программами цепочку не разложить.
+            </p>
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() =>
+                void run(() =>
+                  from === HERE
+                    ? window.api.tools.http(httpUrl, httpMethod)
+                    : window.api.tools.httpOn(from, httpUrl, httpMethod)
+                )
+              }
+            >
+              {busy ? 'Запрашиваю…' : from === HERE ? 'Запросить' : 'Запросить с сервера'}
             </button>
           </div>
         )}

@@ -1366,6 +1366,48 @@ async fn tools_dns_lookup(name: String) -> Result<Value, String> {
 async fn tools_tls_cert(host: String, port: Option<u16>) -> Result<Value, String> {
     tools::tls_cert(host, port).await
 }
+/// HTTP-запрос со своей машины: код ответа, заголовки, время и цепочка переходов.
+#[tauri::command]
+async fn tools_http(
+    url: String,
+    method: Option<String>,
+    max_redirects: Option<u8>,
+) -> Result<Value, String> {
+    tools::http_probe(url, method, max_redirects).await
+}
+
+/// HTTP-запрос **с сервера**: отвечает ли служба именно ему.
+#[tauri::command]
+async fn tools_http_on(
+    state: State<'_, AppState>,
+    session_id: String,
+    url: String,
+    method: Option<String>,
+) -> Result<Value, String> {
+    // Адрес уходит в командную строку, поэтому проверяем его тем же разбором, что и для
+    // своей стороны: узел через `check_host`, схема — только http и https.
+    let u = tools::parse_url(&url)?;
+    let method = method.unwrap_or_else(|| "GET".into()).to_uppercase();
+    if !matches!(method.as_str(), "GET" | "HEAD") {
+        return Err("Пока умеем только GET и HEAD".into());
+    }
+    let целый = format!(
+        "{}://{}:{}{}",
+        if u.secure { "https" } else { "http" },
+        u.host,
+        u.port,
+        u.path
+    );
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let (kind, _) = platform::of_session(&session_id, &s.handle).await;
+    if kind == platform::Kind::Windows {
+        return Err("HTTP-запрос с Windows-сервера пока не поддержан".into());
+    }
+    let cmd = tools::remote::http_cmd_posix(&целый, &method, 10);
+    let (_c, out, _e) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
+    Ok(tools::remote::parse_http(&целый, &out))
+}
+
 /// Маршрут до адреса со своей машины.
 #[tauri::command]
 async fn tools_trace(host: String, hops: Option<u8>) -> Result<Value, String> {
@@ -1719,7 +1761,7 @@ pub fn run() {
             servers_import_ssh_config, servers_import_putty,
             servers_import_mobaxterm, servers_import_xshell, servers_import_securecrt,
             tools_port_test, tools_dns_lookup, tools_tls_cert, tools_subnet, tools_hash, tools_jwt_decode,
-            tools_port_test_on, tools_dns_lookup_on, tools_port_scan, tools_port_scan_on, tools_trace, tools_trace_on,
+            tools_port_test_on, tools_dns_lookup_on, tools_port_scan, tools_port_scan_on, tools_trace, tools_trace_on, tools_http, tools_http_on,
             app_platform, app_paths, app_install_kind, multi_exec, multi_exec_cancel,
             windows_nudge_group, windows_raise_group, windows_restore_minimized, windows_count_minimized,
             clipboard_write, clipboard_read

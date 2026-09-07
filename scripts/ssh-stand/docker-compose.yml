@@ -58,6 +58,16 @@ services:
     image: redis:7-alpine
     command: ["redis-server", "--requirepass", "probe-pass"]
 
+  # Веб-служба для проверки HTTP-утилиты. Порт наружу не публикуется — как и у баз:
+  # смысл проверки «с сервера» именно в том, что снаружи этого адреса не существует.
+  web:
+    image: nginx:alpine
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
   # Две разные MySQL-совместимые базы, потому что различаются они не диалектом, а входом:
   # MariaDB по умолчанию проверяет пароль плагином mysql_native_password, MySQL 8 —
   # caching_sha2_password с обменом открытым ключом. Наш клиент обязан пройти оба, и на
