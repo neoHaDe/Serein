@@ -27,6 +27,19 @@ for port in 2201 2202 2203 2204 2205; do
   done
 done
 
+# Базы данных наружу портов не публикуют, поэтому их готовность спрашиваем у самого
+# compose. MySQL 8 при первом запуске создаёт системные таблицы десятки секунд, и без
+# этого ожидания тесты стартовали бы раньше, чем база начнёт отвечать.
+for svc in mariadb mysql; do
+  echo -n "жду $svc "
+  for _ in $(seq 1 90); do
+    state=$(docker compose ps --format '{{.Health}}' "$svc" 2>/dev/null | head -1)
+    if [ "$state" = "healthy" ]; then echo "— готов"; break; fi
+    echo -n .
+    sleep 2
+  done
+done
+
 cat <<VARS
 
 Стенд поднят. Переменные для тестов:
@@ -41,6 +54,8 @@ cat <<VARS
   # Базы видны только изнутри сети стенда — по именам сервисов, как и на настоящем сервере.
   export SEREIN_STAND_PG_HOST=postgres
   export SEREIN_STAND_REDIS_HOST=redis
+  export SEREIN_STAND_MARIADB_HOST=mariadb
+  export SEREIN_STAND_MYSQL_HOST=mysql
   export SEREIN_STAND_HOSTKEY_PORT=2203
   export SEREIN_STAND_NOSFTP_PORT=2204
   export SEREIN_STAND_VNC_PORT=2205

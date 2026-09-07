@@ -1,4 +1,4 @@
-//! Базы данных через SSH-канал — против настоящих PostgreSQL и Redis.
+//! Базы данных через SSH-канал — против настоящих PostgreSQL, MySQL, MariaDB и Redis.
 //!
 //! В стенде их порты наружу не опубликованы вовсе: базы видны только изнутри сети, как и
 //! на нормально настроенном сервере. Поэтому единственный способ до них дойти — канал
@@ -29,7 +29,7 @@ async fn open(s: &Stand, p: Params) -> String {
         .await
         .expect("подключение к серверу");
     let id = format!("test-{}", uuid::Uuid::new_v4());
-    db::open(id.clone(), &h, p).await.expect("подключение к базе");
+    db::open(id.clone(), "сессия-стенда", &h, p).await.expect("подключение к базе");
     id
 }
 
@@ -173,4 +173,184 @@ fn базы_в_стенде_не_публикуют_порты_наружу() {
             "сервис {name} публикует порты наружу — тесты перестали проверять путь через SSH"
         );
     }
+}
+
+/// Один и тот же набор проверок для MariaDB и для MySQL 8.
+///
+/// Отдельные машины они не ради разнообразия: MariaDB проверяет пароль плагином
+/// `mysql_native_password`, MySQL 8 — `caching_sha2_password` с обменом открытым ключом.
+/// Это две разные ветки нашего кода входа, и общий у них только SQL.
+async fn проверить_mysql(s: &Stand, host: &str) {
+    let id = open(s, params(Kind::Mysql, host, "probe", Some("probe"))).await;
+
+    let out = db::query(&id, "SELECT 1 AS число, 'привет' AS текст")
+        .await
+        .expect("запрос");
+    let cols: Vec<&str> = out["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    assert_eq!(cols, vec!["число", "текст"], "колонки пришли не те");
+    let rows = out["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["число"], "1");
+    // Юникод и в именах колонок, и в значениях: между нами SSH-канал и своя упаковка.
+    assert_eq!(rows[0]["текст"], "привет");
+
+    // NULL обязан отличаться от пустой строки — иначе по таблице нельзя судить о данных.
+    let out = db::query(&id, "SELECT NULL AS пусто, '' AS строка").await.expect("запрос");
+    assert!(out["rows"][0]["пусто"].is_null(), "NULL приехал не как NULL");
+    assert_eq!(out["rows"][0]["строка"], "");
+
+    // Запрос без выборки сообщает про изменённые строки, а не про пустую таблицу.
+    db::query(&id, "CREATE TEMPORARY TABLE проба (id INT)").await.expect("создание таблицы");
+    let out = db::query(&id, "INSERT INTO проба VALUES (1), (2), (3)")
+        .await
+        .expect("вставка");
+    assert_eq!(out["affected"], 3, "не посчитались изменённые строки");
+
+    // Ошибку базы показываем её словами, а не своими.
+    let err = db::query(&id, "SELECT * FROM таблицы_нет").await.unwrap_err();
+    assert!(
+        err.to_lowercase().contains("таблицы_нет") || err.contains("1146"),
+        "ошибка без подробностей: {err}"
+    );
+
+    db::close(&id);
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn mariadb_отвечает_через_ssh_канал() {
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let host = s.mariadb_host.clone();
+        проверить_mysql(&s, &host).await;
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn mysql8_проходит_вход_с_обменом_ключом() {
+    // Самая рискованная ветка: `caching_sha2_password` при первом входе требует полной
+    // аутентификации. Пароль открытым текстом мы не шлём — просим у сервера открытый
+    // ключ и шифруем. Проверить это можно только на живом MySQL 8.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let host = s.mysql_host.clone();
+        проверить_mysql(&s, &host).await;
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn длинный_ответ_mysql_не_рвётся_на_границе_пакета() {
+    // Тело длиной ровно 0xFFFFFF протокол продолжает следующим пакетом. Склейка — наш
+    // код, и ошибка в ней проявляется только на больших ответах.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let id = open(&s, params(Kind::Mysql, &s.mariadb_host, "probe", Some("probe"))).await;
+        let out = db::query(&id, "SELECT REPEAT('я', 400000) AS длинное")
+            .await
+            .expect("запрос");
+        let v = out["rows"][0]["длинное"].as_str().expect("значение");
+        assert_eq!(v.chars().count(), 400000, "значение приехало обрезанным");
+        db::close(&id);
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn неверный_пароль_mysql_отвергается_с_текстом() {
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let h = ssh::connect_client(vec![s.by_key(s.debian_port)])
+            .await
+            .expect("подключение к серверу");
+        let mut p = params(Kind::Mysql, &s.mariadb_host, "probe", Some("probe"));
+        p.password = Some("не тот пароль".into());
+        let err = db::open("test-bad-mysql".into(), "сессия-стенда", &h, p).await.unwrap_err();
+        // Пустая строка вместо причины оставила бы человека гадать.
+        assert!(!err.trim().is_empty(), "отказ без объяснения");
+        assert!(
+            err.to_lowercase().contains("probe") || err.contains("1045") || err.contains("Access"),
+            "непонятный отказ: {err}"
+        );
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn хранимая_процедура_не_разъезжает_соединение() {
+    // Процедура отвечает несколькими результатами подряд. Показываем первый, но остаток
+    // обязаны вычитать: иначе следующий запрос прочтёт хвост предыдущего. Проявляется это
+    // не ошибкой, а неверными данными — поэтому проверяем именно вторым запросом.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let id = open(&s, params(Kind::Mysql, &s.mariadb_host, "probe", Some("probe"))).await;
+
+        db::query(&id, "DROP PROCEDURE IF EXISTS проба_двух").await.expect("уборка");
+        db::query(&id, "CREATE PROCEDURE проба_двух() BEGIN SELECT 1 AS первый; END")
+            .await
+            .expect("создание процедуры");
+
+        let out = db::query(&id, "CALL проба_двух()").await.expect("вызов");
+        assert_eq!(out["rows"][0]["первый"], "1");
+
+        // Вот здесь и вылезал бы хвост: следующий запрос обязан вернуть своё.
+        let out = db::query(&id, "SELECT 42 AS после").await.expect("запрос после вызова");
+        assert_eq!(out["columns"][0], "после", "колонки приехали от прошлого запроса");
+        assert_eq!(out["rows"][0]["после"], "42");
+
+        db::query(&id, "DROP PROCEDURE проба_двух").await.expect("уборка");
+        db::close(&id);
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn закрытие_базы_не_роняет_процесс() {
+    // Это не абстрактная проверка: закрытие панели убивало приложение целиком. `russh`
+    // в деструкторе канала вызывает `tokio::spawn`, чтобы попрощаться с сервером, а вне
+    // рантайма такой вызов паникует — и паника в деструкторе не разворачивается, процесс
+    // просто исчезает. Если тест упадёт с abort, значит закрытие снова идёт мимо рантайма.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let id = open(&s, params(Kind::Mysql, &s.mariadb_host, "probe", Some("probe"))).await;
+        db::close(&id);
+        // Даём задаче прощания отработать: она уходит в рантайм, а не выполняется здесь.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Соединения больше нет, и запрос обязан сказать об этом, а не ждать вечно.
+        assert!(db::query(&id, "SELECT 1").await.is_err());
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn базы_закрываются_вместе_со_своей_сессией() {
+    // Канал живёт внутри SSH-сессии. Если сессия ушла, а запись осталась, следующий
+    // запрос уходил бы в мёртвый канал и ждал ответа, которого не будет.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let h = ssh::connect_client(vec![s.by_key(s.debian_port)])
+            .await
+            .expect("подключение к серверу");
+        let id = format!("test-{}", uuid::Uuid::new_v4());
+        db::open(
+            id.clone(),
+            "сессия-которую-закроют",
+            &h,
+            params(Kind::Mysql, &s.mariadb_host, "probe", Some("probe")),
+        )
+        .await
+        .expect("подключение к базе");
+
+        assert_eq!(db::count_for_session("сессия-которую-закроют"), 1);
+        db::close_session("сессия-которую-закроют");
+        assert_eq!(db::count_for_session("сессия-которую-закроют"), 0);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(db::query(&id, "SELECT 1").await.is_err());
+    });
 }

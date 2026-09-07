@@ -164,6 +164,8 @@ jobs:
           SEREIN_STAND_VNC_PORT: "2205"
           SEREIN_STAND_PG_HOST: postgres
           SEREIN_STAND_REDIS_HOST: redis
+          SEREIN_STAND_MARIADB_HOST: mariadb
+          SEREIN_STAND_MYSQL_HOST: mysql
           SEREIN_STAND_USER: probe
           SEREIN_STAND_PASSWORD: probe-pass
         run: |

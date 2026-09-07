@@ -29,6 +29,10 @@ pub struct Stand {
     /// можно только каналом внутри SSH-сессии — ровно так, как это делает приложение.
     pub pg_host: String,
     pub redis_host: String,
+    /// MariaDB и MySQL 8 — две отдельные машины стенда: у них разные плагины входа,
+    /// и клиент обязан пройти оба.
+    pub mariadb_host: String,
+    pub mysql_host: String,
 }
 
 fn env(name: &str) -> String {
@@ -60,6 +64,8 @@ impl Stand {
             vnc_port: env("SEREIN_STAND_VNC_PORT").parse().expect("порт сервера с VNC"),
             pg_host: env("SEREIN_STAND_PG_HOST"),
             redis_host: env("SEREIN_STAND_REDIS_HOST"),
+            mariadb_host: env("SEREIN_STAND_MARIADB_HOST"),
+            mysql_host: env("SEREIN_STAND_MYSQL_HOST"),
         }
     }
 

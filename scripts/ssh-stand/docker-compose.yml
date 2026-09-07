@@ -58,6 +58,40 @@ services:
     image: redis:7-alpine
     command: ["redis-server", "--requirepass", "probe-pass"]
 
+  # Две разные MySQL-совместимые базы, потому что различаются они не диалектом, а входом:
+  # MariaDB по умолчанию проверяет пароль плагином mysql_native_password, MySQL 8 —
+  # caching_sha2_password с обменом открытым ключом. Наш клиент обязан пройти оба, и на
+  # одном образе это не проверить.
+  #
+  # Проверка готовности здесь не украшение: обе базы открывают порт задолго до того, как
+  # готовы отвечать, а MySQL 8 при первом запуске ещё десятки секунд создаёт системные
+  # таблицы. Без ожидания тест падал бы через раз и выглядел как плавающая ошибка клиента.
+  mariadb:
+    image: mariadb:11
+    environment:
+      MARIADB_ROOT_PASSWORD: probe-pass
+      MARIADB_DATABASE: probe
+      MARIADB_USER: probe
+      MARIADB_PASSWORD: probe-pass
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: probe-pass
+      MYSQL_DATABASE: probe
+      MYSQL_USER: probe
+      MYSQL_PASSWORD: probe-pass
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
   alpine:
     build:
       context: .
