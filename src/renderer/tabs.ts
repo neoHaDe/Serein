@@ -32,8 +32,14 @@ import {
 export interface Tab {
   key: string
   title: string
-  /** Вкладка-терминал (дерево панелей) или вкладка-редактор файла. */
-  kind: 'terminal' | 'editor'
+  /**
+   * Что за вкладка: терминал (дерево панелей), редактор файла или утилиты.
+   *
+   * Утилиты раньше открывались модальным окном поверх всего. Это неудобно ровно тем, для
+   * чего они нужны: проверить порт и тут же вернуться в терминал не выходило — окно
+   * закрывало собой всё, включая то, ради чего проверка и затевалась.
+   */
+  kind: 'terminal' | 'editor' | 'tools'
   root: PaneNode
   activePaneId: string
   sftpOpen: boolean
@@ -341,6 +347,26 @@ export function findEditorTab(tabs: Tab[], sessionId: string, remotePath: string
 }
 
 /** Новая вкладка встроенного редактора удалённого файла. */
+/**
+ * Вкладка утилит. Одна на всё приложение: держать две одинаковых незачем.
+ *
+ * Дерево панелей ей не нужно, но поле обязательное — кладём пустой лист, как и у
+ * редактора. Это дешевле, чем делать `root` необязательным во всех местах, где вкладки
+ * сохраняются, восстанавливаются и обходятся.
+ */
+export function makeToolsTab(): Tab {
+  const leaf = makeLeaf('local', 'Утилиты')
+  return {
+    key: uid(),
+    title: 'Утилиты',
+    kind: 'tools',
+    root: leaf,
+    activePaneId: leaf.id,
+    sftpOpen: false,
+    workspace: 'terminal'
+  }
+}
+
 export function makeEditorTab(sessionId: string, remotePath: string): Tab {
   const fileName = remotePath.split('/').pop() || remotePath
   const leaf = makeLeaf('local', fileName)

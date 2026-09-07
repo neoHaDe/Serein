@@ -19,6 +19,7 @@ import {
   findEditorTab,
   makeEditorTab,
   makeLocalTab,
+  makeToolsTab,
   makeServerTab,
   nextActivePaneId,
   nextTabKey,
@@ -65,6 +66,8 @@ export interface TabsApi {
   openServerTab: (server: ServerConfig) => void
   openLocalTab: () => void
   openEditorTab: (sessionId: string, remotePath: string) => void
+  /** Открыть вкладку утилит. Если она уже есть — просто переключиться на неё. */
+  openToolsTab: () => void
   closeTab: (key: string) => void
   renameTab: (key: string, title: string) => void
   reorderTabsByKey: (fromKey: string, toKey: string) => void
@@ -189,6 +192,19 @@ export function useTabs({
 
   const openLocalTab = useCallback(() => {
     const tab = makeLocalTab()
+    setTabs((prev) => [...prev, tab])
+    setActiveKey(tab.key)
+  }, [])
+
+  const openToolsTab = useCallback(() => {
+    // Вторую такую вкладку заводить незачем: утилиты одни на приложение, и человек,
+    // нажавший кнопку дважды, ждёт возврата к уже открытым, а не копии.
+    const existing = tabsRef.current.find((t) => t.kind === 'tools')
+    if (existing) {
+      setActiveKey(existing.key)
+      return
+    }
+    const tab = makeToolsTab()
     setTabs((prev) => [...prev, tab])
     setActiveKey(tab.key)
   }, [])
@@ -580,6 +596,7 @@ export function useTabs({
     openServerTab,
     openLocalTab,
     openEditorTab,
+    openToolsTab,
     closeTab,
     renameTab,
     reorderTabsByKey,

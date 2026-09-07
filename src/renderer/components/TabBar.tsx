@@ -240,15 +240,30 @@ export function TabBar({
               className="status-dot"
               style={{
                 background:
-                  t.kind === 'editor'
-                    ? t.editorDirty
-                      ? '#e0af68'
-                      : '#9ece6a'
-                    : statusColor[leaf?.status ?? 'connecting']
+                  t.kind === 'tools'
+                    ? // У утилит нет ни соединения, ни несохранённых правок — точке
+                      // состояния показывать нечего, поэтому она приглушённая.
+                      '#565f89'
+                    : t.kind === 'editor'
+                      ? t.editorDirty
+                        ? '#e0af68'
+                        : '#9ece6a'
+                      : statusColor[leaf?.status ?? 'connecting']
               }}
             />
             <span className="tab-icon">
-              <Icon name={t.kind === 'editor' ? 'editor' : leaf?.kind === 'local' ? 'desktop' : 'server'} size={13} />
+              <Icon
+                name={
+                  t.kind === 'tools'
+                    ? 'bolt'
+                    : t.kind === 'editor'
+                      ? 'editor'
+                      : leaf?.kind === 'local'
+                        ? 'desktop'
+                        : 'server'
+                }
+                size={13}
+              />
             </span>
             {editingKey === t.key ? (
               <input

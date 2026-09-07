@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { errText } from '../errText'
+import type { IconName } from './Icon'
+import { Icon } from './Icon'
 
 type Tab = 'port' | 'scan' | 'trace' | 'http' | 'dns' | 'tls' | 'subnet' | 'hash' | 'jwt'
 
@@ -22,6 +24,11 @@ interface Props {
   /** Живые SSH-сессии: только через них можно спросить сервер. */
   connectedSessions: ConnectedSession[]
   /**
+   * Закрыть панель. Есть только у модального варианта — вкладку закрывают её крестиком
+   * в общей полосе, и вторая кнопка там была бы лишней.
+   */
+  onClose?: () => void
+  /**
    * С чего начать выбор «откуда».
    *
    * У окна две двери. Из общего меню человек ещё не выбрал сервер — начинаем со своей
@@ -29,19 +36,22 @@ interface Props {
    * незачем: подставляем этот сервер.
    */
   defaultFrom?: string
-  onClose: () => void
 }
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'port', label: 'Порт' },
-  { id: 'scan', label: 'Диапазон' },
-  { id: 'trace', label: 'Маршрут' },
-  { id: 'http', label: 'HTTP' },
-  { id: 'dns', label: 'DNS' },
-  { id: 'tls', label: 'TLS' },
-  { id: 'subnet', label: 'Подсеть' },
-  { id: 'hash', label: 'Хеш' },
-  { id: 'jwt', label: 'JWT' }
+/**
+ * Порядок не алфавитный и не случайный: сверху то, что спрашивают у сети, снизу — то,
+ * что считается на месте и сервера не касается вовсе. Между ними — черта.
+ */
+const TABS: { id: Tab; label: string; icon: IconName; hint: string; local?: true }[] = [
+  { id: 'port', label: 'Порт', icon: 'link', hint: 'Открыт ли TCP-порт' },
+  { id: 'scan', label: 'Диапазон', icon: 'list', hint: 'Какие порты открыты' },
+  { id: 'trace', label: 'Маршрут', icon: 'tunnel', hint: 'Через какие узлы идёт трафик' },
+  { id: 'http', label: 'HTTP', icon: 'external', hint: 'Что отвечает служба' },
+  { id: 'dns', label: 'DNS', icon: 'search', hint: 'В какой адрес разрешается имя' },
+  { id: 'tls', label: 'TLS', icon: 'key', hint: 'Чей сертификат и до какого числа' },
+  { id: 'subnet', label: 'Подсеть', icon: 'broadcast', hint: 'Границы сети по маске', local: true },
+  { id: 'hash', label: 'Хеш', icon: 'snippets', hint: 'Контрольная сумма текста', local: true },
+  { id: 'jwt', label: 'JWT', icon: 'file', hint: 'Что внутри токена', local: true }
 ]
 
 function JsonOut({ value }: { value: unknown }): JSX.Element {
@@ -120,26 +130,52 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
     }
   }
 
+  const current = TABS.find((t) => t.id === tab) ?? TABS[0]
+  // Первая утилита, которая считается на месте: перед ней в списке ставим разделитель.
+  const firstLocal = TABS.find((t) => t.local)?.id
+
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal tools-modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Утилиты</h2>
-        <div className="tools-tabs">
+    <div className="tools-workspace">
+      <nav className="ws-rail" aria-label="Утилиты">
+        <div className="ws-rail-head">
+          <div className="ws-rail-name">
+            <Icon name="bolt" size={14} />
+            <span className="ws-rail-title">Утилиты</span>
+          </div>
+          <div className="ws-rail-status">сеть, адреса и расчёты</div>
+        </div>
+        <div className="ws-nav">
           {TABS.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              className={'mini' + (tab === t.id ? ' on' : '')}
-              onClick={() => {
-                setTab(t.id)
-                setError(null)
-                setOut(null)
-              }}
-            >
-              {t.label}
-            </button>
+            <div key={t.id} className={t.id === firstLocal ? 'tools-rail-group' : undefined}>
+              {t.id === firstLocal && <span className="tools-rail-divider">Без сервера</span>}
+              <button
+                type="button"
+                className={'ws-nav-item' + (tab === t.id ? ' active' : '')}
+                title={t.hint}
+                onClick={() => {
+                  setTab(t.id)
+                  // Ответ прошлой утилиты рядом с формой следующей читался бы как её
+                  // собственный — чистим вместе с переключением.
+                  setError(null)
+                  setOut(null)
+                }}
+              >
+                <Icon name={t.icon} size={14} />
+                {t.label}
+              </button>
+            </div>
           ))}
         </div>
+      </nav>
+
+      <div className="ws-panel fill tools-content">
+        <div className="ws-head">
+          <span className="ws-head-title">
+            <Icon name={current.icon} size={15} /> {current.label}
+          </span>
+          <span className="ws-head-hint">{current.hint}</span>
+        </div>
+        <div className="tools-body">
 
         {tab === 'port' && (
           <div className="tools-pane">
@@ -375,8 +411,13 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
         {error && <p className="tools-error">{error}</p>}
         {out != null && <JsonOut value={out} />}
 
-        <div className="modal-actions">
-          <button onClick={onClose}>Закрыть</button>
+        {/* Кнопка закрытия — только у модального варианта. У вкладки для этого есть
+            крестик в общей полосе, и вторая такая же рядом только путала бы. */}
+        {onClose && (
+          <div className="modal-actions">
+            <button onClick={onClose}>Закрыть</button>
+          </div>
+        )}
         </div>
       </div>
     </div>

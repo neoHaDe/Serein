@@ -34,9 +34,7 @@ export default function App(): JSX.Element {
   const [editing, setEditing] = useState<ServerConfig | null | undefined>(undefined)
   const [showSettings, setShowSettings] = useState(false)
   const [showKeyGen, setShowKeyGen] = useState(false)
-  const [showTools, setShowTools] = useState(false)
-  // На какой сервер нацелить утилиты при открытии. Пусто — на свою машину.
-  const [toolsFrom, setToolsFrom] = useState<string | undefined>(undefined)
+
   const [showGroups, setShowGroups] = useState(false)
   const [sftpWidth, setSftpWidth] = useState(380)
   const [sidebarWidth, setSidebarWidth] = useState(270)
@@ -149,10 +147,7 @@ export default function App(): JSX.Element {
         openLocal: tabsApi.openLocalTab,
         openSettings: () => setShowSettings(true),
         openKeyGen: () => setShowKeyGen(true),
-        openTools: () => {
-          setToolsFrom(undefined)
-          setShowTools(true)
-        },
+        openTools: tabsApi.openToolsTab,
         newServer: () => setEditing(null),
         setWorkspace: tabsApi.setWorkspace,
         focusTab: tabsApi.setActiveKey
@@ -171,10 +166,7 @@ export default function App(): JSX.Element {
         onDelete={ops.deleteServer}
         onOpenSettings={() => setShowSettings(true)}
         onOpenKeyGen={() => setShowKeyGen(true)}
-        onOpenTools={() => {
-          setToolsFrom(undefined)
-          setShowTools(true)
-        }}
+        onOpenTools={tabsApi.openToolsTab}
         onImport={ops.importServers}
         showPuttyImport={showPuttyImport}
         width={sidebarWidth}
@@ -254,6 +246,19 @@ export default function App(): JSX.Element {
 
           {tabsApi.tabs.map((tab) => {
             const isActive = tab.key === tabsApi.activeKey
+            if (tab.kind === 'tools') {
+              // Прячем стилем, а не размонтируем: иначе при возврате на вкладку пропали бы
+              // и введённый адрес, и полученный ответ — ровно то, ради чего её открывали.
+              return (
+                <div
+                  key={tab.key}
+                  className="terminal-slot tools-slot"
+                  style={{ display: isActive ? 'flex' : 'none' }}
+                >
+                  <ToolsModal connectedSessions={tabsApi.connectedSessions} />
+                </div>
+              )
+            }
             if (tab.kind === 'editor' && tab.editor) {
               return (
                 <div key={tab.key} className="terminal-slot" style={{ display: isActive ? 'flex' : 'none' }}>
@@ -299,14 +304,7 @@ export default function App(): JSX.Element {
                   onSftpResizeStart={startSftpResize}
                   onOpenInEditor={sessionId ? (rp) => tabsApi.openEditorTab(sessionId, rp) : undefined}
                   onDetached={goTerminal}
-                  onOpenTools={
-                    sessionId
-                      ? () => {
-                          setToolsFrom(sessionId)
-                          setShowTools(true)
-                        }
-                      : undefined
-                  }
+                  onOpenTools={sessionId ? tabsApi.openToolsTab : undefined}
                   terminal={
                     <PaneView
                       node={tab.root}
@@ -386,13 +384,7 @@ export default function App(): JSX.Element {
         <KeyGenModal connectedSessions={tabsApi.connectedSessions} onClose={() => setShowKeyGen(false)} />
       )}
 
-      {showTools && (
-        <ToolsModal
-          connectedSessions={tabsApi.connectedSessions}
-          defaultFrom={toolsFrom}
-          onClose={() => setShowTools(false)}
-        />
-      )}
+
 
       {prompts.hostKeyQueue.length > 0 && (
         <HostKeyModal request={prompts.hostKeyQueue[0]} onAnswer={prompts.answerHostKey} />
