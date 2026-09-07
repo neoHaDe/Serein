@@ -57,6 +57,12 @@ describe('предупреждение перед выполнением', () =>
     expect(needsConfirm("DELETE FROM logs -- 'where'")).toMatch(/все строки/)
   })
 
+  it('решётка в MySQL — тоже комментарий', () => {
+    // Иначе на MySQL остаётся открытым тот же обход, который закрыт для остальных баз.
+    expect(needsConfirm('DELETE FROM users # WHERE id = 1')).toMatch(/все строки/)
+    expect(needsConfirm('UPDATE users SET active = 0 # WHERE id = 1')).toMatch(/все строки/)
+  })
+
   it('команды Redis, стирающие базу, тоже предупреждают', () => {
     expect(needsConfirm('FLUSHALL')).toMatch(/целиком/)
     expect(needsConfirm('flushdb')).toMatch(/целиком/)

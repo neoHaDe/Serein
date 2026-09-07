@@ -73,11 +73,15 @@ export function needsConfirm(sql: string): string | null {
  *
  * Без этого `DELETE FROM t -- WHERE потом допишу` сойдёт за безопасный запрос: слово
  * `where` в комментарии есть, а условия нет.
+ *
+ * Решётка в списке появилась вместе с MySQL: там `#` — полноценный комментарий до конца
+ * строки, и без него тот же обход работал бы на одной базе из трёх.
  */
 function strip(sql: string): string {
   return sql
     .replace(/'(?:[^']|'')*'/g, "''")
     .replace(/--[^\n]*/g, ' ')
+    .replace(/#[^\n]*/g, ' ')
     .replace(/\/\*[\s\S]*?\*\//g, ' ')
 }
 
