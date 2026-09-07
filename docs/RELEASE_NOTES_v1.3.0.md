@@ -119,6 +119,11 @@ In-place upgrade from any 1.x on Windows and from 1.2.5 on Linux. The AppImage i
 (~110 MB) because it carries the whole WebKitGTK stack; the `.deb` and the `.rpm` use the
 system one.
 
+**Everything else attached here is machinery, not a download.** `latest.json` is the update
+manifest the application fetches to find out whether a newer version exists; its name is part
+of the URL, so it cannot be renamed. `serein-1.3.0-sbom.zip` is the dependency inventory
+(CycloneDX, 467 Rust crates and 44 npm packages) for whoever has to review what is inside.
+
 SHA-256:
 
 ```
