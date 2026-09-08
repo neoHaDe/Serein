@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon'
 import { WsDetachButton } from './WsDetachButton'
+import { useVisible } from '../hooks/useVisible'
 import { openDetachedWorkspace } from './workspaceWindow'
 import { errText } from '../errText'
 import { parseFrame } from '../vncFrames'
 import { buttonMask, keysymFor, wheelMask } from '../vncKeys'
+import { isModifier } from '../rdpKeys'
 
 /**
  * Рабочий стол VNC внутри вкладки сервера.
@@ -21,6 +23,11 @@ interface Props {
   onDetached?: () => void
   /** В откреплённом окне панель занимает его целиком. */
   fill?: boolean
+  /**
+   * Номер уже открытого сеанса. Если он есть - подключаться заново не нужно: панель
+   * забирает кадры живого стола себе. Так открепление окна не рвёт сеанс.
+   */
+  existingId?: string
   /** Вернуться к выбору способа подключения. В откреплённом окне выбора нет. */
   onBack?: () => void
   /** Открыть настройку VNC на сервере. */
@@ -38,18 +45,25 @@ export function VncPanel({
   panelTitle,
   onDetached,
   fill,
+  existingId,
   onBack,
   onSetup
 }: Props): JSX.Element {
+  const [rootRef, visible] = useVisible<HTMLDivElement>()
   const viewRef = useRef<HTMLCanvasElement | null>(null)
   const screenRef = useRef<Screen | null>(null)
   const idRef = useRef<string | null>(null)
   const sizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 })
+  // Что мы считаем нажатым на той стороне: при потере фокуса это надо отпустить.
+  const heldRef = useRef<Set<number>>(new Set())
 
   const [status, setStatus] = useState<'connecting' | 'live' | 'closed'>('connecting')
   const [error, setError] = useState('')
   const [password, setPassword] = useState('')
   const [needPassword, setNeedPassword] = useState(false)
+  // Сервер временно закрыл доступ после неудачных попыток. Отдельно от «нужен пароль»,
+  // потому что совет противоположный: вводить что-либо сейчас бесполезно.
+  const [blocked, setBlocked] = useState(false)
   const [scaled, setScaled] = useState(true)
 
   /** Переносит внутренний холст на видимый, вписывая или показывая один к одному. */
@@ -166,6 +180,7 @@ export function VncPanel({
           // Форму пароля показываем только когда дело в нём: в остальных случаях она
           // сбивает с толку, потому что проблема не там.
           setNeedPassword(f.needsPassword)
+          setBlocked(f.blacklisted)
           idRef.current = null
           return
         }
@@ -193,20 +208,33 @@ export function VncPanel({
         setError(errText(e))
         // Рукопожатие падает до первого кадра, поэтому отказ по паролю приходит сюда, а не
         // пакетом закрытия. Признак - поле рядом с текстом, а не разбор самого текста.
-        setNeedPassword(!!(e as { needsPassword?: boolean } | null)?.needsPassword)
+        const err = e as { needsPassword?: boolean; blacklisted?: boolean } | null
+        setNeedPassword(!!err?.needsPassword)
+        setBlocked(!!err?.blacklisted)
       }
     },
     [sessionId, draw]
   )
 
+  // Либо подхватываем уже открытый стол, либо подключаемся сами. Подхват просит сервер
+  // перерисовать экран целиком: RFB присылает только изменения, и новое окно осталось бы
+  // с пустым холстом до первого движения на сервере.
   useEffect(() => {
-    void connect()
-    return () => {
-      const id = idRef.current
-      idRef.current = null
-      if (id) void window.api.vnc.close(id)
+    if (existingId) {
+      idRef.current = existingId
+      setStatus('connecting')
+      window.api.vnc.attach(existingId, draw).catch((e) => {
+        idRef.current = null
+        setStatus('closed')
+        setError(errText(e))
+      })
+      return
     }
-  }, [connect])
+    void connect()
+    // `draw` меняется вместе с масштабом, а подхватывать сеанс второй раз нельзя:
+    // повторный вызов отнял бы кадры у самого себя.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connect, existingId])
 
   useEffect(() => {
     const onResize = (): void => present()
@@ -215,6 +243,12 @@ export function VncPanel({
   }, [present])
 
   useEffect(() => present(), [present, scaled])
+
+  // Вкладку показали снова: пока она была скрыта, у холста был нулевой размер, и вписать
+  // картинку было не во что. Следующего кадра от неподвижного экрана можно ждать долго.
+  useEffect(() => {
+    if (visible) present()
+  }, [visible, present])
 
   /*
    * Указатель уходит на каждое движение мыши, поэтому отказ здесь глушится намеренно.
@@ -256,17 +290,37 @@ export function VncPanel({
     if (sym === null) return
     // Иначе Tab уводит фокус, а Ctrl+W закрывает вкладку вместо ухода на сервер.
     e.preventDefault()
+    // Авто-повтор модификатора не несёт смысла: посреди сочетания вроде Alt+Shift он
+    // читается сервером как ещё одно переключение раскладки.
+    if (down && e.nativeEvent.repeat && isModifier(e.nativeEvent.code)) return
+    if (down) heldRef.current.add(sym)
+    else heldRef.current.delete(sym)
     window.api.vnc.key(id, sym, down).catch(() => {})
+  }
+
+  /** Отпускает всё удерживаемое. Зовётся при потере фокуса холстом. */
+  const releaseHeld = (): void => {
+    const id = idRef.current
+    for (const sym of heldRef.current) {
+      if (id) window.api.vnc.key(id, sym, false).catch(() => {})
+    }
+    heldRef.current.clear()
   }
 
   const detach = async (): Promise<void> => {
     if (!panelTitle) return
-    await openDetachedWorkspace({ tool: 'desktop', sessionId, title: panelTitle })
-    onDetached?.()
+    try {
+      await openDetachedWorkspace({ tool: 'desktop', sessionId, title: panelTitle })
+      onDetached?.()
+    } catch (e) {
+      // Отказ здесь раньше уходил в общий обработчик и не доходил до человека: снаружи
+      // это выглядело как «кнопка не работает». Теперь причина видна в самой панели.
+      setError(`Не удалось открепить окно: ${errText(e)}`)
+    }
   }
 
   return (
-    <div className={'ws-panel vnc-panel' + (fill ? ' fill' : '')}>
+    <div className={'ws-panel vnc-panel' + (fill ? ' fill' : '')} ref={rootRef}>
       <div className="ws-head">
         <span className="ws-head-title">
           <Icon name="desktop" size={15} /> Рабочий стол
@@ -278,7 +332,19 @@ export function VncPanel({
         </span>
         <div style={{ display: 'flex', gap: 6 }}>
           {onBack && (
-            <button className="mini" title="Выбрать способ подключения" onClick={onBack}>
+            <button
+              className="mini"
+              title="Отключиться и выбрать способ подключения"
+              onClick={() => {
+                // Сеанс закрывается только здесь, по явному действию. Уход на другую
+                // вкладку или закрытие окна его не трогают: он принадлежит SSH-сессии, а
+                // не окну, и второе окно может рисовать тот же стол.
+                const id = idRef.current
+                idRef.current = null
+                if (id) void window.api.vnc.close(id)
+                onBack()
+              }}
+            >
               <Icon name="back" size={14} />
             </button>
           )}
@@ -328,6 +394,7 @@ export function VncPanel({
           }}
           onKeyDown={(e) => onKey(e, true)}
           onKeyUp={(e) => onKey(e, false)}
+          onBlur={releaseHeld}
         />
 
         {status !== 'live' && (
@@ -336,6 +403,14 @@ export function VncPanel({
             {status === 'closed' && (
               <>
                 <div className="vnc-error">{error || 'Соединение закрыто'}</div>
+                {/* При блокировке форму не показываем вовсе: она подсказывала бы
+                    попробовать ещё раз, а каждая попытка блокировку продлевает. */}
+                {blocked && (
+                  <div className="vnc-hint">
+                    Сервер временно закрыл доступ после неудачных попыток входа. Снимается
+                    перезапуском службы: <code>systemctl restart vncserver@:1</code>
+                  </div>
+                )}
                 {needPassword && (
                   <form
                     className="vnc-auth"

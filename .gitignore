@@ -25,3 +25,7 @@ scripts/vm_*
 scripts/write_*.py
 scripts/make_vm_seed_iso.py
 scripts/cloud-init/
+
+# Помощник RDP: собирается скриптом, в репозитории ему делать нечего.
+/src-tauri/binaries/
+/rdp-helper/target/

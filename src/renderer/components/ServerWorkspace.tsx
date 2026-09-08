@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import type { ServerConfig, WorkspaceTool } from '../../shared/types'
 import type { PaneLeaf } from '../paneTree'
@@ -90,6 +91,14 @@ export function ServerWorkspace(props: ServerWorkspaceProps): JSX.Element {
   const showSftp = tool === 'terminal' && sftpOpen && !!sessionId
   const goTerminal = (): void => onSelectTool('terminal')
 
+  // Заходили ли уже на рабочий стол. Раньше открывать его заранее было незачем: панель
+  // сама по себе ничего не делает, пока не подключишься. А вот держать её после первого
+  // захода - надо, иначе переключение вкладки рвёт живой сеанс.
+  const [desktopOpened, setDesktopOpened] = useState(false)
+  useEffect(() => {
+    if (tool === 'desktop') setDesktopOpened(true)
+  }, [tool])
+
   return (
     <>
       {showRail && leaf && (
@@ -128,7 +137,30 @@ export function ServerWorkspace(props: ServerWorkspaceProps): JSX.Element {
         </>
       )}
 
-      {showRail && tool !== 'terminal' && (
+      {/*
+        Рабочий стол прячем стилем и НЕ размонтируем - по той же причине, что и терминал.
+        Размонтирование закрывает сеанс VNC или RDP вместе с введённым паролем, и поход в
+        соседнюю вкладку превращается в «подключайся заново».
+      */}
+      {showRail && sessionId && desktopOpened && (
+        <div
+          className="ws-body"
+          style={{ ...paneStack, display: tool === 'desktop' ? 'flex' : 'none' }}
+        >
+          <DesktopPanel
+            key={sessionId}
+            sessionId={sessionId}
+            panelTitle={panelTitle}
+            onDetached={onDetached}
+            fill
+          />
+        </div>
+      )}
+
+      {/* Рабочий стол исключён намеренно: у него своя область выше, которая живёт всё
+          время сессии. Без этого условия рядом с ней вставала бы вторая, пустая, и
+          они делили ширину пополам - панель обрезалась ровно по половине окна. */}
+      {showRail && tool !== 'terminal' && tool !== 'desktop' && (
         <div className="ws-body" style={paneStack}>
           {!sessionId && <div className="ws-waiting">Нет активного SSH-соединения</div>}
           {sessionId && tool === 'overview' && (
@@ -161,9 +193,6 @@ export function ServerWorkspace(props: ServerWorkspaceProps): JSX.Element {
           )}
           {sessionId && tool === 'databases' && (
             <DatabasePanel sessionId={sessionId} panelTitle={panelTitle} onDetached={onDetached} />
-          )}
-          {sessionId && tool === 'desktop' && (
-            <DesktopPanel sessionId={sessionId} panelTitle={panelTitle} onDetached={onDetached} />
           )}
           {sessionId && tool === 'tunnels' && (
             <TunnelPanel

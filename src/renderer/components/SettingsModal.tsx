@@ -224,7 +224,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           Сохранять расположение доп. панелей после перезапуска
         </label>
         <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
-          SFTP в главном окне и откреплённые окна (SFTP, логи) откроются как были: примагниченные - рядом, остальные - на прежних местах.
+          Откреплённые окна откроются на прежних местах.
         </div>
 
         <label className="checkbox-row">
@@ -245,7 +245,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           Отдельные кнопки на панели задач для откреплённых окон
         </label>
         <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
-          По умолчанию одна кнопка на панели задач (откреплённые окна без своей иконки). Клик по Serein на панели или кнопка внизу главного окна разворачивает свёрнутые. Галочка - отдельная кнопка у каждого окна. Переоткрой уже откреплённые окна после смены.
+          По умолчанию все окна под одной кнопкой. Уже открытые окна нужно переоткрыть.
         </div>
 
         <label className="checkbox-row">
@@ -257,10 +257,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           Закрытый контур: не обращаться в интернет
         </label>
         <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
-          Единственный внешний запрос Serein - проверка обновлений. Галочка выключает и её, и
-          автопроверку при запуске: приложение перестаёт ходить наружу совсем. Обновляться
-          придётся вручную, скачивая релиз. Для изолированных сетей, где такой запрос всё
-          равно не пройдёт, а в журнале межсетевого экрана останется.
+          Отключает проверку обновлений - единственный внешний запрос приложения.
+          Обновляться придётся вручную.
         </div>
 
         <label>
@@ -274,13 +272,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           />
         </label>
         <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
-          Одновременно копируемых файлов. Больше - быстрее папки, тяжелее канал SSH.
+          Сколько файлов копируется одновременно.
         </div>
 
         <div className="settings-section">
           <div className="settings-section-title">SFTP-проводник</div>
           <div className="settings-row-desc" style={{ marginBottom: 10 }}>
-            Как в проводнике Windows: колонки, сортировка по заголовку, ширина тянется за край. Имя нельзя выключить.
+            Какие колонки показывать. Имя выключить нельзя.
           </div>
           {(['name', 'ext', 'mode', 'size', 'mtime'] as const).map((id) => {
             const label =

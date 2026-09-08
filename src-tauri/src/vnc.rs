@@ -23,10 +23,14 @@ use vnc::{PixelFormat, VncConnector, VncEncoding, VncError, VncEvent};
 
 /// Тип пакета в первом байте. Значения дублируются во фронтенде - держать их синхронно.
 ///
-/// Причина обрыва приходит текстом внутри CLOSED, а в поле `x` этого пакета лежит признак
-/// «дело в пароле». Признак отдельный, а не разбор текста: сообщение приходит от сервера,
-/// оно на его языке и в его формулировке, и строить на нём логику - значит ломаться от
-/// чужой правки.
+/// Причина обрыва приходит текстом внутри CLOSED, а в полях `x` и `y` этого пакета лежат
+/// два признака: «дело в пароле» и «сервер временно закрыл доступ». Признаки отдельные, а
+/// не разбор текста: сообщение приходит от сервера, оно на его языке и в его формулировке,
+/// и строить на нём логику - значит ломаться от чужой правки.
+///
+/// Различать эти два случая обязательно: советы у них противоположные. При неверном
+/// пароле надо ввести другой, при блокировке любой пароль отвергается не глядя, и
+/// предлагать ввод значит подсказывать то, что блокировку продлевает.
 mod kind {
     pub const RESIZE: u8 = 1;
     pub const RAW: u8 = 2;
@@ -67,6 +71,8 @@ fn bgra_to_rgba(buf: &mut [u8]) {
 struct Live {
     input: mpsc::UnboundedSender<X11Event>,
     alive: Arc<AtomicBool>,
+    /// Приёмник кадров. Подменяемый: при откреплении окна сеанс не рвётся, а переезжает.
+    out: crate::deskout::Out,
 }
 
 static SESSIONS: Mutex<Option<HashMap<String, Live>>> = Mutex::new(None);
@@ -86,17 +92,30 @@ fn with_sessions<T>(f: impl FnOnce(&mut HashMap<String, Live>) -> T) -> T {
 pub struct OpenError {
     pub message: String,
     pub needs_password: bool,
+    /// Сервер временно закрыл доступ после неудачных попыток.
+    ///
+    /// Отдельно от `needs_password`, потому что это противоположный совет. При неверном
+    /// пароле надо ввести другой; при блокировке любой пароль отвергается не глядя, и
+    /// вводить что-либо бессмысленно, пока она не снята.
+    pub blacklisted: bool,
 }
 
 impl From<&VncError> for OpenError {
     fn from(e: &VncError) -> Self {
-        Self { message: vnc_err(e), needs_password: is_auth_failure(e) }
+        let blacklisted = is_blacklisted(e);
+        Self {
+            message: vnc_err(e),
+            // При блокировке форму пароля не показываем: она подсказывала бы сделать
+            // ровно то, что продлевает блокировку.
+            needs_password: !blacklisted && is_auth_failure(e),
+            blacklisted,
+        }
     }
 }
 
 impl From<String> for OpenError {
     fn from(message: String) -> Self {
-        Self { message, needs_password: false }
+        Self { message, needs_password: false, blacklisted: false }
     }
 }
 
@@ -112,12 +131,14 @@ pub enum Target {
 /// Возвращает идентификатор, по которому потом идут ввод и закрытие.
 pub async fn open(
     id: String,
+    ssh_id: String,
     target: Target,
     password: Option<String>,
     on_frame: Channel<InvokeResponseBody>,
 ) -> Result<(), OpenError> {
     let (tx, rx) = mpsc::unbounded_channel::<X11Event>();
     let alive = Arc::new(AtomicBool::new(true));
+    let out = crate::deskout::Out::new(on_frame);
 
     match target {
         Target::Tcp { host, port } => {
@@ -125,7 +146,7 @@ pub async fn open(
                 .await
                 .map_err(|e| OpenError::from(format!("Не удалось подключиться к {host}:{port}: {e}")))?;
             sock.set_nodelay(true).ok();
-            spawn_loop(id.clone(), sock, password, rx, alive.clone(), on_frame).await?;
+            spawn_loop(id.clone(), sock, password, rx, alive.clone(), out.clone()).await?;
         }
         Target::Ssh { handle, host, port } => {
             // Порт открывается со стороны сервера, поэтому «127.0.0.1» здесь - это его
@@ -136,11 +157,13 @@ pub async fn open(
                     .await
                     .map_err(|e| OpenError::from(format!("SSH-канал до {host}:{port} не открылся: {e}")))?
             };
-            spawn_loop(id.clone(), ch.into_stream(), password, rx, alive.clone(), on_frame).await?;
+            spawn_loop(id.clone(), ch.into_stream(), password, rx, alive.clone(), out.clone())
+                .await?;
         }
     }
 
-    with_sessions(|m| m.insert(id, Live { input: tx, alive }));
+    crate::deskout::remember(&ssh_id, crate::deskout::Kind::Vnc, &id);
+    with_sessions(|m| m.insert(id, Live { input: tx, alive, out }));
     Ok(())
 }
 
@@ -150,7 +173,7 @@ async fn spawn_loop<S>(
     password: Option<String>,
     mut rx: mpsc::UnboundedReceiver<X11Event>,
     alive: Arc<AtomicBool>,
-    on_frame: Channel<InvokeResponseBody>,
+    out: crate::deskout::Out,
 ) -> Result<(), OpenError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync + 'static,
@@ -195,18 +218,19 @@ where
 
     let reader_alive = alive.clone();
     tokio::spawn(async move {
-        let end = event_loop(&client, &reader_alive, &on_frame).await;
+        let end = event_loop(&client, &reader_alive, &id, &out).await;
         reader_alive.store(false, Ordering::Relaxed);
         let _ = client.close().await;
-        let (text, auth) = end.unwrap_or_default();
-        let _ = on_frame.send(InvokeResponseBody::Raw(packet(
+        let (text, auth, blocked) = end.unwrap_or_default();
+        let _ = out.send(InvokeResponseBody::Raw(packet(
             kind::CLOSED,
             u16::from(auth),
-            0,
+            u16::from(blocked),
             0,
             0,
             text.as_bytes(),
         )));
+        crate::deskout::forget(&id);
         with_sessions(|m| m.remove(&id));
     });
 
@@ -217,6 +241,18 @@ where
 ///
 /// Часть таких отказов библиотека отдаёт как `General` с текстом сервера - отсюда проверка
 /// по подстроке. Она живёт здесь, в одном месте, а наружу уходит уже флагом.
+/// Отказ ли это из-за временной блокировки адреса.
+///
+/// Формулировка сервера проверена на живом TigerVNC: заблокированному клиенту он
+/// отвечает «Too many security failures» и разрывает связь до выбора способа входа.
+fn is_blacklisted(e: &VncError) -> bool {
+    let text = match e {
+        VncError::General(m) => m.to_lowercase(),
+        _ => return false,
+    };
+    text.contains("too many") || text.contains("security failures")
+}
+
 fn is_auth_failure(e: &VncError) -> bool {
     match e {
         VncError::WrongPassword | VncError::NoPassword => true,
@@ -229,18 +265,21 @@ fn is_auth_failure(e: &VncError) -> bool {
 }
 
 /// Возвращает причину и признак «дело в пароле», если сессия закончилась ошибкой.
+///
+/// Блокировка сюда тоже попадает: сервер закрывает связь, а не отказывает в пароле.
 async fn event_loop(
     client: &vnc::VncClient,
     alive: &AtomicBool,
-    out: &Channel<InvokeResponseBody>,
-) -> Option<(String, bool)> {
+    id: &str,
+    out: &crate::deskout::Out,
+) -> Option<(String, bool, bool)> {
     // В RFB сервер не транслирует экран сам по себе: он присылает изменения **в ответ на
     // запрос** и после этого снова молчит. Одного запроса при подключении хватает ровно на
     // одну картинку - дальше экран замирает, хотя ввод доходит и на сервере всё меняется.
     // Поэтому запрос повторяется постоянно, примерно тридцать раз в секунду.
     let mut asked = tokio::time::Instant::now();
     if client.input(X11Event::Refresh).await.is_err() {
-        return Some(("Не удалось запросить кадр".into(), false));
+        return Some(("Не удалось запросить кадр".into(), false, false));
     }
     // Пауза между пустыми опросами. Достаточно мала, чтобы не съедать кадры на глаз, и
     // достаточно велика, чтобы не крутить процессор впустую на простое.
@@ -252,7 +291,7 @@ async fn event_loop(
             // Запрос инкрементальный: сервер пришлёт только изменившиеся области, а если
             // не изменилось ничего - не пришлёт ничего и ждать не заставит.
             if client.input(X11Event::Refresh).await.is_err() {
-                return Some(("Соединение с рабочим столом потеряно".into(), false));
+                return Some(("Соединение с рабочим столом потеряно".into(), false, false));
             }
         }
         let ev = match client.poll_event().await {
@@ -261,10 +300,13 @@ async fn event_loop(
                 tokio::time::sleep(idle).await;
                 continue;
             }
-            Err(e) => return Some((vnc_err(&e), is_auth_failure(&e))),
+            Err(e) => return Some((vnc_err(&e), is_auth_failure(&e), is_blacklisted(&e))),
         };
         let msg = match ev {
             VncEvent::SetResolution(screen) => {
+                // Размер запоминаем: окно, которое подхватит сеанс после открепления,
+                // начинает с пустого холста и должно узнать его величину заранее.
+                crate::deskout::note_size(id, screen.width, screen.height);
                 packet(kind::RESIZE, 0, 0, screen.width, screen.height, &[])
             }
             VncEvent::RawImage(rect, data) => {
@@ -292,7 +334,11 @@ async fn event_loop(
             VncEvent::Text(t) => packet(kind::TEXT, 0, 0, 0, 0, t.as_bytes()),
             VncEvent::Error(e) => {
                 let auth = e.to_lowercase().contains("password") || e.to_lowercase().contains("auth");
-                return Some((vnc_err(&VncError::General(e)), auth));
+                let err = VncError::General(e);
+                let blocked = is_blacklisted(&err);
+                // При блокировке форму пароля не показываем: она подсказала бы сделать
+                // ровно то, что блокировку продлевает.
+                return Some((vnc_err(&err), auth && !blocked, blocked));
             }
             // Формат пикселей мы задали сами, повторять его фронтенду незачем.
             VncEvent::SetPixelFormat(_) => continue,
@@ -322,6 +368,15 @@ fn vnc_err(e: &VncError) -> String {
         // по паролю, и его пользователь должен прочитать на своём языке. Формулировка у
         // серверов разная: TigerVNC говорит «Authentication failed», x11vnc - «password
         // check failed», поэтому проверяются оба слова.
+        // Блокировку проверяем раньше пароля: её текст тоже про неудачный вход, и без
+        // этого порядка она читалась бы как «неверный пароль», то есть как приглашение
+        // попробовать ещё раз - ровно то, что блокировку и продлевает.
+        VncError::General(_) if is_blacklisted(e) => {
+            "Сервер временно закрыл доступ после неудачных попыток входа. \
+             Правильный пароль сейчас тоже не примут: снимается перезапуском службы \
+             VNC на сервере либо ожиданием."
+                .into()
+        }
         VncError::General(m)
             if {
                 let m = m.to_lowercase();
@@ -364,7 +419,31 @@ pub fn paste(id: &str, text: String) {
     });
 }
 
+/// Переводит выдачу кадров в другое окно и просит перерисовать экран целиком.
+///
+/// Полный кадр обязателен: сервер RFB присылает только изменения, и новое окно осталось
+/// бы с пустым холстом до первого движения на сервере.
+pub fn attach(id: &str, ch: Channel<InvokeResponseBody>) -> Result<(), String> {
+    // Размер новому окну надо назвать самим. Сервер RFB сообщает его один раз, при
+    // подключении, и второй раз не повторит - а без него холста не из чего создать, и
+    // все дальнейшие кадры полетели бы в пустоту.
+    let size = crate::deskout::active_size(id);
+    let found = with_sessions(|m| {
+        m.get(id).map(|s| {
+            s.out.set(ch);
+            if let Some((w, h)) = size {
+                let _ = s.out.send(InvokeResponseBody::Raw(packet(kind::RESIZE, 0, 0, w, h, &[])));
+            }
+            // Именно полный, а не обычный: сервер присылает только изменения, и новое
+            // окно осталось бы с пустым холстом до первого движения на сервере.
+            s.input.send(X11Event::FullRefresh).ok();
+        })
+    });
+    found.ok_or_else(|| "Этот рабочий стол уже закрыт".to_owned())
+}
+
 pub fn close(id: &str) {
+    crate::deskout::forget(id);
     with_sessions(|m| {
         if let Some(s) = m.remove(id) {
             s.alive.store(false, Ordering::Relaxed);
@@ -376,8 +455,39 @@ pub fn close(id: &str) {
 /// собственный туннель и остался бы висеть с мёртвым каналом.
 pub fn close_all() {
     with_sessions(|m| {
-        for (_, s) in m.drain() {
+        for (id, s) in m.drain() {
+            crate::deskout::forget(&id);
             s.alive.store(false, Ordering::Relaxed);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn блокировка_отличается_от_неверного_пароля() {
+        // Разбор живого случая на домашнем сервере. TigerVNC после неудачных попыток
+        // закрывает доступ и отвечает «Too many security failures» ещё до выбора способа
+        // входа - пароль он даже не спрашивает. Раньше эта строка уходила на экран как
+        // есть, человек читал её как «пароль опять не тот» и пробовал снова, продлевая
+        // блокировку.
+        let blocked = VncError::General("Too many security failures".into());
+        assert!(is_blacklisted(&blocked));
+        assert!(vnc_err(&blocked).contains("временно закрыл доступ"));
+
+        // Обычный отказ по паролю блокировкой не считается: совет там противоположный.
+        let wrong = VncError::General("Authentication failed".into());
+        assert!(!is_blacklisted(&wrong));
+        assert_eq!(vnc_err(&wrong), "Неверный пароль VNC");
+    }
+
+    #[test]
+    fn при_блокировке_форму_пароля_не_предлагают() {
+        // Она подсказывала бы сделать ровно то, что блокировку продлевает.
+        let e = OpenError::from(&VncError::General("Too many security failures".into()));
+        assert!(e.blacklisted);
+        assert!(!e.needs_password, "вводить пароль при блокировке бесполезно");
+    }
 }

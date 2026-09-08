@@ -80,7 +80,7 @@ export async function checkForUpdates(silent: boolean): Promise<void> {
   if (await isOffline()) {
     if (!silent) {
       await message(
-        'Включён закрытый контур: Serein не обращается наружу. Отключите его в настройках, если нужна проверка обновлений.',
+        'Закрытый контур включён - проверка обновлений отключена.',
         { title: 'Обновление' }
       )
     }

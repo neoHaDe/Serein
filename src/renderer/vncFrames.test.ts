@@ -69,7 +69,8 @@ describe('разбор пакетов рабочего стола', () => {
     expect(parseFrame(pack(VNC_KIND.closed, 0, 0, 0, 0, bytes))).toEqual({
       kind: 'closed',
       reason: 'Обрыв связи',
-      needsPassword: false
+      needsPassword: false,
+      blacklisted: false
     })
   })
 
@@ -80,7 +81,24 @@ describe('разбор пакетов рабочего стола', () => {
     expect(parseFrame(pack(VNC_KIND.closed, 1, 0, 0, 0, bytes))).toEqual({
       kind: 'closed',
       reason: 'password check failed',
-      needsPassword: true
+      needsPassword: true,
+      blacklisted: false
+    })
+  })
+
+  it('блокировка отличается от неверного пароля', () => {
+    // Разница не косметическая: советы противоположные. При неверном пароле надо ввести
+    // другой, при блокировке сервер отвергает любой не глядя, и форма ввода подсказывала
+    // бы делать ровно то, что блокировку продлевает.
+    //
+    // Разбор живого случая: TigerVNC после нескольких неудач закрывает доступ и отвечает
+    // «Too many security failures» ещё до выбора способа входа.
+    const bytes = [...new TextEncoder().encode('Too many security failures')]
+    expect(parseFrame(pack(VNC_KIND.closed, 0, 1, 0, 0, bytes))).toEqual({
+      kind: 'closed',
+      reason: 'Too many security failures',
+      needsPassword: false,
+      blacklisted: true
     })
   })
 
@@ -88,6 +106,15 @@ describe('разбор пакетов рабочего стола', () => {
     const f = parseFrame(pack(VNC_KIND.jpeg, 0, 0, 8, 8, [0xff, 0xd8, 0xff]))
     if (f?.kind !== 'jpeg') throw new Error('ожидали jpeg')
     expect([...f.bytes]).toEqual([0xff, 0xd8, 0xff])
+  })
+
+  it('кадр приходит массивом чисел, а не буфером - разбор всё равно работает', () => {
+    // Живой случай: кадры больше килобайта Tauri передаёт другим путём, и когда тот
+    // закрыт политикой содержимого, на запасном приходит массив. Раньше это падало на
+    // `new DataView` и выглядело как чёрный экран без причины.
+    const buf = pack(VNC_KIND.resize, 0, 0, 1090, 656)
+    expect(parseFrame([...new Uint8Array(buf)])).toEqual({ kind: 'resize', w: 1090, h: 656 })
+    expect(parseFrame(new Uint8Array(buf))).toEqual({ kind: 'resize', w: 1090, h: 656 })
   })
 
   it('незнакомый тип и обрезанный пакет не роняют разбор', () => {

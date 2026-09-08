@@ -351,8 +351,7 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
             </div>
             <From value={from} onChange={setFrom} sessions={connectedSessions} />
             <p className="hint">
-              За раз - не больше 1024 портов. С сервера проверки идут по очереди, поэтому там
-              диапазон лучше держать узким: сотня закрытых портов - это около полутора минут.
+              До 1024 портов за раз. С сервера проверка идёт медленнее.
             </p>
             <button
               className="primary"
@@ -384,9 +383,8 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
             </div>
             <From value={from} onChange={setFrom} sessions={connectedSessions} />
             <p className="hint">
-              Маршрут строит системная программа: <code>tracert</code> на Windows,
-              <code> traceroute</code> на юниксах. На минимальных серверах её может не быть
-              вовсе - тогда это будет сказано прямо, а не показано пустым списком.
+              Маршрут строит <code>tracert</code> или <code>traceroute</code> - на сервере
+              их может не быть.
             </p>
             <button
               className="primary"
@@ -425,9 +423,7 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
             </div>
             <From value={from} onChange={setFrom} sessions={connectedSessions} />
             <p className="hint">
-              Со своей машины запрос идёт своими силами, и каждый переход по редиректу виден
-              отдельным шагом. С сервера - через <code>curl</code> или <code>wget</code>, и там
-              будет только итог: чужими программами цепочку не разложить.
+              С этой машины видна вся цепочка переадресаций, с сервера - только итог.
             </p>
             <button
               className="primary"
@@ -517,9 +513,7 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
               </label>
             </div>
             <p className="hint">
-              Запрос идёт <b>с этой машины</b>, выбора «откуда» здесь нет: готовый клиент
-              каталога не умеет работать через SSH-канал. Показываются первые 50 записей -
-              каталог организации отдаёт их тысячами.
+              Запрос идёт с этой машины. Показываются первые 50 записей.
             </p>
             <button
               className="primary"
@@ -546,9 +540,7 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
             <DiffSide label="Первый файл" value={diffA} onChange={setDiffA} sessions={connectedSessions} />
             <DiffSide label="Второй файл" value={diffB} onChange={setDiffB} sessions={connectedSessions} />
             <p className="hint">
-              Каждая сторона - эта машина или любой подключённый сервер. Смысл именно в этом:
-              вопрос обычно звучит как «тот же ли конфиг на двух серверах» или «доехала ли
-              правка», а не «сравни два файла у себя».
+              Каждая сторона - эта машина или любой подключённый сервер.
             </p>
             <button
               className="primary"

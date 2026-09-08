@@ -38,14 +38,32 @@ export type VncFrame =
   | { kind: 'cursor'; rect: Rect; pixels: Uint8ClampedArray<ArrayBuffer> }
   | { kind: 'bell' }
   | { kind: 'text'; text: string }
-  | { kind: 'closed'; reason: string; needsPassword: boolean }
+  | { kind: 'closed'; reason: string; needsPassword: boolean; blacklisted: boolean }
+
+/**
+ * Приводит принятое к `ArrayBuffer`.
+ *
+ * Канал Tauri обещает `ArrayBuffer`, но держит слово не всегда: кадры больше килобайта
+ * идут другим путём, и если тот путь закрыт, на запасном приходит массив чисел. Падать
+ * на этом нельзя - экран тогда остаётся пустым, а причина не доходит никуда.
+ */
+function asBuffer(data: unknown): ArrayBuffer | null {
+  if (data instanceof ArrayBuffer) return data
+  if (ArrayBuffer.isView(data)) {
+    const v = data as ArrayBufferView
+    return v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength) as ArrayBuffer
+  }
+  if (Array.isArray(data)) return new Uint8Array(data).buffer
+  return null
+}
 
 /**
  * Разбирает один пакет. `null` - пакет неизвестного или битого вида: рисовать по нему
  * нечего, но и падать нельзя, иначе одна незнакомая кодировка убивает весь экран.
  */
-export function parseFrame(buf: ArrayBuffer): VncFrame | null {
-  if (buf.byteLength < HEADER) return null
+export function parseFrame(data: ArrayBuffer | ArrayBufferView | number[]): VncFrame | null {
+  const buf = asBuffer(data)
+  if (!buf || buf.byteLength < HEADER) return null
   const v = new DataView(buf)
   const kind = v.getUint8(0)
   const rect: Rect = { x: v.getUint16(1), y: v.getUint16(3), w: v.getUint16(5), h: v.getUint16(7) }
@@ -84,9 +102,17 @@ export function parseFrame(buf: ArrayBuffer): VncFrame | null {
       return { kind: 'text', text: decodeText(buf) }
 
     case VNC_KIND.closed:
-      // Признак «дело в пароле» приходит флагом в поле x. По тексту его определять нельзя:
-      // сообщение идёт от сервера, на его языке и в его формулировке.
-      return { kind: 'closed', reason: decodeText(buf), needsPassword: rect.x === 1 }
+      // Два признака флагами в полях x и y. По тексту их определять нельзя: сообщение
+      // идёт от сервера, на его языке и в его формулировке.
+      //
+      // Различать их обязательно: при неверном пароле надо предложить ввести другой, а
+      // при блокировке ввод бесполезен - сервер отвергает любой пароль не глядя.
+      return {
+        kind: 'closed',
+        reason: decodeText(buf),
+        needsPassword: rect.x === 1,
+        blacklisted: rect.y === 1
+      }
 
     default:
       return null

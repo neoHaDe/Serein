@@ -284,7 +284,7 @@ fn strip_ansi_into(state: &mut Esc, s: &str, out: &mut String) {
 }
 
 /// Дата-время UTC как `YYYYMMDD-HHMMSS` без зависимости от chrono.
-fn stamp_utc() -> String {
+pub fn stamp_utc() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

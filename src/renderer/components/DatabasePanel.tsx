@@ -287,8 +287,7 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
             </label>
           </div>
           <div className="agent-hint">
-            Подключение идёт внутри этой SSH-сессии: порт наружу открывать не нужно, адрес -
-            такой, каким его видит сам сервер.
+            Подключение внутри SSH-канала. Адрес - такой, каким его видит сервер
           </div>
           {error && <div className="db-error">{error}</div>}
           <button className="primary" disabled={busy} onClick={() => void connect()}>

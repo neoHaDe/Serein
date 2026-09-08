@@ -110,7 +110,7 @@ pub fn parse_detect(stdout: &str) -> Value {
 /// Адрес там записан четырьмя байтами в обратном порядке - так его кладёт в память
 /// машина, а ядро печатает как есть. Порт же обычный, просто шестнадцатеричный.
 /// Не разобрали - возвращаем `None`: выдуманный адрес хуже отсутствующего.
-fn decode_proc_addr(raw: &str) -> Option<String> {
+pub fn decode_proc_addr(raw: &str) -> Option<String> {
     let (a, p) = raw.trim().split_once(':')?;
     let port = u16::from_str_radix(p, 16).ok()?;
     // IPv6 в этом файле записан тридцатью двумя знаками; для него точный разбор здесь

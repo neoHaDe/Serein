@@ -351,8 +351,72 @@ export const api = {
     key: (id: string, keysym: number, down: boolean): Promise<void> =>
       invoke('vnc_key', { id, keysym, down }),
     refresh: (id: string, full = false): Promise<void> => invoke('vnc_refresh', { id, full }),
+    /**
+     * Забирает кадры уже открытого сеанса в это окно.
+     *
+     * Так открепление не рвёт сеанс: он живёт в приложении, а не в окне, и второе окно
+     * просто продолжает картинку - без пароля и без переподключения.
+     */
+    attach: (id: string, onFrame: (buf: ArrayBuffer) => void): Promise<void> => {
+      const channel = new Channel<ArrayBuffer>()
+      channel.onmessage = onFrame
+      return invoke('vnc_attach', { id, onFrame: channel })
+    },
     paste: (id: string, text: string): Promise<void> => invoke('vnc_paste', { id, text }),
     close: (id: string): Promise<void> => invoke('vnc_close', { id })
+  },
+
+  /**
+   * Рабочий стол по RDP.
+   *
+   * Кадры приходят тем же каналом и в том же формате, что у VNC, поэтому рисует их тот
+   * же код. Разбирает протокол отдельный процесс: зависимости IronRDP не сходятся с
+   * SSH-ядром в одном дереве, подробности в `src-tauri/src/rdp.rs`.
+   */
+  rdp: {
+    open: (
+      sessionId: string,
+      onFrame: (buf: ArrayBuffer) => void,
+      opts: {
+        host?: string
+        port?: number
+        user: string
+        password: string
+        domain?: string
+        width?: number
+        height?: number
+        colorDepth?: number
+        economy?: boolean
+        autologon?: boolean
+      }
+    ): Promise<string> => {
+      const channel = new Channel<ArrayBuffer>()
+      channel.onmessage = onFrame
+      return invoke('rdp_open', { sessionId, onFrame: channel, ...opts })
+    },
+    pointer: (id: string, x: number, y: number, buttons: number): Promise<void> =>
+      invoke('rdp_pointer', { id, x, y, buttons }),
+    /** Код клавиши здесь в терминах RDP, а не X11: раскладку разбирает интерфейс. */
+    key: (id: string, code: number, down: boolean): Promise<void> =>
+      invoke('rdp_key', { id, code, down }),
+    /**
+     * Просит сервер сменить размер рабочего стола прямо в живом сеансе.
+     *
+     * Переподключения не будет: размер идёт отдельным каналом управления экраном.
+     * Сервер, который его не поддержал, просьбу не заметит - картинка останется
+     * вписанной в окно.
+     */
+    resize: (id: string, width: number, height: number): Promise<void> =>
+      invoke('rdp_resize', { id, width, height }),
+    /** Забирает кадры уже открытого сеанса в это окно - см. `vnc.attach`. */
+    attach: (id: string, onFrame: (buf: ArrayBuffer) => void): Promise<void> => {
+      const channel = new Channel<ArrayBuffer>()
+      channel.onmessage = onFrame
+      return invoke('rdp_attach', { id, onFrame: channel })
+    },
+    close: (id: string): Promise<void> => invoke('rdp_close', { id }),
+    /** Строка от интерфейса в журнал рабочего стола: половину пути кадра из Rust не видно. */
+    note: (line: string): Promise<void> => invoke('rdp_note', { line })
   },
 
   /**
@@ -387,7 +451,48 @@ export const api = {
       sessionId: string,
       password: string
     ): Promise<{ ok: boolean; error?: string }> =>
-      invoke('desktop_set_password', { sessionId, password })
+      invoke('desktop_set_password', { sessionId, password }),
+
+    /**
+     * Открыт ли уже рабочий стол у этой сессии. `null` - нет.
+     *
+     * Спрашивается при открытии панели: сеанс живёт в приложении, а не в окне, и
+     * откреплённое окно должно продолжить картинку, а не спрашивать пароль заново.
+     */
+    active: (
+      sessionId: string
+    ): Promise<{ kind: 'vnc' | 'rdp'; id: string; width: number; height: number } | null> =>
+      invoke('desktop_active', { sessionId }),
+
+    /**
+     * То же самое, но про RDP. Отдельным вопросом к серверу, а не одним общим: смотреть
+     * надо другое, и общий ответ на двоих путал бы оба.
+     */
+    rdpDetect: (
+      sessionId: string
+    ): Promise<{
+      installed: { name: string; path: string }[]
+      listening: string[]
+      service?: string
+      desktop?: string
+      packageManager?: string
+      sudo?: string
+      summary: string
+      canInstall: boolean
+      canStart: boolean
+    }> => invoke('desktop_rdp_detect', { sessionId }),
+    rdpInstall: (
+      sessionId: string,
+      packageManager: string,
+      sudoPassword: string
+    ): Promise<{ ok: boolean; error?: string }> =>
+      invoke('desktop_rdp_install', { sessionId, packageManager, sudoPassword }),
+    /** Включает службу и проверяет, что она действительно поднялась. */
+    rdpStart: (
+      sessionId: string,
+      sudoPassword: string
+    ): Promise<{ ok: boolean; error?: string }> =>
+      invoke('desktop_rdp_start', { sessionId, sudoPassword })
   },
 
   /**

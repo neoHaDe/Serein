@@ -5134,3 +5134,97 @@ button.secondary:hover {
   align-self: flex-end;
   margin-bottom: 1px;
 }
+
+/* Форма входа RDP поверх холста. В отличие от VNC, спрашивается до соединения:
+   без имени и пароля сервер не начнёт даже рукопожатие. */
+.rdp-auth {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 260px;
+  text-align: left;
+}
+.rdp-auth label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.rdp-auth input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  padding: 8px 10px;
+  outline: none;
+  font-family: inherit;
+  font-size: 13px;
+}
+.rdp-auth input:focus,
+.rdp-auth select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.14);
+}
+/* Разрешение и глубина цвета стоят парой: это одна мысль «как показывать», и место
+   формы они делят пополам, а не растягиваются каждое во всю ширину. */
+/* Две кнопки настройки в строку: способов подключения два, и они равноправны. */
+.desk-state-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.rdp-auth-row {
+  display: flex;
+  gap: 8px;
+}
+.rdp-auth-row label {
+  flex: 1;
+  min-width: 0;
+}
+.rdp-auth select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  padding: 8px 10px;
+  outline: none;
+  font-family: inherit;
+  font-size: 13px;
+}
+/* Переключатель читается слева направо как фраза, поэтому строка, а не колонка. */
+.rdp-auth-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+.rdp-auth-check input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* Пояснение под ошибкой рабочего стола: не просто текст сервера, а что делать. */
+.vnc-hint {
+  max-width: 460px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+  text-align: left;
+  padding: 10px 12px;
+  background: rgba(var(--warn-rgb), 0.08);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r-sm);
+}
+.vnc-hint code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  background: rgba(var(--shadow-rgb), 0.3);
+  padding: 1px 5px;
+  border-radius: var(--r-sm);
+}

@@ -29,8 +29,11 @@ pub mod remote_fs;
 pub mod db;
 pub mod platform;
 pub mod scp;
+pub mod rdp;
 pub mod vnc;
 pub mod vncsetup;
+pub mod rdpsetup;
+pub mod deskout;
 mod serial;
 pub mod sftp;
 mod ssh_agent;
@@ -820,7 +823,7 @@ async fn vnc_open(
         // 5900 - нулевой дисплей; у большинства серверов рабочий стол именно там.
         port: port.unwrap_or(5900),
     };
-    vnc::open(id.clone(), target, password, on_frame).await?;
+    vnc::open(id.clone(), session_id.clone(), target, password, on_frame).await?;
     Ok(id)
 }
 
@@ -860,6 +863,196 @@ fn vnc_paste(id: String, text: String) {
 #[tauri::command]
 fn vnc_close(id: String) {
     vnc::close(&id);
+}
+
+/// Есть ли у этой SSH-сессии уже открытый рабочий стол.
+///
+/// Спрашивается при открытии панели. Нужно для откреплённого окна: сеанс живёт в
+/// приложении, а не в окне, и второе окно должно продолжить картинку, а не начинать с
+/// ввода пароля - тот же сеанс, тот же сервер, зачем спрашивать дважды.
+#[tauri::command]
+fn desktop_active(session_id: String) -> Option<Value> {
+    deskout::active(&session_id).map(|a| {
+        json!({ "kind": a.kind.as_str(), "id": a.id, "width": a.size.0, "height": a.size.1 })
+    })
+}
+
+/// Переводит выдачу кадров VNC в это окно и просит перерисовать экран целиком.
+#[tauri::command]
+fn vnc_attach(id: String, on_frame: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>) -> Result<(), String> {
+    vnc::attach(&id, on_frame)
+}
+
+/// То же для RDP.
+#[tauri::command]
+fn rdp_attach(id: String, on_frame: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>) -> Result<(), String> {
+    rdp::attach(&id, on_frame)
+}
+
+/// Что на сервере есть для RDP: программа, порт, служба, права.
+///
+/// Отдельно от разведки VNC: смотреть надо другое, а лишний вопрос серверу дешевле, чем
+/// одна команда, отвечающая сразу за двоих и путающая оба ответа.
+#[tauri::command]
+async fn desktop_rdp_detect(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let (kind, _) = platform::of_session(&session_id, &s.handle).await;
+    if kind == platform::Kind::Windows {
+        // На Windows RDP свой, встроенный, и ставить нечего - но он может быть выключен.
+        return Ok(json!({
+            "installed": [], "listening": [], "canInstall": false, "canStart": false,
+            "summary": "На Windows рабочий стол включается в настройках системы, ставить нечего",
+        }));
+    }
+    let (_c, out, _e) =
+        ssh::exec(&s.handle, rdpsetup::DETECT_CMD, Some(s.cancel.subscribe())).await?;
+    Ok(rdpsetup::parse_detect(&out))
+}
+
+/// Ставит xrdp на сервер.
+#[tauri::command]
+async fn desktop_rdp_install(
+    state: State<'_, AppState>,
+    session_id: String,
+    package_manager: String,
+    sudo_password: String,
+) -> Result<Value, String> {
+    let cmd = rdpsetup::install_cmd(&package_manager)
+        .ok_or("Этим менеджером пакетов xrdp не поставить: пакета нет в основных хранилищах")?;
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    run_setup_step(&s, &cmd, &sudo_password, "установка").await
+}
+
+/// Включает и запускает службу xrdp.
+///
+/// Именно включает, а не только запускает: иначе после перезагрузки сервера рабочий стол
+/// молча не поднимется, и выяснится это в самый неудачный момент.
+#[tauri::command]
+async fn desktop_rdp_start(
+    state: State<'_, AppState>,
+    session_id: String,
+    sudo_password: String,
+) -> Result<Value, String> {
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let r = run_setup_step(&s, rdpsetup::ENABLE_CMD, &sudo_password, "запуск").await?;
+    if r["ok"] != true {
+        return Ok(r);
+    }
+    // `systemctl` возвращает ноль, успев только отправить запрос. Служба, упавшая
+    // секундой позже, ответила бы «готово» - поэтому спрашиваем её саму.
+    let out = r["output"].as_str().unwrap_or_default();
+    if out.lines().any(|l| l.trim() == "active") {
+        Ok(json!({ "ok": true }))
+    } else {
+        Ok(json!({
+            "ok": false,
+            "error": format!("служба не поднялась: {}", out.trim()),
+        }))
+    }
+}
+
+/// Общая часть установки и запуска: выполнить с паролем на входе и разобрать отказ.
+///
+/// Неверный пароль sudo выглядит одинаково в обоих случаях, и сказать об этом прямо
+/// полезнее, чем показать сырой вывод команды.
+async fn run_setup_step(
+    s: &std::sync::Arc<ssh::SshSession>,
+    cmd: &str,
+    sudo_password: &str,
+    что: &str,
+) -> Result<Value, String> {
+    let (code, out, err) = ssh::exec_with_input(
+        &s.handle,
+        cmd,
+        &format!("{sudo_password}\n"),
+        Some(s.cancel.subscribe()),
+    )
+    .await?;
+    if code != 0 {
+        let текст = if out.contains("incorrect password") || err.contains("incorrect password") {
+            "Пароль sudo не подошёл".to_string()
+        } else {
+            let x = format!("{out}\n{err}");
+            let x = x.trim();
+            if x.is_empty() { format!("{что} вернулась с кодом {code}") } else { x.to_string() }
+        };
+        return Ok(json!({ "ok": false, "error": текст }));
+    }
+    Ok(json!({ "ok": true, "output": out }))
+}
+
+/// Открывает рабочий стол по RDP.
+///
+/// Протокол разбирает отдельный процесс, а не этот модуль: зависимости IronRDP не
+/// сходятся с SSH-ядром в одном дереве, подробности в `rdp.rs`. Приложение здесь держит
+/// канал внутри SSH-сессии и подставляет его помощнику локальным сокетом.
+#[tauri::command]
+async fn rdp_open(
+    state: State<'_, AppState>,
+    session_id: String,
+    host: Option<String>,
+    port: Option<u16>,
+    user: String,
+    password: String,
+    domain: Option<String>,
+    width: Option<u16>,
+    height: Option<u16>,
+    color_depth: Option<u16>,
+    economy: Option<bool>,
+    autologon: Option<bool>,
+    on_frame: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
+) -> Result<String, String> {
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let id = format!("rdp-{}", uuid::Uuid::new_v4());
+    let target = rdp::Target::Ssh {
+        handle: s.handle.clone(),
+        host: host.unwrap_or_else(|| "127.0.0.1".to_owned()),
+        port: port.unwrap_or(3389),
+    };
+    rdp::open(
+        id.clone(),
+        session_id.clone(),
+        target,
+        user,
+        password,
+        domain,
+        (width.unwrap_or(1280), height.unwrap_or(800)),
+        rdp::Options {
+            color_depth: color_depth.unwrap_or(32),
+            economy: economy.unwrap_or(false),
+            autologon: autologon.unwrap_or(true),
+        },
+        on_frame,
+    )
+    .await?;
+    Ok(id)
+}
+
+#[tauri::command]
+fn rdp_pointer(id: String, x: u16, y: u16, buttons: u8) {
+    rdp::pointer(&id, x, y, buttons);
+}
+
+#[tauri::command]
+fn rdp_key(id: String, code: u16, down: bool) {
+    rdp::key(&id, code, down);
+}
+
+/// Меняет размер рабочего стола в уже открытом сеансе.
+#[tauri::command]
+fn rdp_resize(id: String, width: u16, height: u16) {
+    rdp::resize(&id, width, height);
+}
+
+#[tauri::command]
+fn rdp_close(id: String) {
+    rdp::close(&id);
+}
+
+/// Отчёт интерфейса о своей половине пути кадра.
+#[tauri::command]
+fn rdp_note(line: String) {
+    rdp::note(&line);
 }
 
 /// Какая система на сервере. Определяется один раз за сессию и кэшируется.
@@ -1956,6 +2149,9 @@ pub fn run() {
             workspace_processes, workspace_kill, workspace_services, workspace_service_action, workspace_logs,
             workspace_platform,
             vnc_open, vnc_pointer, vnc_key, vnc_refresh, vnc_paste, vnc_close,
+            rdp_open, rdp_pointer, rdp_key, rdp_resize, rdp_close, rdp_note, rdp_attach,
+            desktop_active, vnc_attach,
+            desktop_rdp_detect, desktop_rdp_install, desktop_rdp_start,
             desktop_detect, desktop_install, desktop_set_password,
             db_open, db_query, db_close, db_current,
             session_sysinfo,

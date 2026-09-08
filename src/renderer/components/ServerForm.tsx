@@ -413,8 +413,7 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
             </div>
 
             <div className="agent-hint">
-              Типовая консоль сетевого железа - 9600 8N1 без управления потоком. Платы на CH340
-              и подобных часто требуют поднятых DTR/RTS.
+              Обычная консоль сетевого железа - 9600 8N1. Платам на CH340 нужны DTR/RTS.
             </div>
           </>
         ) : isTcp ? (
@@ -459,8 +458,8 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
 
             <div className="agent-hint">
               {connection === 'telnet'
-                ? 'Логин и пароль спрашивает сама железка - здесь их указывать негде. Трафик telnet не шифруется: в чужой сети им ходить не стоит.'
-                : 'Байты идут в обе стороны без обработки: ни согласования опций, ни правки перевода строки. Так подключаются к консольным серверам (Cisco и Digi слушают порт 2000+ на каждую линию) и к текстовым протоколам вручную.'}
+                ? 'Логин и пароль спросит сама железка. Трафик telnet не шифруется.'
+                : 'Байты идут в обе стороны без обработки. Для консольных серверов и текстовых протоколов.'}
             </div>
           </>
         ) : (
@@ -558,15 +557,12 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
           />
         </label>
         {proxyJump ? (
-          <div className="agent-hint">
-            Не используется: выбран jump-хост, он идёт первым - как в OpenSSH.
-          </div>
+          <div className="agent-hint">Не используется: выбран jump-хост.</div>
         ) : (
           proxyCommand.trim() && (
             <div className="agent-hint">
               Подстановки: <code>%h</code> - хост, <code>%p</code> - порт, <code>%r</code> -
-              пользователь. Программа запускается на этом компьютере, её ввод-вывод и служит
-              каналом до сервера.
+              пользователь. Программа запускается на этом компьютере.
             </div>
           )
         )}

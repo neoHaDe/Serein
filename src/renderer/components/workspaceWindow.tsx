@@ -14,7 +14,7 @@ import { ProcessPanel } from './ProcessPanel'
 import { ServicePanel } from './ServicePanel'
 import { TunnelPanel } from './TunnelPanel'
 import { ServerOverviewPanel } from './ServerOverviewPanel'
-import { VncPanel } from './VncPanel'
+import { DesktopPanel } from './DesktopPanel'
 import { DatabasePanel } from './DatabasePanel'
 
 export type DetachableWorkspaceTool = Exclude<WorkspaceTool, 'terminal'>
@@ -61,7 +61,11 @@ function panelForTool(
     case 'overview':
       return <ServerOverviewPanel sessionId={sessionId} fill />
     case 'desktop':
-      return <VncPanel sessionId={sessionId} fill />
+      // Именно панель выбора, а не VNC напрямую. Раньше здесь стоял VncPanel, и
+      // откреплённое окно всегда спрашивало пароль VNC - даже когда откепляли RDP, и
+      // даже когда сеанс был жив. Панель выбора сначала спрашивает приложение, не
+      // открыт ли уже рабочий стол, и подхватывает его.
+      return <DesktopPanel sessionId={sessionId} fill />
     case 'databases':
       return <DatabasePanel sessionId={sessionId} fill />
     case 'docker':

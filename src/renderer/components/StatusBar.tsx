@@ -149,7 +149,7 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
           {leaf.status === 'connected' && leaf.sessionId && (
             <button
               className="sb-item sb-button"
-              title="Послать BREAK в линию - им сетевое железо переводят в recovery"
+              title="Послать BREAK в линию"
               onClick={() => {
                 const id = leaf.sessionId
                 if (id) void window.api.serial.sendBreak(id).catch(() => {})
@@ -173,7 +173,7 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
       <span className="sb-spacer" />
       <MinimizedWindowsHint />
       {broadcast && (
-        <span className="sb-item sb-broadcast" title="Broadcast активен - ввод дублируется в панели текущей вкладки">
+        <span className="sb-item sb-broadcast" title="Broadcast: ввод идёт во все панели вкладки">
           <Icon name="broadcast" size={13} /> Broadcast{broadcastTargets ? ` → ${broadcastTargets}` : ''}
         </span>
       )}
