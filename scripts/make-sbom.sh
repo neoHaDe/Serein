@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Собирает SBOM (CycloneDX) для релиза: отдельно Rust, отдельно npm.
+# Собирает SBOM (CycloneDX) для релиза: Rust приложения, Rust помощника RDP и npm.
 #
 # Зачем: список того, из чего собран бинарь, спрашивают первым при проверке цепочки
 # поставки. Без него разговор начинается с «пришлите состав», а не с сути.
@@ -30,6 +30,12 @@ echo "Rust…"
 cargo cyclonedx --manifest-path src-tauri/Cargo.toml --format json --spec-version 1.5 >/dev/null
 # cargo-cyclonedx кладёт файл рядом с манифестом; переносим под понятным именем.
 find src-tauri -maxdepth 1 -name '*.cdx.json' -exec mv {} "$out/serein-$version-rust.cdx.json" \;
+
+echo "Rust: помощник RDP…"
+# Помощник - отдельная рабочая область со своим замком зависимостей, и в дерево
+# приложения он не попадает. В поставку попадает, поэтому и в состав должен.
+cargo cyclonedx --manifest-path rdp-helper/Cargo.toml --format json --spec-version 1.5 >/dev/null
+find rdp-helper -maxdepth 1 -name '*.cdx.json' -exec mv {} "$out/serein-$version-rdp-helper.cdx.json" \;
 
 echo "npm…"
 npx --yes @cyclonedx/cyclonedx-npm@latest \

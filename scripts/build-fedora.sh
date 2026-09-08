@@ -7,7 +7,7 @@
 # не там». Поэтому среда сборки должна совпадать с целевой.
 #
 # Запуск (на машине с Docker):
-#   docker run --rm -v "$PWD":/src -w /src registry.fedoraproject.org/fedora:41 \
+#   docker run --rm -v "$PWD":/src -w /src registry.fedoraproject.org/fedora:43 \
 #     bash scripts/build-fedora.sh
 #
 # Три вещи, выясненные на живой сборке, чтобы не выяснять заново:
@@ -42,8 +42,11 @@ dnf -y install --setopt=install_weak_deps=False \
 echo "== rust =="
 # Тулчейн берём из репозитория Fedora, а не через rustup. Две причины, и обе выяснились
 # на живой сборке: static.rust-lang.org с нашего сервера не резолвится вовсе, а в самой
-# Fedora лежит вполне свежий Rust - на 41 это 1.91. Заодно и честнее: пакет для
+# Fedora лежит вполне свежий Rust - на 43 это 1.98. Заодно и честнее: пакет для
 # дистрибутива собирается его же тулчейном.
+#
+# Образ приходится обновлять вслед за зависимостями: на 41 с её Rust 1.91 сборка
+# останавливается на IronRDP, которому нужен 1.94.
 dnf -y install rust cargo >/dev/null
 cargo --version
 
