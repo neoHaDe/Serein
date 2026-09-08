@@ -47,6 +47,12 @@ echo "== rust =="
 dnf -y install rust cargo >/dev/null
 cargo --version
 
+echo "== помощник RDP =="
+# Отдельная программа поставки, и Tauri проверяет её наличие ещё на этапе сборки: без
+# файла не собирается ничего. Собирается тем же тулчейном, что и приложение, поэтому
+# glibc у них совпадает - ради этого весь контейнер и затевался.
+bash scripts/build-rdp-helper.sh
+
 echo "== зависимости фронтенда =="
 [ -d node_modules ] || npm ci
 npm run typecheck
