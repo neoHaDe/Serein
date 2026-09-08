@@ -89,4 +89,9 @@ push, not only on the developer's machine.
 ### Checksums
 
 ```
+4c5310828699725bdc1a42765062cb30d51729dd82d386534f46a7bd776f29c5 Serein_1.3.1_x64-setup.exe
+48158b5b0108ab2836bcb1bf3bbddafb0ba913e9a44ebd7f3e2b3afa6a4f2265 Serein_1.3.1_x64-portable.exe
+15f5492aa14ad6129c85ecc6a69e25988f5500d48b9d1055f5feda9e3b888cad Serein_1.3.1_amd64.deb
+e27153e194e219f6d50f2ee9dce5dc998f05ea52d58f5e6afa4ce6621cf73e11 Serein_1.3.1_amd64.AppImage
+0d4ff884b633f77da3bfda8da151681af22da0e84647dc5afcf3de3f83dc9109 Serein-1.3.1-1.x86_64.rpm
 ```
