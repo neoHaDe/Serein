@@ -33,7 +33,10 @@ echo "== системные пакеты =="
 #   systemd-devel           - libudev, через него serialport видит COM-порты
 #   openssl-devel           - native-tls (сертификаты и HTTPS-утилита)
 #   rpm-build, patchelf     - упаковка
-dnf -y install --setopt=install_weak_deps=False \
+# Репозиторий Cisco отключён намеренно: оттуда идёт только `openh264` для H.264, который
+# нам не нужен, а его зеркала регулярно недоступны и роняют всю сборку. Без него dnf берёт
+# заглушку `noopenh264` из основного репозитория.
+dnf -y install --setopt=install_weak_deps=False --disablerepo='fedora-cisco-openh264' \
   gcc gcc-c++ make git file which \
   webkit2gtk4.1-devel gtk3-devel libayatana-appindicator-gtk3-devel \
   systemd-devel openssl-devel \
@@ -47,7 +50,7 @@ echo "== rust =="
 #
 # Образ приходится обновлять вслед за зависимостями: на 41 с её Rust 1.91 сборка
 # останавливается на IronRDP, которому нужен 1.94.
-dnf -y install rust cargo >/dev/null
+dnf -y install --disablerepo='fedora-cisco-openh264' rust cargo >/dev/null
 cargo --version
 
 echo "== помощник RDP =="
