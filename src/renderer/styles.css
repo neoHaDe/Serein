@@ -4601,6 +4601,150 @@ button.secondary:hover {
   max-width: 620px;
 }
 
+/* ---- Сравнение файлов ---- */
+/*
+ * Палитра подсветки. Названия по смыслу, а не по языку: один набор обслуживает и
+ * питон, и nginx.conf, и толком не разобранный текст.
+ */
+:root {
+  --syn-keyword: #bb9af7;
+  --syn-string: #9ece6a;
+  --syn-number: #ff9e64;
+  --syn-comment: #565f89;
+  --syn-prop: #7dcfff;
+  --syn-type: #2ac3de;
+  --syn-func: #7aa2f7;
+  --syn-punct: #a9b1d6;
+}
+:root[data-theme-mode='light'] {
+  --syn-keyword: #7c3aed;
+  --syn-string: #16794a;
+  --syn-number: #b45309;
+  --syn-comment: #7a8194;
+  --syn-prop: #0369a1;
+  --syn-type: #0e7490;
+  --syn-func: #1d4ed8;
+  --syn-punct: #475569;
+}
+
+.diff {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+/* Шапки сторон рядом: сравнивают два файла, и видеть надо оба сразу. */
+.diff-heads {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+}
+.diff-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  border-left-width: 3px;
+  min-width: 0;
+}
+.diff-head.a {
+  border-left-color: var(--danger);
+}
+.diff-head.b {
+  border-left-color: var(--green);
+}
+.diff-head-name {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diff-head-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+.diff-hash {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+/* Совпавшие суммы - самый быстрый ответ на вопрос «это тот же файл». Он должен
+   бросаться в глаза раньше, чем человек начнёт читать строки. */
+.diff-hash.same {
+  color: var(--green);
+}
+.diff-verdict {
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+.diff-verdict.same {
+  color: var(--green);
+  font-family: var(--font-ui);
+}
+.diff-add {
+  color: var(--green);
+}
+.diff-del {
+  color: var(--danger);
+}
+.diff-note {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 6px 10px;
+  background: var(--panel);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r-sm);
+}
+
+.diff-body {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: auto;
+  max-height: 60vh;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.diff-row {
+  display: grid;
+  grid-template-columns: 48px 48px 16px 1fr;
+  white-space: pre;
+}
+.diff-row.add {
+  background: rgba(var(--green-rgb), 0.13);
+}
+.diff-row.del {
+  background: rgba(var(--danger-rgb), 0.13);
+}
+/* Номера строк не выделяются мышью: копируют содержимое, а не разметку таблицы. */
+.diff-num {
+  text-align: right;
+  padding-right: 8px;
+  color: var(--muted);
+  user-select: none;
+  opacity: 0.65;
+}
+.diff-sign {
+  text-align: center;
+  user-select: none;
+  opacity: 0.8;
+}
+.diff-row.add .diff-sign {
+  color: var(--green);
+}
+.diff-row.del .diff-sign {
+  color: var(--danger);
+}
+.diff-text {
+  padding-right: 10px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 /* ---- Базы данных ---- */
 .db-panel {
   min-height: 0;

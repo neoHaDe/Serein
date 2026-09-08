@@ -1,5 +1,23 @@
-import { useRef, useState } from 'react'
+import { lazy, Suspense, useRef, useState } from 'react'
 import { errText } from '../errText'
+import type { DiffResult } from './DiffView'
+
+/*
+ * Вид сравнения грузится по требованию: он тянет разбор языков ради подсветки, а
+ * платить за это при запуске должны только те, кто сравнением пользуется.
+ */
+const DiffView = lazy(() => import('./DiffView').then((m) => ({ default: m.DiffView })))
+
+/** Похож ли ответ на результат сравнения файлов, а не на что-то другое. */
+function isDiff(v: unknown): v is DiffResult {
+  return (
+    typeof v === 'object' &&
+    v !== null &&
+    'same' in v &&
+    'lines' in v &&
+    Array.isArray((v as { lines: unknown }).lines)
+  )
+}
 import type { IconName } from './Icon'
 import { Icon } from './Icon'
 import { RemoteFilePicker } from './RemoteFilePicker'
@@ -588,7 +606,14 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
         )}
 
         {error && <p className="tools-error">{error}</p>}
-        {out != null && <JsonOut value={out} />}
+        {out != null &&
+          (isDiff(out) ? (
+            <Suspense fallback={<div className="hint">Готовлю сравнение…</div>}>
+              <DiffView d={out} />
+            </Suspense>
+          ) : (
+            <JsonOut value={out} />
+          ))}
 
         {/* Кнопка закрытия - только у модального варианта. У вкладки для этого есть
             крестик в общей полосе, и вторая такая же рядом только путала бы. */}

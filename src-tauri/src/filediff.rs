@@ -11,6 +11,7 @@
 //! в отличие от MySQL, где ни одна не годилась по устройству.
 
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
 
 /// Сколько строк изменений показываем.
@@ -18,6 +19,22 @@ use similar::{ChangeTag, TextDiff};
 /// Дифф на десять тысяч строк панель не переварит, а человек не прочитает. Счётчики при
 /// этом считаются по всему файлу - обрезается показ, а не подсчёт.
 pub const MAX_LINES: usize = 2000;
+
+/// Сводка по одной стороне: чем она является, помимо своего текста.
+///
+/// Хеш здесь по-настоящему полезен, а не для красоты. Он отвечает на вопрос
+/// «это точно тот же файл?» одним взглядом, без чтения диффа. И он же ловит случай,
+/// который построчное сравнение показать не умеет: суммы разные, а изменённых строк
+/// нет - значит разошлись концы строк или где-то невидимый символ.
+fn side(label: &str, text: &str) -> Value {
+    json!({
+        "label": label,
+        "sha256": hex::encode(Sha256::digest(text.as_bytes())),
+        "bytes": text.len(),
+        // Пустой файл - ноль строк, а не одна. Иначе счётчик врёт на пустышках.
+        "lines": if text.is_empty() { 0 } else { text.lines().count() },
+    })
+}
 
 /// Строка результата: как она изменилась и что в ней.
 fn tag_name(t: ChangeTag) -> &'static str {
@@ -39,12 +56,19 @@ pub fn compare(label_a: &str, a: &str, label_b: &str, b: &str) -> Value {
         return json!({
             "a": label_a,
             "b": label_b,
+            "sideA": side(label_a, a),
+            "sideB": side(label_b, b),
             "same": true,
             "added": 0,
             "removed": 0,
             "lines": [],
         });
     }
+
+    // Различие только в концах строк построчный дифф покажет как полную замену всего
+    // файла, а глазами разницы не видно вовсе: показ обрезает `\r`. Называем это прямо,
+    // иначе панель выглядит сломанной - строки подсвечены, а отличий в них нет.
+    let only_eol = a.replace("\r\n", "\n") == b.replace("\r\n", "\n");
 
     let diff = TextDiff::from_lines(a, b);
     let mut lines: Vec<Value> = Vec::new();
@@ -80,11 +104,19 @@ pub fn compare(label_a: &str, a: &str, label_b: &str, b: &str) -> Value {
     let mut out = json!({
         "a": label_a,
         "b": label_b,
+        "sideA": side(label_a, a),
+        "sideB": side(label_b, b),
         "same": false,
         "added": added,
         "removed": removed,
         "lines": lines,
     });
+    if only_eol {
+        out["note"] = json!(
+            "Содержимое совпадает, различаются только концы строк: в одном файле CRLF, \
+             в другом LF"
+        );
+    }
     // Про обрезку говорим прямо: молча укороченный дифф читается как полный.
     if added + removed > 0 && diff.iter_all_changes().count() > MAX_LINES {
         out["truncated"] = json!(format!("Показаны первые {MAX_LINES} строк сравнения"));
@@ -103,6 +135,44 @@ pub fn looks_binary(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn у_совпавших_файлов_суммы_совпадают() {
+        let v = compare("a.conf", "один\nдва\n", "b.conf", "один\nдва\n");
+        assert_eq!(v["sideA"]["sha256"], v["sideB"]["sha256"]);
+        // Сумма считается по байтам, а не по строкам: длина должна быть настоящей.
+        assert_eq!(v["sideA"]["bytes"], "один\nдва\n".len());
+        assert_eq!(v["sideA"]["lines"], 2);
+    }
+
+    #[test]
+    fn различие_только_в_концах_строк_называется_словами() {
+        // Тот самый случай, из-за которого панель выглядела сломанной: `similar` видит
+        // CRLF и LF как разные строки и метит изменённым весь файл, а показ обрезает
+        // `\r`, и человек смотрит на подсвеченные строки, не находя в них отличий.
+        let v = compare("win.txt", "один\r\nдва\r\n", "unix.txt", "один\nдва\n");
+        assert_ne!(v["sideA"]["sha256"], v["sideB"]["sha256"], "файлы разные побайтово");
+        assert_eq!(v["same"], false);
+        assert!(v["note"].as_str().unwrap().contains("концы строк"));
+        // Строки при этом действительно помечены изменёнными - и это не ошибка,
+        // а причина, по которой пояснение обязательно.
+        assert_eq!(v["added"], 2);
+        assert_eq!(v["removed"], 2);
+    }
+
+    #[test]
+    fn настоящая_правка_пояснением_про_концы_строк_не_подписывается() {
+        let v = compare("a", "один\nдва\n", "b", "один\nтри\n");
+        assert!(v["note"].is_null(), "тут дело не в концах строк");
+    }
+
+    #[test]
+    fn у_пустого_файла_ноль_строк_а_не_одна() {
+        let v = compare("пусто", "", "есть", "строка\n");
+        assert_eq!(v["sideA"]["lines"], 0);
+        assert_eq!(v["sideA"]["bytes"], 0);
+        assert_eq!(v["sideB"]["lines"], 1);
+    }
 
     #[test]
     fn одинаковые_файлы_не_считаются_диффом() {
