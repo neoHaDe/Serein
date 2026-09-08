@@ -40,12 +40,38 @@ for svc in mariadb mysql web ldap; do
   done
 done
 
-# Ветку каталога образ сам не заводит - создаём её и наполняем примерами. Команда
-# идемпотентная по смыслу: на повторном запуске она откажет, и это нормально, ветка уже
-# есть. Без неё поиск возвращал бы «No such object», и тест проверял бы пустоту.
+# Ветку каталога образ сам не заводит - создаём её и наполняем примерами. На повторном
+# запуске команда откажет, потому что ветка уже есть, и это нормально.
+#
+# А вот молчаливый отказ на чистом стенде - не нормально, и раньше он был неотличим от
+# законного. Проверка здоровья контейнера спрашивает корневую запись, а она отвечает
+# сразу после открытия порта, ещё до появления суффикса; `dsconf` в этот момент может
+# отказать, и тесты идут по пустому каталогу, получая «No such object». Выглядит это как
+# сломанный клиент LDAP, хотя сломан стенд. Поэтому ниже мы не верим команде на слово, а
+# ждём доказательства: ветка обязана ответить на поиск.
 docker compose exec -T ldap dsconf localhost backend create \
   --suffix dc=probe,dc=local --be-name userRoot --create-suffix --create-entries \
   >/dev/null 2>&1 || true
+
+echo -n "жду ветку каталога "
+branch_ok=""
+for _ in $(seq 1 45); do
+  if docker compose exec -T ldap ldapsearch -H ldap://localhost:3389 -x \
+       -s base -b 'dc=probe,dc=local' >/dev/null 2>&1; then
+    branch_ok=1
+    echo "- готова"
+    break
+  fi
+  echo -n .
+  sleep 2
+done
+if [ -z "$branch_ok" ]; then
+  echo
+  echo "ветка dc=probe,dc=local так и не появилась. Что говорит dsconf:" >&2
+  docker compose exec -T ldap dsconf localhost backend create \
+    --suffix dc=probe,dc=local --be-name userRoot --create-suffix --create-entries >&2 || true
+  exit 1
+fi
 
 cat <<VARS
 
