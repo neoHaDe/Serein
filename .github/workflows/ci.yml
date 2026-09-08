@@ -92,7 +92,9 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: |
+            src-tauri
+            rdp-helper
           # Общий ключ со стендом: обе джобы собирают тот же крейт теми же зависимостями,
           # и держать для них два разных кэша значит греть каждый по отдельности.
           shared-key: serein-rust
@@ -103,6 +105,13 @@ jobs:
       # Это была половина времени прогона: `check` компилирует всё дерево ради проверки, а
       # следом `test` компилирует его же заново под тестовый профиль. Ошибку компиляции
       # `cargo test` ловит ничуть не хуже — просто на шаг позже.
+      # Помощник RDP - отдельная программа рядом с приложением, и Tauri проверяет её
+      # наличие ещё на этапе сборки: без файла не собирается даже `cargo test`. Профиль
+      # отладочный - здесь важно, что он компилируется, а не насколько он быстрый.
+      - name: Помощник RDP
+        shell: bash
+        run: bash scripts/build-rdp-helper.sh debug
+
       - name: cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
 
@@ -130,13 +139,22 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: |
+            src-tauri
+            rdp-helper
           shared-key: serein-rust
           cache-all-crates: true
 
       # Сначала собираем тесты, потом поднимаем стенд: сборка идёт минуты, стенд — секунды,
       # и в таком порядке контейнеры живут ровно столько, сколько нужно. Фокусов с запуском
       # в фоне не делаем: экономия там минута, а способов тихо разъехаться — несколько.
+      # Помощник RDP - отдельная программа рядом с приложением, и Tauri проверяет её
+      # наличие ещё на этапе сборки: без файла не собирается даже `cargo test`. Профиль
+      # отладочный - здесь важно, что он компилируется, а не насколько он быстрый.
+      - name: Помощник RDP
+        shell: bash
+        run: bash scripts/build-rdp-helper.sh debug
+
       - name: Собрать тесты
         run: cargo test --manifest-path src-tauri/Cargo.toml --test ssh_stand --test sftp_stand --test scp_stand --test vnc_stand --test db_stand --test platform_stand --test tools_stand --locked --no-run
 
