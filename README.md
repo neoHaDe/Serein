@@ -10,7 +10,7 @@ SSH, SFTP and SCP with an editor, serial consoles, telnet and raw TCP.
 Tabs and split panes, port forwards, resource monitoring, a Docker panel
 and a local terminal - in an installer of about **7.8 MB**.
 
-Free, open source, Apache 2.0. Windows x64 and Linux x64, **v1.3.0**.
+Free, open source, Apache 2.0. Windows x64 and Linux x64, **v1.3.1**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -96,16 +96,23 @@ A weak laptop will not magically match 33 MB.
 - The MySQL client is ours: neither `mysql_async` nor `sqlx` accepts a ready stream, they
   open the socket themselves. Packet parsing and scrambles come from `mysql_common`
 
-### Remote desktop (v1.3)
-- **VNC over a channel inside the SSH session**, with no port exposed to the network. That
-  is the right way round: VNC guards itself with an eight-character DES password
+### Remote desktop (v1.3, RDP in v1.3.1)
+- **VNC and RDP over a channel inside the SSH session**, with no port exposed to the
+  network. That is the right way round: VNC guards itself with an eight-character DES
+  password, and RDP has no business facing one either
 - Frames travel as raw bytes rather than JSON: a 1920x1080 BGRA screen is eight megabytes,
   and a JSON array inflates it by an order of magnitude
-- A chooser comes before the connection: VNC, and the slot where RDP will go. RDP is greyed
-  out and says why, instead of promising "soon"
-- **The gear installs VNC on the server when it is missing:** `x11vnc` on Debian,
-  `tigervnc-server` on Fedora. The sudo password goes to standard input, never into the
-  command line, which is visible in the server's process list to everyone on the box
+- **RDP logs in once (v1.3.1).** Credentials go to the server with the autologon flag, so it
+  does not show its own login window on top of the picture. Settings: resolution, colour
+  depth, traffic saving. Resolution follows the window - stretching it makes the server
+  redraw the desktop at the new size, with no reconnection
+- **The protocol is parsed by a separate program** shipped next to the application: IronRDP
+  pins sixteen crypto crates to release candidates that the SSH core cannot share
+- **The desktop session belongs to the SSH connection (v1.3.1)**, not to a window: switching
+  tabs keeps it, and detaching moves the live picture into the new window
+- **The gear installs the server side when it is missing:** `x11vnc` or `tigervnc-server`
+  for VNC, `xrdp` with `xorgxrdp` for RDP. The sudo password goes to standard input, never
+  into the command line, which is visible in the server's process list to everyone on the box
 
 ### What kind of server is this (v1.3)
 - One short probe per session, remembered afterwards. It tells **Linux, BusyBox, Windows**
@@ -185,7 +192,7 @@ A weak laptop will not magically match 33 MB.
 
 ## Quick start
 
-1. Install the setup exe or grab the portable `Serein_1.3.0_x64-portable.exe` from [Releases](../../releases/latest).
+1. Install the setup exe or grab the portable `Serein_1.3.1_x64-portable.exe` from [Releases](../../releases/latest).
 2. Import `~/.ssh/config` or add a host by hand.
 3. Connect. The local terminal works with no SSH at all.
 
@@ -211,17 +218,17 @@ Matrix and smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
 
 From [Releases](../../releases/latest):
 
-- **`Serein_1.3.0_x64-setup.exe`** - Windows installer (Start menu, uninstall).
-- **`Serein_1.3.0_x64-portable.exe`** - Windows single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`.
-- **`Serein_1.3.0_amd64.deb`** - Debian/Ubuntu/**Astra** package (`/usr/bin/serein`).
-- **`Serein-1.3.0-1.x86_64.rpm`** - **Fedora** and relatives (RedOS, Alt) package (v1.3).
-- **`Serein_1.3.0_amd64.AppImage`** - portable Linux binary, one file for both families.
+- **`Serein_1.3.1_x64-setup.exe`** - Windows installer (Start menu, uninstall).
+- **`Serein_1.3.1_x64-portable.exe`** - Windows single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`.
+- **`Serein_1.3.1_amd64.deb`** - Debian/Ubuntu/**Astra** package (`/usr/bin/serein`).
+- **`Serein-1.3.1-1.x86_64.rpm`** - **Fedora** and relatives (RedOS, Alt) package.
+- **`Serein_1.3.1_amd64.AppImage`** - portable Linux binary, one file for both families.
 
 Every release publishes SHA-256 sums and a **CycloneDX SBOM** for both the Rust and the npm
 dependency trees. Check the sums - the Windows build is **unsigned** and SmartScreen will
 complain (*More info → Run anyway*).
 
-Release notes: [RELEASE_NOTES_v1.2.7.md](docs/RELEASE_NOTES_v1.2.7.md).
+Release notes: [RELEASE_NOTES_v1.3.1.md](docs/RELEASE_NOTES_v1.3.1.md).
 Security policy and threat model: [SECURITY.md](SECURITY.md).
 
 Auto-update is live (`nehade.xyz/updates/terminal/`), signed with minisign; the signing key
@@ -349,10 +356,9 @@ stripped; there is no application-wide log file yet - for that, use `npm run tau
 - Not planned: cloud sync, mobile, plugins, a generic LLM chat pane.
 
 Product plan. 1.2.7 was about security; 1.3 closed three parity items at once: **VNC**,
-**databases** over our own channels, and **Windows Server**. Still open: RDP, the other four
-databases (SQLite, MongoDB, SQL Server), macOS, and the Russian software registry. RDP is not
-postponed vaguely: its library pulls a crypto version incompatible with our SSH core.
-See [release notes 1.3.0](docs/RELEASE_NOTES_v1.3.0.md).
+**databases** over our own channels, and **Windows Server**; 1.3.1 added **RDP**. Still open:
+the other three databases (SQLite, MongoDB, SQL Server), macOS, and the Russian software
+registry. See [release notes 1.3.1](docs/RELEASE_NOTES_v1.3.1.md).
 
 ---
 

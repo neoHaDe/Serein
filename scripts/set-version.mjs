@@ -1,7 +1,7 @@
 // Ставит версию сразу везде, где она нужна.
 //
-// Мест два: package.json и src-tauri/Cargo.toml. Третье - tauri.conf.json - теперь
-// ссылается на package.json и правки не требует. Раньше все три правились руками, и
+// Мест три: package.json, src-tauri/Cargo.toml и rdp-helper/Cargo.toml. Четвёртое,
+// tauri.conf.json, ссылается на package.json и правки не требует. Раньше все три правились руками, и
 // разъехаться они могли молча: установщик, «о программе» и апдейтер начинали называть
 // разные версии, а замечалось это уже после публикации. Сборка теперь такое расхождение
 // не пропустит (`build.rs`), но чинить его лучше до, а не после.
@@ -41,5 +41,15 @@ if (!cargoField.test(cargo)) {
 }
 writeFileSync(cargoPath, cargo.replace(cargoField, `version = "${version}"`))
 
-console.log(`версия ${version}: package.json, src-tauri/Cargo.toml`)
+// Помощник RDP - часть поставки, и версия у него та же. Отдельный файл, потому что
+// рабочая область у него своя: зависимости IronRDP не сходятся с SSH-ядром приложения.
+const helperPath = join(root, 'rdp-helper', 'Cargo.toml')
+const helper = readFileSync(helperPath, 'utf8')
+if (!cargoField.test(helper)) {
+  console.error('не нашёл version в rdp-helper/Cargo.toml')
+  process.exit(1)
+}
+writeFileSync(helperPath, helper.replace(cargoField, `version = "${version}"`))
+
+console.log(`версия ${version}: package.json, src-tauri/Cargo.toml, rdp-helper/Cargo.toml`)
 console.log('tauri.conf.json трогать не надо - он ссылается на package.json')
