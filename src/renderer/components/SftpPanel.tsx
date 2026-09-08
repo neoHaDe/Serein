@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from 'react-dom'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { SftpEntry, LocalEntry, TransferItem, RemoteEditStatus } from '../../shared/types'
-import { isImageFile, isTextFile } from '../editorLang'
+import { isImageFile, isTextFile } from '../fileKind'
 import { Icon } from './Icon'
 import { openAuxWindow, sanitizeWindowLabel } from '../auxWindows'
 import { reattachSftp } from '../reattach'
@@ -341,6 +341,10 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
   entriesRef.current = entries
   const panelRef = useRef<HTMLDivElement | null>(null)
   const localPaneRef = useRef<HTMLDivElement | null>(null)
+  // Номер последнего запроса списка. Ответ с меньшим номером - опоздавший, его
+  // выбрасываем: иначе медленный `ls` большого каталога перезапишет тот, куда
+  // человек уже успел уйти, и панель прыгнет назад сама по себе.
+  const listSeqRef = useRef(0)
   const loadRemoteRef = useRef<(t: string, silent?: boolean) => void>(() => {})
   const loadLocalRef = useRef<(t: string) => void>(() => {})
   const uploadToRemoteRef = useRef<(paths: string[]) => Promise<void>>(async () => {})
@@ -362,12 +366,17 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
 
   const load = useCallback(
     async (target: string, silent = false) => {
+      // Номер повышает только переход, затеянный человеком. Тихое обновление после
+      // загрузки файла его не двигает: иначе доехавшая закачка отменяла бы переход в
+      // другой каталог, начатый секундой раньше, и человек молча оставался бы на месте.
+      const seq = silent ? listSeqRef.current : ++listSeqRef.current
       if (!silent) {
         setLoading(true)
         setError(null)
       }
       try {
         const res = await window.api.sftp.list(sessionId, target)
+        if (seq !== listSeqRef.current) return
         setPath(res.path)
         setEntries(res.entries)
         if (res.backend) setFileBackend(res.backend)
@@ -377,9 +386,12 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
           setCtxMenu(null)
         }
       } catch (e) {
+        if (seq !== listSeqRef.current) return
         setError(errText(e))
       } finally {
-        if (!silent) setLoading(false)
+        // Полоску загрузки гасит только последний запрос: опоздавший погасил бы её,
+        // пока актуальный ещё идёт, и это читалось бы как «уже загрузилось».
+        if (!silent && seq === listSeqRef.current) setLoading(false)
       }
     },
     [sessionId]

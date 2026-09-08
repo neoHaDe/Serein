@@ -38,8 +38,14 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
     if (!sessionId) return
     let alive = true
     const measure = async (): Promise<void> => {
-      const ms = await window.api.session.ping(sessionId)
-      if (alive) setLatency(ms)
+      try {
+        const ms = await window.api.session.ping(sessionId)
+        if (alive) setLatency(ms)
+      } catch {
+        // Сессия могла отвалиться между тиками. Прочерк вместо числа честнее, чем
+        // застывшая старая задержка, которая выглядит как живое соединение.
+        if (alive) setLatency(null)
+      }
     }
     measure()
     timerRef.current = setInterval(measure, 5000)

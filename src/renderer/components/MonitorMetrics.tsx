@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ServerHardware, ServerMetrics, WorkspaceTool } from '../../shared/types'
 import { Icon } from './Icon'
 import { errText } from '../errText'
+import { useVisible } from '../hooks/useVisible'
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -408,6 +409,10 @@ export function MonitorMetrics({
   showOverviewCards?: boolean
   onGoTool?: (tool: WorkspaceTool) => void
 }): JSX.Element {
+  // Пока панель не на экране, ходить на сервер незачем: вкладки прячутся через
+  // display: none и остаются смонтированными, а свёрнутое окно тем более никто не
+  // читает. Раньше пять открытых серверов на обзоре давали сто SSH-команд в минуту.
+  const [rootRef, visible] = useVisible<HTMLDivElement>()
   const [m, setM] = useState<ServerMetrics | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [fresh, setFresh] = useState(false)
@@ -469,19 +474,27 @@ export function MonitorMetrics({
         if (aliveRef.current) setErr(errText(e))
       }
     }
+    // Скрытую панель не опрашиваем вовсе - ни по таймеру, ни разово. Порядок здесь
+    // важен: если дёрнуть tick() до этой проверки, каждое скрытие вкладки будет
+    // стоить лишнего похода на сервер, то есть ровно того, от чего уходим.
+    if (!visible) return
     void tick()
     const id = window.setInterval(tick, 3000)
     return () => {
+      // Сторож нужен и здесь: эффект перезапускается при смене видимости, и следующий
+      // проход снова поставит true. Без него ответ, вылетевший перед размонтированием,
+      // сядет писать в состояние, которого уже нет.
       aliveRef.current = false
       window.clearInterval(id)
     }
-  }, [sessionId])
+  }, [sessionId, visible])
 
   const isDashboard = variant === 'dashboard'
   const isCompact = variant === 'compact'
 
   return (
     <div
+      ref={rootRef}
       className={
         'ws-metrics' +
         (isCompact ? ' compact' : '') +

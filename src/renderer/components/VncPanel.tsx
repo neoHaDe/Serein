@@ -216,11 +216,20 @@ export function VncPanel({
 
   useEffect(() => present(), [present, scaled])
 
+  /*
+   * Указатель уходит на каждое движение мыши, поэтому отказ здесь глушится намеренно.
+   * Показывать его негде и незачем: если канал отвалился, об этом скажет сам разрыв
+   * отдельным кадром, а не шестьдесят одинаковых ошибок в секунду.
+   */
+  const sendPointer = (id: string, x: number, y: number, buttons: number): void => {
+    window.api.vnc.pointer(id, x, y, buttons).catch(() => {})
+  }
+
   const send = (e: React.MouseEvent, buttons: number): void => {
     const id = idRef.current
     const p = toRemote(e)
     if (!id || !p) return
-    void window.api.vnc.pointer(id, p.x, p.y, buttons)
+    sendPointer(id, p.x, p.y, buttons)
   }
 
   /** Вставка локального буфера на сервер по Ctrl+V. */
@@ -247,7 +256,7 @@ export function VncPanel({
     if (sym === null) return
     // Иначе Tab уводит фокус, а Ctrl+W закрывает вкладку вместо ухода на сервер.
     e.preventDefault()
-    void window.api.vnc.key(id, sym, down)
+    window.api.vnc.key(id, sym, down).catch(() => {})
   }
 
   const detach = async (): Promise<void> => {
@@ -314,8 +323,8 @@ export function VncPanel({
             if (!id || !p) return
             // В RFB прокрутка - это нажатие и отпускание кнопки, отдельного события нет.
             const mask = wheelMask(e.deltaY, e.deltaX)
-            void window.api.vnc.pointer(id, p.x, p.y, mask)
-            void window.api.vnc.pointer(id, p.x, p.y, 0)
+            sendPointer(id, p.x, p.y, mask)
+            sendPointer(id, p.x, p.y, 0)
           }}
           onKeyDown={(e) => onKey(e, true)}
           onKeyUp={(e) => onKey(e, false)}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { ServerConfig } from '../shared/types'
 import { aggregateServerStatuses } from './serverStatus'
@@ -17,7 +17,9 @@ import { HostKeyModal } from './components/HostKeyModal'
 import { KeyGenModal } from './components/KeyGenModal'
 import { GroupsModal } from './components/GroupsModal'
 import { StatusBar } from './components/StatusBar'
-import { CodeEditor } from './components/CodeEditor'
+const CodeEditor = lazy(() =>
+  import('./components/CodeEditor').then((m) => ({ default: m.CodeEditor }))
+)
 import { CommandPalette } from './components/CommandPalette'
 import { useSettings } from './SettingsContext'
 import { applyUiTheme } from './themes'
@@ -262,6 +264,9 @@ export default function App(): JSX.Element {
             if (tab.kind === 'editor' && tab.editor) {
               return (
                 <div key={tab.key} className="terminal-slot" style={{ display: isActive ? 'flex' : 'none' }}>
+                  {/* Пока грузится чанк редактора, показывать нечего: вкладка уже открыта,
+                      и пустой слот честнее крутилки на четверть секунды. */}
+                  <Suspense fallback={<div className="terminal-slot" />}>
                   <CodeEditor
                     sessionId={tab.editor.sessionId}
                     remotePath={tab.editor.remotePath}
@@ -269,6 +274,7 @@ export default function App(): JSX.Element {
                     active={isActive}
                     onDirtyChange={(d) => tabsApi.setEditorDirty(tab.key, d)}
                   />
+                  </Suspense>
                 </div>
               )
             }

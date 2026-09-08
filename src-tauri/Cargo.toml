@@ -88,3 +88,9 @@ drag = "2.1"
 # Иначе AES/SSH в `tauri dev` ~10 МБ/с. Свои крейты остаются без оптимизации.
 [profile.dev.package."*"]
 opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true

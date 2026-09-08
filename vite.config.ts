@@ -21,6 +21,19 @@ export default defineConfig(async () => ({
   },
   build: {
     outDir: 'dist',
-    emptyOutDir: true
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Редактор уезжает сам, через lazy. Здесь делим остальное: xterm и React
+        // меняются куда реже кода приложения, и отдельными файлами они переживают
+        // его обновление в кеше движка вместо того, чтобы качаться заново.
+        manualChunks: (id: string) => {
+          if (!id.includes('node_modules')) return undefined
+          if (id.includes('@xterm')) return 'xterm'
+          if (id.includes('react-dom') || /node_modules[\\/]react[\\/]/.test(id)) return 'react'
+          return undefined
+        }
+      }
+    }
   }
 }))

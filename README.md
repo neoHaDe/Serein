@@ -38,12 +38,15 @@ No Chromium tax. We are not racing Tabby on feature count. The point is a **serv
 
 | | **Serein (Tauri)** | Typical Electron client |
 | --- | :---: | :---: |
-| Installer size | **≈ 7.8 MB** | ≈ 85 MB |
-| Idle RAM | **≈ 33 MB** | 150–250 MB |
+| Installer size | **≈ 4.4 MB** | ≈ 85 MB |
+| Idle RAM | **≈ 100 MB** | 150–250 MB |
 | SSH engine | pure Rust [`russh`](https://github.com/Eugeny/russh) | libssh2 / native |
 | Runtime | system WebView2 | full Chromium |
 
-Numbers come from a live `tauri dev` session (RAM) and the 1.3.0 NSIS build (~7.8 MB packed).
+Memory was measured on an installed 1.3.0 with no session open: 100 MB private across the
+whole tree of seven processes. Adding up Working Set in Task Manager gives about 460 MB, but
+that is the same memory counted once per WebView2 process that shares it. The Electron
+figures are public measurements normalised to the same metric. Size is the 1.3.0 installer.
 A weak laptop will not magically match 33 MB.
 
 ---

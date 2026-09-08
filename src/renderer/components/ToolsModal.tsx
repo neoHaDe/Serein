@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { errText } from '../errText'
 import type { IconName } from './Icon'
 import { Icon } from './Icon'
@@ -216,16 +216,23 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
   const [diffA, setDiffA] = useState({ sessionId: '', path: '' })
   const [diffB, setDiffB] = useState({ sessionId: '', path: '' })
 
+  // Номер последнего запуска. Скан диапазона портов на фильтрованном хосте идёт до
+  // минуты, а переключаться между утилитами в это время никто не запрещает - и ответ
+  // ушедшей утилиты вставал под форму следующей, выглядя как её собственный.
+  const runSeqRef = useRef(0)
+
   const run = async (fn: () => Promise<unknown>): Promise<void> => {
+    const seq = ++runSeqRef.current
     setBusy(true)
     setError(null)
     setOut(null)
     try {
-      setOut(await fn())
+      const res = await fn()
+      if (seq === runSeqRef.current) setOut(res)
     } catch (e) {
-      setError(errText(e))
+      if (seq === runSeqRef.current) setError(errText(e))
     } finally {
-      setBusy(false)
+      if (seq === runSeqRef.current) setBusy(false)
     }
   }
 
@@ -254,7 +261,10 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
                 onClick={() => {
                   setTab(t.id)
                   // Ответ прошлой утилиты рядом с формой следующей читался бы как её
-                  // собственный - чистим вместе с переключением.
+                  // собственный - чистим вместе с переключением. Счётчик двигаем здесь
+                  // же: он обесценивает ещё летящий ответ, а не только уже пришедший.
+                  runSeqRef.current++
+                  setBusy(false)
                   setError(null)
                   setOut(null)
                 }}
