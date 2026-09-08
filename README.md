@@ -30,24 +30,23 @@ Windows · no bundled Chromium (system WebView2) ·
 
 ---
 
-## Why Serein
+## What it is
 
-The UI runs in the system WebView. SSH, SFTP, crypto, and the PTY live in one Rust binary.
-No Chromium tax. We are not racing Tabby on feature count. The point is a **server workspace**
-(terminal, files, Docker, logs, resources, tunnels), not "yet another SSH client".
+A **server workspace** in one window: terminal, files, Docker, logs, resources, tunnels,
+databases and two remote desktops. The UI runs in the system WebView; SSH, SFTP, crypto and
+the PTY live in a single Rust binary.
 
 | | **Serein (Tauri)** | Typical Electron client |
 | --- | :---: | :---: |
-| Installer size | **≈ 4.4 MB** | ≈ 85 MB |
+| Installer size | **≈ 7.4 MB** | ≈ 85 MB |
 | Idle RAM | **≈ 100 MB** | 150–250 MB |
 | SSH engine | pure Rust [`russh`](https://github.com/Eugeny/russh) | libssh2 / native |
 | Runtime | system WebView2 | full Chromium |
 
-Memory was measured on an installed 1.3.0 with no session open: 100 MB private across the
-whole tree of seven processes. Adding up Working Set in Task Manager gives about 460 MB, but
-that is the same memory counted once per WebView2 process that shares it. The Electron
-figures are public measurements normalised to the same metric. Size is the 1.3.0 installer.
-A weak laptop will not magically match 33 MB.
+Measured on 1.3.1 with no session open: about 100 MB private across the tree of seven
+processes, and 70 MB on a fresh profile. Adding up Working Set in Task Manager gives about
+480 MB - the same memory counted once per WebView2 process that shares it. The Electron
+figures are public measurements normalised to the same metric; size is the 1.3.1 installer.
 
 ---
 
@@ -83,48 +82,38 @@ A weak laptop will not magically match 33 MB.
   `env:prod` and `fav`; production hosts carry a red badge before anyone runs anything on them
 - **Multi-select (v1.2.7)** with Ctrl and Shift - connect, label, move or delete a whole group
 - Import from **`~/.ssh/config`**, **PuTTY**, and (v1.2.7) **MobaXterm · XShell · SecureCRT**.
-  Passwords are deliberately *not* imported: those formats store them decryptably by design,
-  and copying them into a second store would only spread the problem
+  Passwords are not imported
 
 ### Databases (v1.3)
-- **PostgreSQL, MySQL/MariaDB and Redis** open over a channel inside the SSH session you
-  already have. No port forward to set up: the database listens on the server's loopback,
-  which is exactly where we arrive
-- Result grid, query history, and a confirmation for destructive statements. `DELETE`
+- **PostgreSQL, MySQL/MariaDB and Redis** over a channel inside the SSH session you already
+  have - no port forward to set up
+- Result grid, query history, and a confirmation for destructive statements: `DELETE`
   without `WHERE` asks twice, and a `#` in MySQL counts as a comment too
 - The connection survives switching tabs and detaching the panel into its own window
-- The MySQL client is ours: neither `mysql_async` nor `sqlx` accepts a ready stream, they
-  open the socket themselves. Packet parsing and scrambles come from `mysql_common`
+- The MySQL client is our own, built on `mysql_common`
 
 ### Remote desktop (v1.3, RDP in v1.3.1)
-- **VNC and RDP over a channel inside the SSH session**, with no port exposed to the
-  network. That is the right way round: VNC guards itself with an eight-character DES
-  password, and RDP has no business facing one either
-- Frames travel as raw bytes rather than JSON: a 1920x1080 BGRA screen is eight megabytes,
-  and a JSON array inflates it by an order of magnitude
-- **RDP logs in once (v1.3.1).** Credentials go to the server with the autologon flag, so it
-  does not show its own login window on top of the picture. Settings: resolution, colour
-  depth, traffic saving. Resolution follows the window - stretching it makes the server
-  redraw the desktop at the new size, with no reconnection
-- **The protocol is parsed by a separate program** shipped next to the application: IronRDP
-  pins sixteen crypto crates to release candidates that the SSH core cannot share
+- **VNC and RDP over a channel inside the SSH session**, with no port exposed to the network
+- Frames travel as raw bytes rather than JSON, so a 1920x1080 screen costs eight megabytes
+  instead of ten times that
+- **RDP logs in once (v1.3.1)** - credentials go to the server with the autologon flag, and
+  its own login window never appears. Settings: resolution, colour depth, traffic saving
+- **Resolution follows the window (v1.3.1)**: stretch it and the server redraws the desktop
+  at the new size, with no reconnection
 - **The desktop session belongs to the SSH connection (v1.3.1)**, not to a window: switching
   tabs keeps it, and detaching moves the live picture into the new window
 - **The gear installs the server side when it is missing:** `x11vnc` or `tigervnc-server`
   for VNC, `xrdp` with `xorgxrdp` for RDP. The sudo password goes to standard input, never
-  into the command line, which is visible in the server's process list to everyone on the box
+  into the command line
 
 ### What kind of server is this (v1.3)
 - One short probe per session, remembered afterwards. It tells **Linux, BusyBox, Windows**
   and "unclear" apart, and the label shows in the overview header
 - On **Windows Server**, processes, services, the event log, disks and network go through
   PowerShell instead of `ps` and `systemctl`, which are not there
-- On **BusyBox** the process list is no longer empty: its `ps` understands neither `--sort`
-  nor a `pcpu` column and was quietly answering with usage text on stderr. BusyBox reports
-  no per-process CPU at all, so that column now shows a dash rather than a zero, because a
-  zero would read as "idle"
-- The failed-services tile is not drawn at all where systemd does not exist, instead of
-  cheerfully reporting that everything is fine
+- On **BusyBox** the process list works too; per-process CPU is a dash there, since BusyBox
+  does not report it
+- The failed-services tile is not drawn where systemd does not exist
 
 ### Files (SFTP)
 - Browse with **clickable breadcrumbs**, **inline rename**, drag & drop into the window
@@ -149,8 +138,7 @@ A weak laptop will not magically match 33 MB.
 - **Session logging (v1.2.0)** - write terminal output to `%APPDATA%\serein\logs`, ANSI stripped
 - **Hardware in the overview (v1.3)** - CPU, GPU with its driver, memory size and speed, and
   every disk with how full it is; the main one in gigabytes rather than percent. The GPU is
-  found by PCI device class in `/sys`, without `lspci`, which servers rarely have. Load
-  average is spelled out in words instead of three bare numbers
+  found through `/sys`, with no `lspci` on the server. Load average is spelled out in words
 - **Server overview (v1.2.7)** - CPU, RAM, disk, load, network, uptime, OS and kernel, process
   count, failed services and Docker health on one screen
 - **Run one command on several servers** (`Ctrl+Shift+M`) - results per host with exit code,
@@ -158,10 +146,9 @@ A weak laptop will not magically match 33 MB.
 - **Utilities (v1.3)** moved out of a modal covering the app into a tab of their own with a
   rail: port check, port range, traceroute, HTTP request, DNS, TLS certificate, LDAP query,
   file comparison. The subnet calculator, hashes and JWT decode need no server at all
-- **Checks run from the server, not only from your machine.** "The site is down for me" and
-  "the site is down from the server" are different faults with different answers. Traceroute
-  from the server uses `tracepath`: plain `traceroute` refuses without root
-- Files for comparison are picked over SFTP instead of typing a remote path from memory
+- **Checks run from the server as well as from your machine.** Traceroute from the server
+  uses `tracepath`, which needs no root
+- Files for comparison are picked over SFTP
 
 ### App windows
 - Detached tabs, SFTP, logs, and workspace panels - **separate OS windows**, no Windows caption
@@ -175,14 +162,12 @@ A weak laptop will not magically match 33 MB.
 ### Security and storage
 - Secrets via **DPAPI** (Windows) or the **keyring** (Linux) plus an optional **master password**
   (scrypt → AES-256-GCM); the UI never gets passwords or keys
-- **Master password of 12+ characters** - no composition rules, following NIST SP 800-63B
-  rather than the mandatory-symbol habit that produces `P@ssw0rd1`
-- **Offline mode** - one switch stops the update check and every outbound request. There is
-  exactly one outbound request in the whole codebase, and [SECURITY.md](SECURITY.md) names it
-- **No auth retry storms** - a wrong password is not retried five times; that is how fail2ban
-  trips and Active Directory accounts lock
+- **Master password of 12+ characters**, no composition rules (NIST SP 800-63B)
+- **Offline mode** - one switch stops the update check, the only outbound request in the
+  codebase; [SECURITY.md](SECURITY.md) names it
+- **A wrong password is not retried** - no fail2ban bans, no locked domain accounts
 - **Config schema is versioned**: the profile is copied before a migration, and a profile from
-  a newer version is refused rather than silently rewritten
+  a newer version is refused
 - Encrypted **`.tbk` backup** of servers, settings, and snippets
 - **SSH keygen** (ed25519 / RSA) + `ssh-copy-id`
 - Published with every release: SHA-256 sums and a **CycloneDX SBOM**; `cargo audit` and

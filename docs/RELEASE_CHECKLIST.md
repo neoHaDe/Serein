@@ -9,6 +9,11 @@ wrong order. Every item below exists because it has been missed at least once.
 - [ ] `node scripts/set-version.mjs X.Y.Z` — sets `package.json` and `src-tauri/Cargo.toml`.
       Do not edit either by hand; `tauri.conf.json` follows `package.json` and needs no change.
       A mismatch now fails the build (`build.rs`) instead of shipping.
+- [ ] **Both READMEs updated for the release** - `README.md` and `README.ru.md`. Version in the
+      headline, the install list, the release-notes link, the installer size in the comparison
+      table, and whatever the release actually added or removed. The two files must stay
+      equivalent section by section and bullet by bullet: they have drifted before, and a
+      reader of one of them has no way to notice.
 - [ ] `docs/RELEASE_NOTES_vX.Y.Z.md` written from the running draft in the vault
       (`02-Projects/term-tauri/since-release-terminal.md`), SHA-256 block left empty for now.
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` — unit tests green.
