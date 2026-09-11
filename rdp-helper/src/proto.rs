@@ -51,11 +51,26 @@ pub fn send_closed(out: &mut impl Write, reason: &str) {
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
     /// `p <x> <y> <кнопки>` - указатель.
-    Pointer { x: u16, y: u16, buttons: u8 },
+    Pointer {
+        x: u16,
+        y: u16,
+        buttons: u8,
+    },
     /// `k <код> <1|0>` - клавиша, код в терминах RDP.
-    Key { code: u16, down: bool },
+    Key {
+        code: u16,
+        down: bool,
+    },
+    /// `w <вертикально 1|0> <единицы>` - колесо мыши.
+    Wheel {
+        vertical: bool,
+        delta: i16,
+    },
     /// `s <w> <h>` - изменился размер окна.
-    Resize { w: u16, h: u16 },
+    Resize {
+        w: u16,
+        h: u16,
+    },
     /// `q` - закрыться.
     /// `f` - прислать весь экран целиком.
     ///
@@ -77,6 +92,10 @@ pub fn parse_cmd(line: &str) -> Option<Cmd> {
         "k" => Some(Cmd::Key {
             code: it.next()?.parse().ok()?,
             down: it.next()? == "1",
+        }),
+        "w" => Some(Cmd::Wheel {
+            vertical: it.next()? == "1",
+            delta: it.next()?.parse().ok()?,
         }),
         "s" => Some(Cmd::Resize {
             w: it.next()?.parse().ok()?,
@@ -115,9 +134,42 @@ mod tests {
 
     #[test]
     fn команды_разбираются() {
-        assert_eq!(parse_cmd("p 10 20 1"), Some(Cmd::Pointer { x: 10, y: 20, buttons: 1 }));
-        assert_eq!(parse_cmd("k 65 1"), Some(Cmd::Key { code: 65, down: true }));
-        assert_eq!(parse_cmd("k 65 0"), Some(Cmd::Key { code: 65, down: false }));
+        assert_eq!(
+            parse_cmd("p 10 20 1"),
+            Some(Cmd::Pointer {
+                x: 10,
+                y: 20,
+                buttons: 1
+            })
+        );
+        assert_eq!(
+            parse_cmd("k 65 1"),
+            Some(Cmd::Key {
+                code: 65,
+                down: true
+            })
+        );
+        assert_eq!(
+            parse_cmd("k 65 0"),
+            Some(Cmd::Key {
+                code: 65,
+                down: false
+            })
+        );
+        assert_eq!(
+            parse_cmd("w 1 -120"),
+            Some(Cmd::Wheel {
+                vertical: true,
+                delta: -120
+            })
+        );
+        assert_eq!(
+            parse_cmd("w 0 80"),
+            Some(Cmd::Wheel {
+                vertical: false,
+                delta: 80
+            })
+        );
         assert_eq!(parse_cmd("s 800 600"), Some(Cmd::Resize { w: 800, h: 600 }));
         assert_eq!(parse_cmd("f"), Some(Cmd::Full));
         assert_eq!(parse_cmd("q"), Some(Cmd::Quit));

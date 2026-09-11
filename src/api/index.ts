@@ -49,6 +49,32 @@ import type {
   WorkspaceService
 } from '../shared/types'
 
+export interface BackupProxyCommand {
+  serverIndex: number
+  serverId?: string
+  name: string
+  command: string
+}
+
+export interface BackupPreview {
+  previewed: boolean
+  path?: string
+  servers?: number
+  snippets?: number
+  keysRemapped?: number
+  proxyCommands?: BackupProxyCommand[]
+  contentSha256?: string
+}
+
+export interface BackupImportResult {
+  imported: boolean
+  servers?: number
+  snippets?: number
+  keysRemapped?: number
+  proxyCommands?: BackupProxyCommand[]
+  proxyCommandsEnabled?: number
+}
+
 /** Подписка на событие Tauri с синхронной функцией отписки (как в Electron-preload). */
 function sub<T>(event: string, cb: (payload: T) => void): () => void {
   const un = listen<T>(event, (e) => cb(e.payload))
@@ -289,21 +315,22 @@ export const api = {
       if (!path) return { saved: false }
       return invoke('backup_export', { password, path })
     },
-    import: async (
-      password: string
-    ): Promise<{
-      imported: boolean
-      servers?: number
-      snippets?: number
-      /** Скольким серверам подставили путь к ключу под текущую систему. */
-      keysRemapped?: number
-      /** Профили с командой-посредником: она запускается на этой машине при подключении. */
-      proxyCommands?: { name: string; command: string }[]
-    }> => {
+    preview: async (password: string): Promise<BackupPreview> => {
       const sel = await openDialog({ title: 'Файл бэкапа', filters: [{ name: 'Serein backup', extensions: ['tbk'] }] })
-      if (typeof sel !== 'string') return { imported: false }
-      return invoke('backup_import', { password, path: sel })
-    }
+      if (typeof sel !== 'string') return { previewed: false }
+      const result = await invoke<Omit<BackupPreview, 'previewed' | 'path'>>('backup_preview', {
+        password,
+        path: sel
+      })
+      return { ...result, previewed: true, path: sel }
+    },
+    import: (
+      password: string,
+      path: string,
+      expectedSha256: string,
+      acceptedProxyCommands: number[]
+    ): Promise<BackupImportResult> =>
+      invoke('backup_import', { password, path, expectedSha256, acceptedProxyCommands })
   },
   snippets: {
     list: (): Promise<Snippet[]> => invoke('snippets_list'),
@@ -388,6 +415,7 @@ export const api = {
         colorDepth?: number
         economy?: boolean
         autologon?: boolean
+        networkProfile?: 'vpn' | 'lan'
       }
     ): Promise<string> => {
       const channel = new Channel<ArrayBuffer>()
@@ -399,6 +427,9 @@ export const api = {
     /** Код клавиши здесь в терминах RDP, а не X11: раскладку разбирает интерфейс. */
     key: (id: string, code: number, down: boolean): Promise<void> =>
       invoke('rdp_key', { id, code, down }),
+    wheel: (id: string, vertical: boolean, delta: number): Promise<void> =>
+      invoke('rdp_wheel', { id, vertical, delta }),
+    secureAttention: (id: string): Promise<void> => invoke('rdp_secure_attention', { id }),
     /**
      * Просит сервер сменить размер рабочего стола прямо в живом сеансе.
      *
@@ -480,6 +511,10 @@ export const api = {
       summary: string
       canInstall: boolean
       canStart: boolean
+      /** Сервер на Windows: рабочий стол встроен, ставить нечего, пароль sudo не нужен. */
+      windows?: boolean
+      /** Открыт ли межсетевой экран для рабочего стола. Только для Windows. */
+      firewall?: string
     }> => invoke('desktop_rdp_detect', { sessionId }),
     rdpInstall: (
       sessionId: string,

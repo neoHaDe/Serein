@@ -57,7 +57,9 @@ pub fn parse_detect(stdout: &str) -> Value {
     let mut sudo = String::new();
 
     for line in stdout.lines() {
-        let Some((tag, val)) = line.trim().split_once(':') else { continue };
+        let Some((tag, val)) = line.trim().split_once(':') else {
+            continue;
+        };
         let val = val.trim();
         match tag {
             "BIN" => {
@@ -158,9 +160,168 @@ pub const ENABLE_CMD: &str = concat!(
     "' 2>&1"
 );
 
+/// Что с встроенным рабочим столом Windows.
+///
+/// Сценарий PowerShell; кодировать и оборачивать его будет `platform::ps`. Спрашиваем
+/// четыре вещи, потому что «не подключается» бывает по четырём разным причинам: запрещено
+/// в настройках, не запущена служба, закрыт межсетевой экран, никто не слушает порт.
+/// Пятая строка - о правах: без администратора включить ничего нельзя, и обещать не надо.
+pub const DETECT_WINDOWS: &str = concat!(
+    "$k = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server'; ",
+    "\"deny`t$((Get-ItemProperty $k -Name fDenyTSConnections -ErrorAction SilentlyContinue).fDenyTSConnections)\"; ",
+    "\"svc`t$((Get-Service TermService -ErrorAction SilentlyContinue).Status)\"; ",
+    "Get-NetTCPConnection -State Listen -LocalPort 3389 -ErrorAction SilentlyContinue | ",
+    "ForEach-Object { \"port`t$($_.LocalAddress)\" }; ",
+    "$fw = Get-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue | ",
+    "Where-Object { $_.Enabled -eq 'True' } | Select-Object -First 1; ",
+    "\"fw`t$(if ($fw) { 'on' } else { 'off' })\"; ",
+    "$p = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent()); ",
+    "\"admin`t$(if ($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { 'yes' } else { 'no' })\""
+);
+
+/// Включает встроенный рабочий стол и проверяет, что вышло.
+///
+/// Три действия сразу, потому что поодиночке они бесполезны: снять запрет в настройках,
+/// открыть межсетевой экран и поднять службу. В конце спрашиваем состояние - `Set-Service`
+/// возвращает успех, успев только отправить запрос.
+pub const ENABLE_WINDOWS: &str = concat!(
+    "$k = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server'; ",
+    "Set-ItemProperty -Path $k -Name fDenyTSConnections -Value 0 -ErrorAction SilentlyContinue; ",
+    "Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue; ",
+    "Set-Service -Name TermService -StartupType Automatic -ErrorAction SilentlyContinue; ",
+    "Start-Service -Name TermService -ErrorAction SilentlyContinue; ",
+    "Start-Sleep -Seconds 1; ",
+    "\"deny`t$((Get-ItemProperty $k -Name fDenyTSConnections -ErrorAction SilentlyContinue).fDenyTSConnections)\"; ",
+    "\"svc`t$((Get-Service TermService -ErrorAction SilentlyContinue).Status)\""
+);
+
+/// Разбирает ответ разведки Windows.
+///
+/// Возвращает тот же вид, что и разбор для юниксов: панель одна, и различать системы она
+/// не обязана. Ставить нечего - `canInstall` всегда ложь; включить можно, если ещё не
+/// включено и есть права администратора.
+pub fn parse_detect_windows(stdout: &str) -> Value {
+    let (mut deny, mut svc, mut fw, mut admin) =
+        (String::new(), String::new(), String::new(), String::new());
+    let mut ports: Vec<String> = Vec::new();
+    for line in stdout.lines() {
+        let Some((tag, val)) = line.trim().split_once('\t') else {
+            continue;
+        };
+        let val = val.trim();
+        match tag.trim() {
+            "deny" => deny = val.to_owned(),
+            "svc" => svc = val.to_owned(),
+            "fw" => fw = val.to_owned(),
+            "admin" => admin = val.to_owned(),
+            "port" => {
+                // Адрес `::` - это «слушает везде» в записи IPv6; для человека понятнее
+                // назвать порт, а не пересказывать форму записи.
+                let addr = if val == "::" {
+                    "[::]".to_owned()
+                } else {
+                    val.to_owned()
+                };
+                let full = format!("{addr}:3389");
+                if !ports.contains(&full) {
+                    ports.push(full);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let запрещён = deny == "1";
+    let служба_идёт = svc.eq_ignore_ascii_case("Running");
+    let есть_права = admin == "yes";
+
+    let вывод = if !ports.is_empty() {
+        "Удалённый рабочий стол включён - можно подключаться"
+    } else if запрещён {
+        "Удалённый рабочий стол выключен в настройках системы"
+    } else if !служба_идёт {
+        "Служба удалённых рабочих столов не запущена"
+    } else {
+        "Порт 3389 никто не слушает"
+    };
+
+    json!({
+        "installed": [{ "name": "Remote Desktop", "path": "встроен в Windows" }],
+        "listening": ports,
+        "service": svc,
+        "firewall": fw,
+        "admin": есть_права,
+        "packageManager": "",
+        "sudo": if есть_права { "администратор" } else { "обычный пользователь" },
+        "summary": вывод,
+        // Ставить на Windows нечего: рабочий стол там часть системы.
+        "canInstall": false,
+        "canStart": ports.is_empty() && есть_права,
+        // Признак для панели: на Windows нет ни пакетов, ни sudo - вместо них права
+        // администратора самой сессии, и спрашивать пароль там не у кого.
+        "windows": true,
+    })
+}
+
+/// Разбирает ответ включения: смотрим не на код возврата, а на итоговое состояние.
+pub fn parse_enable_windows(stdout: &str) -> Value {
+    let v = parse_detect_windows(stdout);
+    let выключено = v["service"]
+        .as_str()
+        .unwrap_or("")
+        .eq_ignore_ascii_case("Running");
+    let разрешено = !stdout.lines().any(|l| l.trim() == "deny\t1");
+    if выключено && разрешено {
+        json!({ "ok": true })
+    } else {
+        json!({
+            "ok": false,
+            "error": "Не удалось включить: нужны права администратора на сервере",
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn состояние_windows_читается_по_четырём_приметам() {
+        // Ровно тот вывод, что даёт настоящая машина: проверено вживую.
+        let v = parse_detect_windows(
+            "deny\t0\nsvc\tRunning\nport\t::\nport\t0.0.0.0\nfw\ton\nadmin\tyes\n",
+        );
+        assert_eq!(
+            v["summary"],
+            "Удалённый рабочий стол включён - можно подключаться"
+        );
+        assert_eq!(v["listening"][0], "[::]:3389");
+        assert_eq!(v["canInstall"], false, "на Windows ставить нечего");
+        assert_eq!(v["canStart"], false, "уже включён");
+
+        let выкл = parse_detect_windows("deny\t1\nsvc\tStopped\nfw\toff\nadmin\tyes\n");
+        assert_eq!(
+            выкл["summary"],
+            "Удалённый рабочий стол выключен в настройках системы"
+        );
+        assert_eq!(выкл["canStart"], true);
+    }
+
+    #[test]
+    fn без_прав_администратора_кнопку_не_показываем() {
+        // Предлагать действие, которое заведомо не выполнится, - обман.
+        let v = parse_detect_windows("deny\t1\nsvc\tStopped\nfw\toff\nadmin\tno\n");
+        assert_eq!(v["canStart"], false);
+        assert_eq!(v["sudo"], "обычный пользователь");
+    }
+
+    #[test]
+    fn включение_проверяется_по_итогу_а_не_по_коду() {
+        assert_eq!(parse_enable_windows("deny\t0\nsvc\tRunning\n")["ok"], true);
+        let плохо = parse_enable_windows("deny\t1\nsvc\tStopped\n");
+        assert_eq!(плохо["ok"], false);
+        assert!(плохо["error"].as_str().unwrap().contains("администратора"));
+    }
 
     #[test]
     fn три_разные_причины_различаются() {
@@ -195,7 +356,10 @@ mod tests {
         assert_eq!(package_for("pacman"), None);
         assert!(install_cmd("pacman").is_none());
         let v = parse_detect("PM:pacman\nSUDO:без пароля\n");
-        assert_eq!(v["canInstall"], false, "предлагать то, чего не сделаем, - обман");
+        assert_eq!(
+            v["canInstall"], false,
+            "предлагать то, чего не сделаем, - обман"
+        );
     }
 
     #[test]
@@ -224,7 +388,10 @@ mod tests {
         assert!(ENABLE_CMD.contains("enable --now"));
         assert!(ENABLE_CMD.contains("is-active"));
         assert!(ENABLE_CMD.contains("sudo -S"));
-        assert!(!ENABLE_CMD.contains('\n'), "перевод строки сломал бы разбор команды");
+        assert!(
+            !ENABLE_CMD.contains('\n'),
+            "перевод строки сломал бы разбор команды"
+        );
     }
 
     #[test]

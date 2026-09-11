@@ -505,6 +505,14 @@ export interface AppSettings {
   openLocalOnStart: boolean
   /** Авто-переподключение SSH при обрыве. */
   autoReconnect: boolean
+  /** Профиль RDP: через VPN просим сервер беречь полосу, LAN сохраняет качество. */
+  rdpNetworkProfile?: 'vpn' | 'lan'
+  /** Глубина цвета RDP. Для VPN по умолчанию 16 бит. */
+  rdpColorDepth?: 16 | 24 | 32
+  /** Отключать в RDP обои, темы и анимацию ради меньшего трафика. */
+  rdpEconomy?: boolean
+  /** Передавать сочетания из сфокусированного RDP в удалённый сеанс. */
+  rdpCaptureShortcuts?: boolean
   /** Сохранённые ширины боковых панелей. */
   sidebarWidth?: number
   sftpWidth?: number
@@ -640,6 +648,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fontFamily: 'Cascadia Code, Consolas, "Courier New", monospace',
   openLocalOnStart: false,
   autoReconnect: false,
+  rdpNetworkProfile: 'vpn',
+  rdpColorDepth: 16,
+  rdpEconomy: true,
+  rdpCaptureShortcuts: true,
   sidebarWidth: 270,
   sftpWidth: 380,
   keybindings: {},

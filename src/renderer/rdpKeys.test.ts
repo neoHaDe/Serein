@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buttonMask, isModifier, scancodeFor } from './rdpKeys'
+import { buttonMask, isModifier, isRdpShortcut, scancodeFor, wheelRotation } from './rdpKeys'
 
 /*
  * Таблица скан-кодов проверяется тестом, а не глазами, по той же причине, что и разбор
@@ -42,6 +42,21 @@ describe('скан-коды RDP', () => {
     // человек увидит не то, что нажал, и не поймёт почему.
     expect(scancodeFor('LaunchMail')).toBeNull()
     expect(scancodeFor('')).toBeNull()
+  })
+})
+
+describe('прокрутка и сочетания RDP', () => {
+  it('меняет знак колеса и не выходит за пределы протокола', () => {
+    expect(wheelRotation(120, 0)).toBe(-120)
+    expect(wheelRotation(-120, 0)).toBe(120)
+    expect(wheelRotation(3, 1)).toBe(-256)
+    expect(wheelRotation(Number.NaN, 0)).toBe(0)
+  })
+
+  it('отличает сочетания от обычного набора текста', () => {
+    expect(isRdpShortcut({ code: 'KeyW', ctrlKey: true, altKey: false, metaKey: false })).toBe(true)
+    expect(isRdpShortcut({ code: 'Tab', ctrlKey: false, altKey: false, metaKey: false })).toBe(true)
+    expect(isRdpShortcut({ code: 'KeyW', ctrlKey: false, altKey: false, metaKey: false })).toBe(false)
   })
 })
 

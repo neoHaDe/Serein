@@ -17,6 +17,7 @@ wrong order. Every item below exists because it has been missed at least once.
 - [ ] `docs/RELEASE_NOTES_vX.Y.Z.md` written from the running draft in the vault
       (`02-Projects/term-tauri/since-release-terminal.md`), SHA-256 block left empty for now.
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` — unit tests green.
+- [ ] `cargo test --manifest-path rdp-helper/Cargo.toml --locked` — helper tests green.
 - [ ] `npm run typecheck` — clean.
 - [ ] Integration suite against the stand, if the release touches SSH or SFTP:
       `scripts/ssh-stand/up.sh`, then `cargo test -- --ignored`, then `down.sh`.
@@ -28,17 +29,21 @@ wrong order. Every item below exists because it has been missed at least once.
 
 - [ ] **Linux, on the build VM:** `./scripts/build-linux.sh` → `.deb` + AppImage.
       Copy the AppImage back into `src-tauri/target/release/bundle/appimage/`.
-- [ ] **Windows, locally:** `npm run tauri -- build` with `TAURI_SIGNING_PRIVATE_KEY` and its
-      password in the environment. Copy `target/release/serein.exe` to
-      `bundle/nsis/Serein_X.Y.Z_x64-portable.exe`.
+- [ ] **Windows, locally:** `bash scripts/build-rdp-helper.sh release`, then
+      `npm run tauri -- build` with `TAURI_SIGNING_PRIVATE_KEY` and its password in the
+      environment. Run `powershell -ExecutionPolicy Bypass -File scripts/package-windows-portable.ps1`.
+      Portable is a ZIP with `Serein.exe` and `serein-rdp.exe`; a single copied EXE has no RDP.
 - [ ] `./scripts/make-sbom.sh` — CycloneDX for Rust and npm into `dist/sbom/`.
 
 ## Publishing
 
-- [ ] `sha256sum` all four artifacts; paste into the release notes; commit.
+- [ ] `sha256sum` every published artifact; paste into the release notes; commit.
 - [ ] `git tag -a vX.Y.Z` and push the tag.
-- [ ] `gh release create vX.Y.Z --notes-file docs/RELEASE_NOTES_vX.Y.Z.md <four artifacts>`.
+- [ ] `gh release create vX.Y.Z --notes-file docs/RELEASE_NOTES_vX.Y.Z.md <artifacts>`.
       Attach the SBOM files as well.
+- [ ] Unpack the portable ZIP into a new empty directory and start RDP from that copy.
+      Check that `serein-rdp.exe` is present next to `Serein.exe`; testing from `target/`
+      can accidentally find a developer build and hide an incomplete archive.
 - [ ] `npm run manifest -- X.Y.Z "заметки"` — signs whatever is unsigned and writes **two**
       manifests. If the signing step fails with a bare `try '--help'`, the flags are fine: the
       npm wrapper mangles arguments on Windows. Sign by hand with `npx tauri signer sign`

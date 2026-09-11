@@ -6,7 +6,7 @@ use std::collections::HashMap;
 pub const LIST_CMD: &str = "docker compose ls -a --format json";
 
 pub const LIST_PS_JSON_CMD: &str =
-    "docker ps -a --filter label=com.docker.compose.project --format '{{json .}}'";
+    "docker ps -a --filter label=com.docker.compose.project --format \"{{json .}}\"";
 
 const ACTIONS: &[&str] = &["up", "down", "start", "stop", "restart"];
 
@@ -23,12 +23,22 @@ fn parse_docker_labels(raw: &str) -> HashMap<String, String> {
     out
 }
 
-fn push_project(projects: &mut Vec<Value>, by_name: &mut HashMap<String, Value>, name: &str, status: &str, compose_file: &str) {
+fn push_project(
+    projects: &mut Vec<Value>,
+    by_name: &mut HashMap<String, Value>,
+    name: &str,
+    status: &str,
+    compose_file: &str,
+) {
     if name.is_empty() {
         return;
     }
     let cf = compose_file.to_string();
-    let key = if cf.is_empty() { name.to_string() } else { cf.clone() };
+    let key = if cf.is_empty() {
+        name.to_string()
+    } else {
+        cf.clone()
+    };
     if by_name.contains_key(&key) {
         return;
     }
@@ -42,7 +52,11 @@ fn push_project(projects: &mut Vec<Value>, by_name: &mut HashMap<String, Value>,
     projects.push(row);
 }
 
-fn push_project_from_ls(projects: &mut Vec<Value>, by_name: &mut HashMap<String, Value>, p: &Value) {
+fn push_project_from_ls(
+    projects: &mut Vec<Value>,
+    by_name: &mut HashMap<String, Value>,
+    p: &Value,
+) {
     let name = p.get("Name").and_then(|v| v.as_str()).unwrap_or("");
     let compose_raw = p.get("ConfigFiles").and_then(|v| v.as_str()).unwrap_or("");
     let compose_file = first_compose_file(compose_raw);
@@ -74,7 +88,11 @@ fn collect_json_lines(stdout: &str) -> Vec<Value> {
 }
 
 fn push_service(services: &mut Vec<Value>, p: &Value) {
-    let status = p.get("Status").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let status = p
+        .get("Status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let state = p
         .get("State")
         .and_then(|v| v.as_str())
@@ -92,7 +110,12 @@ fn push_service(services: &mut Vec<Value>, p: &Value) {
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
-        .unwrap_or_else(|| p.get("Name").and_then(|v| v.as_str()).unwrap_or("").to_string());
+        .unwrap_or_else(|| {
+            p.get("Name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        });
     if service.is_empty() && id.is_empty() {
         return;
     }
@@ -113,14 +136,23 @@ fn shell_quote(s: &str) -> String {
 
 fn safe_compose_file(p: &str) -> Option<String> {
     let p = p.trim();
-    if p.is_empty() || p.contains("..") || p.contains('\n') || p.contains(';') || !p.starts_with('/') {
+    if p.is_empty()
+        || p.contains("..")
+        || p.contains('\n')
+        || p.contains(';')
+        || !p.starts_with('/')
+    {
         return None;
     }
     let clean: String = p
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '/' || *c == '.' || *c == '_' || *c == '-')
         .collect();
-    if clean.is_empty() { None } else { Some(clean) }
+    if clean.is_empty() {
+        None
+    } else {
+        Some(clean)
+    }
 }
 
 fn first_compose_file(raw: &str) -> String {
@@ -148,7 +180,11 @@ fn safe_project(name: &str) -> Option<String> {
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
         .collect();
-    if clean.is_empty() { None } else { Some(clean) }
+    if clean.is_empty() {
+        None
+    } else {
+        Some(clean)
+    }
 }
 
 fn safe_service(name: &str) -> Option<String> {
@@ -193,15 +229,28 @@ pub fn parse_list_from_ps_json(code: i32, stdout: &str, stderr: &str) -> Value {
     for p in collect_json_lines(stdout) {
         let labels = p.get("Labels").and_then(|v| v.as_str()).unwrap_or("");
         let map = parse_docker_labels(labels);
-        let name = map.get("com.docker.compose.project").map(String::as_str).unwrap_or("");
+        let name = map
+            .get("com.docker.compose.project")
+            .map(String::as_str)
+            .unwrap_or("");
         if name.is_empty() {
             continue;
         }
-        let wd = map.get("com.docker.compose.project.working_dir").map(String::as_str).unwrap_or("");
-        let cf_raw = map.get("com.docker.compose.project.config_files").map(String::as_str).unwrap_or("");
+        let wd = map
+            .get("com.docker.compose.project.working_dir")
+            .map(String::as_str)
+            .unwrap_or("");
+        let cf_raw = map
+            .get("com.docker.compose.project.config_files")
+            .map(String::as_str)
+            .unwrap_or("");
         let compose_file = {
             let cf = first_compose_file(cf_raw);
-            if cf.is_empty() { guess_compose_file(wd) } else { cf }
+            if cf.is_empty() {
+                guess_compose_file(wd)
+            } else {
+                cf
+            }
         };
         push_project(&mut projects, &mut by_name, name, "detected", &compose_file);
     }
@@ -278,7 +327,12 @@ pub fn parse_ps(code: i32, stdout: &str, stderr: &str) -> Value {
     json!({ "ok": true, "services": services })
 }
 
-pub fn action_cmd(compose_file: &str, project: &str, action: &str, service: Option<&str>) -> Option<String> {
+pub fn action_cmd(
+    compose_file: &str,
+    project: &str,
+    action: &str,
+    service: Option<&str>,
+) -> Option<String> {
     if !ACTIONS.contains(&action) {
         return None;
     }
@@ -334,11 +388,15 @@ mod tests {
 
     #[test]
     fn parse_list_ok() {
-        let out = r#"{"Name":"site","Status":"running(3)","ConfigFiles":"/srv/site/docker-compose.yml"}"#;
+        let out =
+            r#"{"Name":"site","Status":"running(3)","ConfigFiles":"/srv/site/docker-compose.yml"}"#;
         let v = parse_list(0, out, "");
         assert!(v["ok"].as_bool().unwrap());
         assert_eq!(v["projects"][0]["name"], "site");
-        assert_eq!(v["projects"][0]["composeFile"], "/srv/site/docker-compose.yml");
+        assert_eq!(
+            v["projects"][0]["composeFile"],
+            "/srv/site/docker-compose.yml"
+        );
     }
 
     #[test]
@@ -363,7 +421,10 @@ mod tests {
         let v = parse_list_from_ps_json(0, out, "");
         assert!(v["ok"].as_bool().unwrap());
         assert_eq!(v["projects"][0]["name"], "nextcloud-stack");
-        assert_eq!(v["projects"][0]["composeFile"], "/srv/nextcloud-stack/docker-compose.yml");
+        assert_eq!(
+            v["projects"][0]["composeFile"],
+            "/srv/nextcloud-stack/docker-compose.yml"
+        );
     }
 
     #[test]

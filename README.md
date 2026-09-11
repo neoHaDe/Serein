@@ -98,6 +98,12 @@ figures are public measurements normalised to the same metric; size is the 1.3.1
   instead of ten times that
 - **RDP logs in once (v1.3.1)** - credentials go to the server with the autologon flag, and
   its own login window never appears. Settings: resolution, colour depth, traffic saving
+- **VPN profile:** the saved default advertises a limited-bandwidth connection, uses 16-bit
+  colour and disables desktop effects. The LAN profile keeps full quality for a fast network
+- **Bounded presentation:** RDP updates are combined against the current framebuffer and shown
+  at up to 30 FPS over VPN or 60 FPS on LAN, instead of redrawing for every dirty rectangle
+- **Complete input:** vertical and horizontal wheel scrolling, coalesced pointer movement,
+  optional shortcut capture while the canvas is focused, and a Ctrl+Alt+Del toolbar command
 - **Resolution follows the window (v1.3.1)**: stretch it and the server redraws the desktop
   at the new size, with no reconnection
 - **The desktop session belongs to the SSH connection (v1.3.1)**, not to a window: switching

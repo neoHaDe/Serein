@@ -9,19 +9,32 @@
 
 use serde_json::{json, Value};
 
-/// Команда-зонд.
+/// Зонд для юниксов.
 ///
-/// Расчёт на то, что она даёт осмысленный ответ в любой оболочке. В POSIX сработает
-/// `uname`; в `cmd.exe` его нет, зато `ver` печатает версию Windows; в PowerShell
-/// отработает `$PSVersionTable`. Лишние сообщения об ошибках уходят в никуда, поэтому
-/// в выводе остаётся ровно то, что удалось.
+/// Точка с запятой разделяет команды только в POSIX-оболочках, поэтому целиком эта строка
+/// имеет смысл лишь там. В `cmd.exe` она читается как одна команда `uname` с мусорными
+/// доводами и не даёт ни строки вывода - на этом и попадались раньше: Windows-сервер
+/// определялся как «непонятно», и на него уходили команды Linux.
 pub const PROBE_CMD: &str = concat!(
     "uname -sr 2>/dev/null; ",
     // BusyBox выдаёт себя не именем системы, а справкой своих же утилит.
-    "ls --help 2>&1 | head -n 1; ",
-    "ver 2>NUL; ",
-    "echo %OS%"
+    "ls --help 2>&1 | head -n 1"
 );
+
+/// Зонд для Windows - вторым вопросом, если первый ничего не дал.
+///
+/// Одно слово, и это не лень. Windows-sshd оборачивает команду в кавычки, а вложенный
+/// `cmd /c` доедает их не полностью: на живой проверке до сервера дошло `ver"` с лишней
+/// кавычкой, и он честно ответил, что такой команды не знает. Голое слово обёртке не
+/// мешает. В POSIX такой команды нет, и там зонд молча молчит.
+pub const PROBE_WINDOWS_CMD: &str = "ver";
+
+/// Третий вопрос - для Windows, где оболочка по умолчанию PowerShell: `ver` там не
+/// команда. Сценарий уходит кодированным, поэтому кавычек в строке нет вовсе и обёртка
+/// sshd испортить её не может. Ответ вида «Microsoft Windows NT 10.0.26200.0».
+pub fn probe_windows_ps() -> String {
+    ps("[Environment]::OSVersion.VersionString")
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -83,7 +96,11 @@ fn windows_version(text: &str) -> String {
 }
 
 fn first_line(text: &str) -> String {
-    text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").to_string()
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
+        .to_string()
 }
 
 pub fn to_json(kind: Kind, version: &str) -> Value {
@@ -98,6 +115,27 @@ pub fn to_json(kind: Kind, version: &str) -> Value {
 static CACHE: std::sync::Mutex<Option<std::collections::HashMap<String, (Kind, String)>>> =
     std::sync::Mutex::new(None);
 
+/// Пишет строку о разборе системы в журнал приложения.
+///
+/// Не отладочная времянка: когда система опознана неверно, все панели сервера показывают
+/// пустоту, и по экрану причину не отличить от «сервер молчит». Один этот файл отвечает
+/// на вопрос за секунду - проверено на живой неполадке, где Windows-сервер определялся
+/// как «непонятно» из-за одной кавычки, добавленной sshd.
+fn след(line: &str) {
+    use std::io::Write as _;
+    let dir = crate::store::config_dir().join("logs");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("platform.log"))
+    {
+        let _ = writeln!(f, "{} {line}", crate::term_out::stamp_utc());
+    }
+}
+
 pub async fn of_session(session_id: &str, handle: &crate::ssh::SharedHandle) -> (Kind, String) {
     {
         let mut g = crate::sync::lock(&CACHE);
@@ -107,10 +145,45 @@ pub async fn of_session(session_id: &str, handle: &crate::ssh::SharedHandle) -> 
     }
     // Зонд не должен ронять панель: не ответил - работаем как с неизвестной системой,
     // то есть по-линуксовому, но без обещаний.
-    let found = match crate::ssh::exec(handle, PROBE_CMD, None).await {
+    let ответ = crate::ssh::exec(handle, PROBE_CMD, None).await;
+    let posix_ответ = match &ответ {
+        Ok((c, o, e)) => format!("код {c}; вывод [{}]; ошибки [{}]", o.trim(), e.trim()),
+        Err(e) => format!("не выполнился: {e}"),
+    };
+    let mut found = match ответ {
         Ok((_, out, _)) => detect(&out),
         Err(_) => (Kind::Unknown, String::new()),
     };
+    // Юникс себя назвал - второй вопрос не нужен. Не назвал - спрашиваем по-виндовому:
+    // лишний круг по сети случается раз на сессию и только там, где первый не удался.
+    if found.0 == Kind::Unknown {
+        let вин = crate::ssh::exec(handle, PROBE_WINDOWS_CMD, None).await;
+        if let Ok((_, out, _)) = вин {
+            let (kind, version) = detect(&out);
+            if kind == Kind::Windows {
+                found = (kind, version);
+            }
+        }
+    }
+    // `ver` не ответил - остаётся Windows с оболочкой PowerShell: там это не команда.
+    if found.0 == Kind::Unknown {
+        let пш = crate::ssh::exec(handle, &probe_windows_ps(), None).await;
+        if let Ok((_, out, _)) = пш {
+            let (kind, version) = detect(&out);
+            if kind == Kind::Windows {
+                found = (kind, version);
+            }
+        }
+    }
+    // Пишем одну строку на сессию. Подробности первого зонда - только когда систему
+    // опознать не удалось: тогда они и нужны, а в остальное время это шум.
+    if found.0 == Kind::Unknown {
+        след(&format!(
+            "систему опознать не удалось; зонд POSIX: {posix_ответ}"
+        ));
+    } else {
+        след(&format!("система: {} ({})", found.0.as_str(), found.1));
+    }
     crate::sync::lock(&CACHE)
         .get_or_insert_with(Default::default)
         .insert(session_id.to_string(), found.clone());
@@ -124,36 +197,54 @@ pub fn forget(session_id: &str) {
         .remove(session_id);
 }
 
+/// Собирает команду запуска сценария PowerShell на сервере.
+///
+/// Сценарий уходит кодированным (base64 от UTF-16LE), и это не украшательство. Команда
+/// в открытом виде проходит через оболочку сервера, а их там две и правила у них разные:
+/// `cmd.exe` считает кавычки парами и не признаёт `\"` за экранирование, PowerShell не
+/// признаёт его тоже, но по-своему. На живой проверке команда обзора рвалась ровно
+/// посередине - вертикальная черта выходила из-под защиты и становилась конвейером.
+///
+/// В кодированной строке нет ни кавычек, ни черт, ни скобок: разбирать оболочке нечего,
+/// и обе ведут себя одинаково.
+pub fn ps(script: &str) -> String {
+    use base64::Engine as _;
+    // Полоса прогресса уходит в поток ошибок служебным XML (`#< CLIXML`). Читателю она
+    // не нужна, а панель показывает поток ошибок, когда вывод пуст, - и вместо причины
+    // человек видел бы разметку.
+    let script = format!("$ProgressPreference='SilentlyContinue'; {script}");
+    // UTF-16LE - требование самого PowerShell к `-EncodedCommand`, не наш выбор.
+    let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let payload = base64::engine::general_purpose::STANDARD.encode(utf16);
+    format!("powershell -NoProfile -NonInteractive -EncodedCommand {payload}")
+}
+
 /// Команды, которые различаются по платформам.
 ///
-/// Всё, что уходит на Windows, идёт через PowerShell и склеивает поля табуляцией само:
-/// разбирать `Format-Table` по ширине колонок нельзя - ширина зависит от размера окна,
-/// а заголовки от языка системы.
+/// Всё, что уходит на Windows, - сценарии PowerShell: они склеивают поля табуляцией сами,
+/// потому что разбирать `Format-Table` по ширине колонок нельзя - ширина зависит от
+/// размера окна, а заголовки от языка системы. Кодирует и оборачивает их `super::ps`.
 pub mod cmd {
     /// Процессы Windows.
     ///
     /// Первой строкой - общий объём памяти: `Get-Process` даёт байты рабочего набора, а
     /// в таблице колонка называется «память, %», и без знаменателя её не посчитать.
     pub const PS_WINDOWS: &str = concat!(
-        "powershell -NoProfile -NonInteractive -Command \"",
-        "\\\"MT`t$((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize)\\\"; ",
+        "\"MT`t$((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize)\"; ",
         "Get-Process | Sort-Object -Property CPU -Descending | Select-Object -First 80 ",
         "Id, ProcessName, CPU, WorkingSet | ",
-        "ForEach-Object { \\\"$($_.Id)`t$($_.ProcessName)`t$($_.CPU)`t$($_.WorkingSet)\\\" }\""
+        "ForEach-Object { \"$($_.Id)`t$($_.ProcessName)`t$($_.CPU)`t$($_.WorkingSet)\" }"
     );
 
     /// Службы: имя, состояние, отображаемое имя.
-    pub const SERVICES_WINDOWS: &str = concat!(
-        "powershell -NoProfile -NonInteractive -Command \"",
-        "Get-Service | ForEach-Object { \\\"$($_.Name)`t$($_.Status)`t$($_.DisplayName)\\\" }\""
-    );
+    pub const SERVICES_WINDOWS: &str =
+        "Get-Service | ForEach-Object { \"$($_.Name)`t$($_.Status)`t$($_.DisplayName)\" }";
 
     /// Журнал событий вместо journalctl.
     pub const LOGS_WINDOWS: &str = concat!(
-        "powershell -NoProfile -NonInteractive -Command \"",
         "Get-WinEvent -LogName System -MaxEvents 300 -ErrorAction SilentlyContinue | ",
-        "ForEach-Object { \\\"$($_.TimeCreated.ToString('yyyy-MM-ddTHH:mm:ss'))`t",
-        "$($_.LevelDisplayName)`t$($_.ProviderName)`t$($_.Message -replace '`r?`n',' ')\\\" }\""
+        "ForEach-Object { \"$($_.TimeCreated.ToString('yyyy-MM-ddTHH:mm:ss'))`t",
+        "$($_.LevelDisplayName)`t$($_.ProviderName)`t$($_.Message -replace '`r?`n',' ')\" }"
     );
 
     /// Снимок нагрузки: процессор, память, время работы, диски и сеть - одним вызовом.
@@ -162,23 +253,22 @@ pub mod cmd {
     /// раз в несколько секунд. Средней загрузки в Windows не существует как понятия, и
     /// поэтому её здесь нет: показать вместо неё нули значило бы соврать.
     pub const SAMPLE_WINDOWS: &str = concat!(
-        "powershell -NoProfile -NonInteractive -Command \"",
         "$os = Get-CimInstance Win32_OperatingSystem; ",
         "$cs = Get-CimInstance Win32_ComputerSystem; ",
-        "\\\"cores`t$($cs.NumberOfLogicalProcessors)\\\"; ",
-        "\\\"cpu`t$((Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average)\\\"; ",
-        "\\\"mem`t$($os.TotalVisibleMemorySize)`t$($os.FreePhysicalMemory)\\\"; ",
-        "\\\"uptime`t$([int]((Get-Date) - $os.LastBootUpTime).TotalSeconds)\\\"; ",
-        "\\\"os`t$($os.Caption)\\\"; ",
-        "\\\"kernel`t$($os.Version)\\\"; ",
-        "\\\"procs`t$((Get-Process).Count)\\\"; ",
-        "\\\"sysdrive`t$($env:SystemDrive)\\\"; ",
+        "\"cores`t$($cs.NumberOfLogicalProcessors)\"; ",
+        "\"cpu`t$((Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average)\"; ",
+        "\"mem`t$($os.TotalVisibleMemorySize)`t$($os.FreePhysicalMemory)\"; ",
+        "\"uptime`t$([int]((Get-Date) - $os.LastBootUpTime).TotalSeconds)\"; ",
+        "\"os`t$($os.Caption)\"; ",
+        "\"kernel`t$($os.Version)\"; ",
+        "\"procs`t$((Get-Process).Count)\"; ",
+        "\"sysdrive`t$($env:SystemDrive)\"; ",
         "Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ",
-        "ForEach-Object { \\\"disk`t$($_.DeviceID)`t$($_.Size)`t$($_.FreeSpace)\\\" }; ",
+        "ForEach-Object { \"disk`t$($_.DeviceID)`t$($_.Size)`t$($_.FreeSpace)\" }; ",
         "$a = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | ",
         "Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1; ",
         "if ($a) { $st = Get-NetAdapterStatistics -Name $a.Name -ErrorAction SilentlyContinue; ",
-        "if ($st) { \\\"net`t$($a.Name)`t$($st.ReceivedBytes)`t$($st.SentBytes)\\\" } }\""
+        "if ($st) { \"net`t$($a.Name)`t$($st.ReceivedBytes)`t$($st.SentBytes)\" } }"
     );
 
     /// Процессы на BusyBox.
@@ -217,7 +307,7 @@ pub fn service_cmd(kind: Kind, name: &str, action: &str) -> Result<String, Strin
                 "stop" => "Stop",
                 _ => "Restart",
             };
-            format!("powershell -NoProfile -NonInteractive -Command \"{verb}-Service -Name '{name}'\"")
+            ps(&format!("{verb}-Service -Name '{name}'"))
         }
         // OpenRC: действие идёт вторым словом, а не первым, как у systemctl. Разделителя
         // `--` здесь нет намеренно: имя уже проверено и с дефиса начаться не может, а
@@ -233,9 +323,7 @@ pub fn kill_cmd(kind: Kind, pid: u32) -> Result<String, String> {
         return Err("Нельзя слать kill pid <= 1".into());
     }
     Ok(match kind {
-        Kind::Windows => {
-            format!("powershell -NoProfile -NonInteractive -Command \"Stop-Process -Id {pid} -Force\"")
-        }
+        Kind::Windows => ps(&format!("Stop-Process -Id {pid} -Force")),
         _ => format!("kill {pid}"),
     })
 }
@@ -267,7 +355,9 @@ pub mod win {
             if parts.len() < 4 {
                 continue;
             }
-            let Ok(pid) = parts[0].trim().parse::<u32>() else { continue };
+            let Ok(pid) = parts[0].trim().parse::<u32>() else {
+                continue;
+            };
             let cpu = num(parts[2]);
             let mem_bytes = num(parts[3]);
             // Доля памяти считается от общего объёма: Windows даёт рабочий набор в
@@ -320,7 +410,10 @@ pub mod win {
                 continue;
             }
             // Собираем в тот же вид, что и journalctl: панель логов уже умеет его читать.
-            lines.push(format!("{} {} {}: {}", parts[0], parts[1], parts[2], parts[3]));
+            lines.push(format!(
+                "{} {} {}: {}",
+                parts[0], parts[1], parts[2], parts[3]
+            ));
         }
         json!({ "ok": true, "text": lines.join("\n"), "platform": "windows" })
     }
@@ -503,7 +596,9 @@ pub mod busybox {
             if t.is_empty() || t.starts_with("Runlevel:") || t.starts_with("Dynamic Runlevel:") {
                 continue;
             }
-            let Some((name, tail)) = t.split_once('[') else { continue };
+            let Some((name, tail)) = t.split_once('[') else {
+                continue;
+            };
             let name = name.trim();
             if name.is_empty() {
                 continue;
@@ -525,6 +620,74 @@ pub mod busybox {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Возвращает сценарий из кодированной команды PowerShell.
+    ///
+    /// Тесты проверяют, что уходит на сервер по существу, а не как оно упаковано. Заодно
+    /// расшифровка здесь - проверка самой упаковки: криво закодированный сценарий
+    /// обратно не соберётся.
+    fn расшифровать(cmd: &str) -> String {
+        use base64::Engine as _;
+        let payload = cmd
+            .rsplit(' ')
+            .next()
+            .expect("в команде нет полезной части");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(payload)
+            .expect("не base64");
+        let words: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|p| u16::from_le_bytes([p[0], p[1]]))
+            .collect();
+        String::from_utf16(&words).expect("не UTF-16")
+    }
+
+    #[test]
+    fn сценарий_powershell_уходит_кодированным() {
+        // В открытом виде его портит оболочка сервера: `cmd.exe` считает кавычки парами
+        // и на середине команды обзора выпускал вертикальную черту из-под защиты - часть
+        // сценария выполнялась им самим. В кодированной строке разбирать нечего.
+        let cmd = ps("Get-Process | Select-Object -First 1");
+        assert!(cmd.starts_with("powershell -NoProfile -NonInteractive -EncodedCommand "));
+        assert!(
+            !cmd.contains('"'),
+            "кавычек в команде быть не должно: {cmd}"
+        );
+        assert!(!cmd.contains('|'), "вертикальной черты тоже: {cmd}");
+        assert!(
+            расшифровать(&cmd).ends_with("Get-Process | Select-Object -First 1"),
+            "сценарий не доехал целиком"
+        );
+    }
+
+    #[test]
+    fn зонды_разведены_по_оболочкам() {
+        // Живая проверка на Windows-сервере: зонд не отдавал ни строки. Точка с запятой
+        // разделяет команды только в POSIX, а в `cmd.exe` это обычный символ довода, и
+        // весь зонд читался как одна команда `uname` с мусором. Отсюда «непонятная»
+        // система и команды Linux, уходившие на Windows.
+        assert!(
+            !PROBE_CMD.contains("ver"),
+            "виндовому вопросу не место в POSIX-зонде"
+        );
+        assert!(
+            !PROBE_CMD.contains("%OS%"),
+            "cmd не раскроет переменную в POSIX-строке"
+        );
+        assert!(
+            !PROBE_WINDOWS_CMD.contains(';'),
+            "точка с запятой ломает разбор в cmd"
+        );
+
+        // А ответ второго зонда должен опознаваться как Windows - и в cmd, и в PowerShell
+        // он одинаков.
+        let (k, v) = detect(
+            "Microsoft Windows [Version 10.0.26200.9168]
+",
+        );
+        assert_eq!(k, Kind::Windows);
+        assert!(v.contains("10.0.26200"), "версия потерялась: {v}");
+    }
 
     #[test]
     fn обычный_linux_узнаётся_по_uname() {
@@ -621,7 +784,10 @@ WSearch\tStopped\tПоиск Windows
         let v = win::parse_logs(out);
         let text = v["text"].as_str().unwrap();
         assert!(text.contains("2026-09-05T10:00:00"), "нет времени: {text}");
-        assert!(text.contains("Служба не запустилась"), "нет сообщения: {text}");
+        assert!(
+            text.contains("Служба не запустилась"),
+            "нет сообщения: {text}"
+        );
     }
 
     #[test]
@@ -696,10 +862,15 @@ net\tEthernet\t1234567890\t987654321
     fn busybox_отдаёт_прочерк_вместо_выдуманной_загрузки() {
         // У BusyBox в `ps` нет колонки процессора вовсе. Ноль на этом месте читался бы
         // как «процесс простаивает» - это неправда, поэтому там null.
-        let out = "MT\t8000000\nPID   USER     RSS  STAT COMMAND\n    1 root      4664 S    sshd -D\n";
+        let out =
+            "MT\t8000000\nPID   USER     RSS  STAT COMMAND\n    1 root      4664 S    sshd -D\n";
         let v = busybox::parse_ps(out);
         let rows = v["rows"].as_array().unwrap();
-        assert_eq!(rows.len(), 1, "заголовок таблицы не должен попасть в строки");
+        assert_eq!(
+            rows.len(),
+            1,
+            "заголовок таблицы не должен попасть в строки"
+        );
         assert!(rows[0]["cpu"].is_null());
         assert_eq!(rows[0]["pid"], 1);
         assert_eq!(rows[0]["user"], "root");
@@ -744,9 +915,10 @@ net\tEthernet\t1234567890\t987654321
             service_cmd(Kind::BusyBox, "sshd", "start").unwrap(),
             "rc-service sshd start"
         );
-        assert!(service_cmd(Kind::Windows, "Spooler", "stop")
-            .unwrap()
-            .contains("Stop-Service -Name 'Spooler'"));
+        assert!(
+            расшифровать(&service_cmd(Kind::Windows, "Spooler", "stop").unwrap())
+                .ends_with("Stop-Service -Name 'Spooler'")
+        );
     }
 
     #[test]
@@ -760,7 +932,8 @@ net\tEthernet\t1234567890\t987654321
     #[test]
     fn завершение_процесса_зависит_от_системы() {
         assert_eq!(kill_cmd(Kind::Linux, 42).unwrap(), "kill 42");
-        assert!(kill_cmd(Kind::Windows, 42).unwrap().contains("Stop-Process -Id 42"));
+        assert!(расшифровать(&kill_cmd(Kind::Windows, 42).unwrap())
+            .ends_with("Stop-Process -Id 42 -Force"));
         // Первый процесс - это init: снимать его нельзя ни на одной системе.
         assert!(kill_cmd(Kind::Windows, 1).is_err());
     }

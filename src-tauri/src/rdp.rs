@@ -17,14 +17,17 @@
 //! Tauri, границ сообщений не хранит.
 
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 use tauri::ipc::{Channel, InvokeResponseBody};
 
 use crate::deskout::Out;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, ReadBuf};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
@@ -65,7 +68,6 @@ pub fn note(line: &str) {
 /// Живой сеанс: чем слать ввод, чем остановить и куда сейчас идут кадры.
 struct Live {
     input: mpsc::UnboundedSender<String>,
-    alive: Arc<AtomicBool>,
     /// Приёмник кадров. Подменяемый: при откреплении окна сеанс не рвётся, а переезжает.
     out: Out,
 }
@@ -88,18 +90,70 @@ pub struct Options {
     pub economy: bool,
     /// Отдать серверу готовый вход, чтобы он не спрашивал имя и пароль второй раз.
     pub autologon: bool,
+    /// Какую полосу объявить серверу: VPN включает его экономичный профиль.
+    pub network_profile: NetworkProfile,
+}
+
+#[derive(Clone, Copy)]
+pub enum NetworkProfile {
+    Vpn,
+    Lan,
+}
+
+impl NetworkProfile {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Vpn => "vpn",
+            Self::Lan => "lan",
+        }
+    }
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { color_depth: 32, economy: false, autologon: true }
+        Self {
+            color_depth: 16,
+            economy: true,
+            autologon: true,
+            network_profile: NetworkProfile::Vpn,
+        }
     }
 }
 
 /// Куда подключаться: напрямую или каналом внутри уже живой SSH-сессии.
 pub enum Target {
-    Tcp { host: String, port: u16 },
-    Ssh { handle: SharedHandle, host: String, port: u16 },
+    Tcp {
+        host: String,
+        port: u16,
+    },
+    Ssh {
+        handle: SharedHandle,
+        host: String,
+        port: u16,
+    },
+}
+
+/// Считает байты, не меняя способ копирования потока. Это объём RDP до упаковки в SSH,
+/// а не трафик VPN-интерфейса; второй снимается внешним baseline-скриптом.
+struct CountingReader<R> {
+    inner: R,
+    bytes: Arc<AtomicU64>,
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for CountingReader<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let result = Pin::new(&mut self.inner).poll_read(cx, buf);
+        if matches!(result, Poll::Ready(Ok(()))) {
+            self.bytes
+                .fetch_add((buf.filled().len() - before) as u64, Ordering::Relaxed);
+        }
+        result
+    }
 }
 
 /// Где лежит помощник.
@@ -110,16 +164,22 @@ pub enum Target {
 fn helper_path() -> Result<std::path::PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("не найти себя на диске: {e}"))?;
     let dir = exe.parent().ok_or("у приложения нет каталога")?;
-    let name = if cfg!(windows) { "serein-rdp.exe" } else { "serein-rdp" };
+    let name = if cfg!(windows) {
+        "serein-rdp.exe"
+    } else {
+        "serein-rdp"
+    };
     let p = dir.join(name);
     if p.exists() {
         return Ok(p);
     }
     // При запуске из исходников помощник лежит в своей цели сборки.
-    let dev = dir
-        .parent()
-        .and_then(|d| d.parent())
-        .map(|root| root.join("rdp-helper").join("target").join("release").join(name));
+    let dev = dir.parent().and_then(|d| d.parent()).map(|root| {
+        root.join("rdp-helper")
+            .join("target")
+            .join("release")
+            .join(name)
+    });
     match dev {
         Some(d) if d.exists() => Ok(d),
         _ => Err(format!(
@@ -159,7 +219,9 @@ pub async fn open(
     // Мост: то, что помощник пишет в локальный сокет, уходит на сервер, и наоборот.
     let bridge_alive = alive.clone();
     tokio::spawn(async move {
-        let Ok((sock, _)) = listener.accept().await else { return };
+        let Ok((sock, _)) = listener.accept().await else {
+            return;
+        };
         sock.set_nodelay(true).ok();
         match target {
             Target::Tcp { host, port } => {
@@ -197,15 +259,29 @@ pub async fn open(
         .arg(port.to_string())
         .arg("--user")
         .arg(&user)
-        .args(domain.iter().flat_map(|d| ["--domain".to_owned(), d.clone()]))
+        .args(
+            domain
+                .iter()
+                .flat_map(|d| ["--domain".to_owned(), d.clone()]),
+        )
         .arg("--width")
         .arg(size.0.to_string())
         .arg("--height")
         .arg(size.1.to_string())
         .arg("--color-depth")
         .arg(opts.color_depth.to_string())
-        .args(if opts.economy { vec!["--economy".to_owned()] } else { Vec::new() })
-        .args(if opts.autologon { Vec::new() } else { vec!["--no-autologon".to_owned()] })
+        .arg("--network-profile")
+        .arg(opts.network_profile.as_str())
+        .args(if opts.economy {
+            vec!["--economy".to_owned()]
+        } else {
+            Vec::new()
+        })
+        .args(if opts.autologon {
+            Vec::new()
+        } else {
+            vec!["--no-autologon".to_owned()]
+        })
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         // Раньше здесь стоял `null`, и это было ошибкой: при любой неполадке приложение
@@ -243,10 +319,18 @@ pub async fn open(
     ));
 
     let stdout = child.stdout.take().ok_or("у помощника нет вывода")?;
-    spawn_pipes(id.clone(), child, stdin, stdout, rx, alive.clone(), out.clone());
+    spawn_pipes(
+        id.clone(),
+        child,
+        stdin,
+        stdout,
+        rx,
+        alive.clone(),
+        out.clone(),
+    );
 
     crate::deskout::remember(&ssh_id, crate::deskout::Kind::Rdp, &id);
-    with_sessions(|m| m.insert(id, Live { input: tx, alive, out }));
+    with_sessions(|m| m.insert(id, Live { input: tx, out }));
     Ok(())
 }
 
@@ -256,10 +340,42 @@ where
     A: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     B: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let (mut ar, mut aw) = tokio::io::split(a);
-    let (mut br, mut bw) = tokio::io::split(b);
+    let (ar, mut aw) = tokio::io::split(a);
+    let (br, mut bw) = tokio::io::split(b);
+    let up_bytes = Arc::new(AtomicU64::new(0));
+    let down_bytes = Arc::new(AtomicU64::new(0));
+    let mut ar = CountingReader {
+        inner: ar,
+        bytes: up_bytes.clone(),
+    };
+    let mut br = CountingReader {
+        inner: br,
+        bytes: down_bytes.clone(),
+    };
     let up = async { tokio::io::copy(&mut ar, &mut bw).await };
     let down = async { tokio::io::copy(&mut br, &mut aw).await };
+    let stats_alive = alive.clone();
+    let stats_up = up_bytes.clone();
+    let stats_down = down_bytes.clone();
+    let stats = tokio::spawn(async move {
+        let mut timer = tokio::time::interval(Duration::from_secs(5));
+        timer.tick().await;
+        let mut previous_up = 0u64;
+        let mut previous_down = 0u64;
+        while stats_alive.load(Ordering::Relaxed) {
+            timer.tick().await;
+            let current_up = stats_up.load(Ordering::Relaxed);
+            let current_down = stats_down.load(Ordering::Relaxed);
+            let up_mbps = (current_up - previous_up) as f64 * 8.0 / 5_000_000.0;
+            let down_mbps = (current_down - previous_down) as f64 * 8.0 / 5_000_000.0;
+            log(&format!(
+                "метрики RDP-потока: к серверу {up_mbps:.3} Мбит/с, от сервера {down_mbps:.3} Мбит/с; всего {current_up}/{current_down} Б (до SSH/VPN)"
+            ));
+            previous_up = current_up;
+            previous_down = current_down;
+        }
+    });
+    let started = Instant::now();
     // Кто из двух направлений кончился первым - это и есть причина обрыва, и знать её
     // важно: «к серверу больше не пишут» и «сервер больше не отвечает» - разные беды.
     tokio::select! {
@@ -273,6 +389,13 @@ where
         },
     }
     alive.store(false, Ordering::Relaxed);
+    stats.abort();
+    log(&format!(
+        "итог RDP-потока за {:.3} с: к серверу {} Б, от сервера {} Б (до SSH/VPN)",
+        started.elapsed().as_secs_f64(),
+        up_bytes.load(Ordering::Relaxed),
+        down_bytes.load(Ordering::Relaxed)
+    ));
 }
 
 /// Две задачи: кадры от помощника в интерфейс, команды из интерфейса помощнику.
@@ -306,6 +429,10 @@ fn spawn_pipes(
         let mut r = BufReader::new(stdout);
         let mut len = [0u8; 4];
         let mut frames = 0u64;
+        let mut frame_bytes = 0u64;
+        let mut last_report = Instant::now();
+        let mut last_report_frames = 0u64;
+        let mut last_report_bytes = 0u64;
         // Причина остановки называется словами: молчаливо оборвавшийся поток кадров
         // выглядит на экране как чёрный прямоугольник, и отличить «сервер отключился»
         // от «мы сами сломались» по нему невозможно.
@@ -338,8 +465,24 @@ fn spawn_pipes(
                 break "интерфейс больше не слушает".to_owned();
             }
             frames += 1;
+            frame_bytes += n as u64;
+            if last_report.elapsed() >= Duration::from_secs(5) {
+                let seconds = last_report.elapsed().as_secs_f64();
+                let interval_frames = frames - last_report_frames;
+                let interval_bytes = frame_bytes - last_report_bytes;
+                log(&format!(
+                    "метрики IPC: {frames} кадров, {frame_bytes} Б суммарно; за интервал {:.2} кадр/с, {:.3} МиБ/с",
+                    interval_frames as f64 / seconds,
+                    interval_bytes as f64 / 1024.0 / 1024.0 / seconds
+                ));
+                last_report = Instant::now();
+                last_report_frames = frames;
+                last_report_bytes = frame_bytes;
+            }
         };
-        log(&format!("поток кадров окончен: {why}; всего кадров {frames}"));
+        log(&format!(
+            "поток кадров окончен: {why}; всего кадров {frames}, {frame_bytes} Б"
+        ));
         alive.store(false, Ordering::Relaxed);
         // Помощник мог уже уйти сам; если нет - не оставляем его висеть.
         let _ = child.kill().await;
@@ -363,6 +506,21 @@ pub fn pointer(id: &str, x: u16, y: u16, buttons: u8) {
 
 pub fn key(id: &str, code: u16, down: bool) {
     send(id, format!("k {code} {}\n", u8::from(down)));
+}
+
+pub fn wheel(id: &str, vertical: bool, delta: i16) {
+    if delta != 0 {
+        send(id, format!("w {} {delta}\n", u8::from(vertical)));
+    }
+}
+
+/// Защищённая последовательность отправляется одним элементом очереди, чтобы между
+/// нажатиями не вклинилось движение мыши или другая клавиша из интерфейса.
+pub fn secure_attention(id: &str) {
+    send(
+        id,
+        "k 29 1\nk 56 1\nk 57427 1\nk 57427 0\nk 56 0\nk 29 0\n".to_owned(),
+    );
 }
 
 /// Переводит выдачу кадров в другое окно и просит перерисовать экран целиком.
@@ -392,8 +550,10 @@ pub fn close(id: &str) {
     crate::deskout::forget(id);
     with_sessions(|m| {
         if let Some(s) = m.remove(id) {
+            // Не гасим `alive` здесь: писатель проверяет его перед записью, и прежний
+            // порядок выбрасывал `q` прямо перед отправкой. Помощник получает команду,
+            // закрывает сокет, после чего обе задачи завершаются естественно.
             let _ = s.input.send("q\n".to_owned());
-            s.alive.store(false, Ordering::Relaxed);
         }
     });
 }
@@ -404,7 +564,6 @@ pub fn close_all() {
         for (id, s) in m.drain() {
             crate::deskout::forget(&id);
             let _ = s.input.send("q\n".to_owned());
-            s.alive.store(false, Ordering::Relaxed);
         }
     });
 }
@@ -420,6 +579,7 @@ mod tests {
         assert_eq!(format!("p {} {} {}\n", 10, 20, 1), "p 10 20 1\n");
         assert_eq!(format!("k {} {}\n", 65, u8::from(true)), "k 65 1\n");
         assert_eq!(format!("k {} {}\n", 65, u8::from(false)), "k 65 0\n");
+        assert_eq!(format!("w {} {}\n", u8::from(true), -120), "w 1 -120\n");
     }
 
     #[test]

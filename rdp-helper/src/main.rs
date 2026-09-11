@@ -14,7 +14,8 @@
 //! наружу здесь ничего не открывается, и никакой своей сетевой политики у помощника нет.
 //!
 //! Запуск: `serein-rdp --port <локальный порт> --user <имя> [--domain <домен>]
-//!          [--width W] [--height H] [--color-depth 32|24|16] [--economy] [--no-autologon]`,
+//!          [--width W] [--height H] [--color-depth 32|24|16] [--network-profile vpn|lan]
+//!          [--economy] [--no-autologon]`,
 //! пароль - первой строкой стандартного ввода.
 //! Пароль не берётся доводом намеренно: строка запуска видна в списке процессов.
 
@@ -55,12 +56,10 @@ impl ironrdp_async::NetworkClient for NoKdc {
     }
 }
 
-use ironrdp::connector::{
-    self, ClientConnector, ConnectionResult, Credentials, DesktopSize,
-};
+use ironrdp::connector::{self, ClientConnector, ConnectionResult, Credentials, DesktopSize};
+use ironrdp::input::{Database, MouseButton, MousePosition, Operation, Scancode, WheelRotations};
 use ironrdp::pdu::gcc::KeyboardType;
 use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
-use ironrdp::input::{Database, MouseButton, MousePosition, Operation, Scancode};
 use ironrdp::session::{ActiveStageBuilder, ActiveStageOutput};
 
 /// Разобранная строка запуска. Всё, кроме пароля: тот приходит по входу.
@@ -77,6 +76,14 @@ struct Args {
     economy: bool,
     /// Отдавать ли серверу готовый вход. Выключено - сервер спросит имя и пароль сам.
     autologon: bool,
+    /// Профиль полосы, которую сервер учитывает при выборе оформления и кодирования.
+    network_profile: NetworkProfile,
+}
+
+#[derive(Clone, Copy)]
+enum NetworkProfile {
+    Vpn,
+    Lan,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -87,6 +94,7 @@ fn parse_args() -> Result<Args, String> {
     let mut color_depth = 32u32;
     let mut economy = false;
     let mut autologon = true;
+    let mut network_profile = NetworkProfile::Vpn;
 
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -107,6 +115,14 @@ fn parse_args() -> Result<Args, String> {
             }
             "--economy" => economy = true,
             "--no-autologon" => autologon = false,
+            "--network-profile" => {
+                network_profile = match it.next().as_deref() {
+                    Some("vpn") => NetworkProfile::Vpn,
+                    Some("lan") => NetworkProfile::Lan,
+                    Some(other) => return Err(format!("неизвестный профиль сети: {other}")),
+                    None => return Err("не задано значение --network-profile".to_owned()),
+                }
+            }
             other => return Err(format!("неизвестный довод: {other}")),
         }
     }
@@ -120,6 +136,7 @@ fn parse_args() -> Result<Args, String> {
         color_depth,
         economy,
         autologon,
+        network_profile,
     })
 }
 
@@ -140,14 +157,20 @@ fn config(a: &Args, password: String) -> connector::Config {
     };
 
     connector::Config {
-        desktop_size: DesktopSize { width: a.width, height: a.height },
+        desktop_size: DesktopSize {
+            width: a.width,
+            height: a.height,
+        },
         desktop_scale_factor: 0,
         // TLS обязателен, NLA тоже: без них современный Windows соединение не примет,
         // а разрешать откат на старую защиту RDP значило бы предлагать худший вариант
         // молча.
         enable_tls: true,
         enable_credssp: true,
-        credentials: Credentials::UsernamePassword { username: a.user.clone(), password },
+        credentials: Credentials::UsernamePassword {
+            username: a.user.clone(),
+            password,
+        },
         domain: a.domain.clone(),
         client_build: 0,
         client_name: "serein".to_owned(),
@@ -194,10 +217,12 @@ fn config(a: &Args, password: String) -> connector::Config {
         enable_server_pointer: true,
         pointer_software_rendering: false,
         multitransport_flags: None,
-        // Соединение объявляем как локальную сеть: мы и правда ходим внутри SSH-канала
-        // до машины рядом, а не через модем. От этого сервер выбирает, чем жертвовать
-        // ради скорости - при «медленном» соединении он отключил бы часть оформления.
-        connection_type: ironrdp::pdu::gcc::ConnectionType::Lan,
+        // Сервер видит локальный конец SSH-моста, но реальная полоса остаётся полосой
+        // VPN. Если соврать ему про LAN, он выбирает качество, способное забить туннель.
+        connection_type: match a.network_profile {
+            NetworkProfile::Vpn => ironrdp::pdu::gcc::ConnectionType::BroadbandLow,
+            NetworkProfile::Lan => ironrdp::pdu::gcc::ConnectionType::Lan,
+        },
         // Старую защиту RDP не предлагаем: у нас есть TLS и NLA, а без них соединение
         // было бы слабее ровно там, где идут нажатия клавиш.
         enable_standard_rdp_security: false,
@@ -293,7 +318,11 @@ async fn run(a: Args, password: String, out: &mut impl Write) -> Result<(), Stri
     .await
     .map_err(|e| format!("соединение не установилось: {e}"))?;
 
-    session(connection, upgraded_framed, out).await
+    let frame_period = match a.network_profile {
+        NetworkProfile::Vpn => std::time::Duration::from_millis(33),
+        NetworkProfile::Lan => std::time::Duration::from_millis(16),
+    };
+    session(connection, upgraded_framed, out, frame_period).await
 }
 
 /// Основной цикл: кадры наружу, команды внутрь.
@@ -301,6 +330,7 @@ async fn session(
     connection: ConnectionResult,
     framed: ironrdp_tokio::TokioFramed<Box<dyn AsyncReadWrite + Unpin + Send + Sync>>,
     out: &mut impl Write,
+    frame_period: std::time::Duration,
 ) -> Result<(), String> {
     // Делим поток надвое: чтение держит свою половину всё время ожидания кадра, и
     // отправить в неё ответ на нажатие клавиши в этот момент было бы нечем.
@@ -349,6 +379,14 @@ async fn session(
     // Состояние клавиатуры и мыши держит сама библиотека: она же гасит команды, которые
     // ничего не меняют, - лишние нажатия одной и той же клавиши на сервер не поедут.
     let mut input_db = Database::new();
+    // Сервер часто присылает один визуальный кадр десятками прямоугольников. Если
+    // немедленно протолкнуть каждый через stdout и IPC, очередь растёт быстрее экрана.
+    // Сохраняем все области в локальном framebuffer, а наружу выдаём пачку 30 раз/с для
+    // VPN и до 60 раз/с для LAN. Перекрывающиеся области объединяются без потери пикселей.
+    let mut dirty = DirtyRegions::default();
+    let mut frame_tick = tokio::time::interval(frame_period);
+    frame_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    frame_tick.tick().await;
 
     // Пока поток команд жив, его слушаем. Закрылся - просто перестаём слушать: сеанс
     // от этого не заканчивается. Живая проверка против xrdp показала, почему это важно:
@@ -358,6 +396,24 @@ async fn session(
 
     loop {
         let payload = tokio::select! {
+            _ = frame_tick.tick(), if !dirty.is_empty() => {
+                for rect in dirty.take() {
+                    let px = crop(&image, rect.left, rect.top, rect.width(), rect.height());
+                    proto::send(
+                        out,
+                        &proto::packet(
+                            proto::KIND_RAW,
+                            rect.left,
+                            rect.top,
+                            rect.width(),
+                            rect.height(),
+                            &px,
+                        ),
+                    )
+                    .map_err(|e| format!("приложение не читает вывод: {e}"))?;
+                }
+                None
+            }
             frame = framed.read_pdu() => {
                 let (action, payload) = frame
                     .map_err(|e| format!("связь с сервером прервалась: {e}"))?;
@@ -405,6 +461,7 @@ async fn session(
                     // сеанса в другое окно: у нового окна пустой холст, а неподвижный
                     // рабочий стол сам по себе не пришлёт ничего.
                     proto::Cmd::Full => {
+                        dirty.clear();
                         let (fw, fh) = (image.width(), image.height());
                         proto::send(out, &proto::packet(proto::KIND_RESIZE, 0, 0, fw, fh, &[]))
                             .map_err(|e| format!("приложение не читает вывод: {e}"))?;
@@ -433,7 +490,9 @@ async fn session(
             }
         };
 
-        let Some((action, payload)) = payload else { continue };
+        let Some((action, payload)) = payload else {
+            continue;
+        };
 
         let outputs = stage
             .process(&mut image, action, &payload)
@@ -444,8 +503,10 @@ async fn session(
                 // Сервер принял новый размер и пересобирает сеанс. Пока эта
                 // последовательность не пройдена, обычных кадров не будет вовсе.
                 ActiveStageOutput::DeactivateAll => {
+                    dirty.clear();
                     let (nw, nh) =
-                        reactivate(&activation_factory, &mut framed, &mut writer, &mut stage).await?;
+                        reactivate(&activation_factory, &mut framed, &mut writer, &mut stage)
+                            .await?;
                     image = ironrdp::session::image::DecodedImage::new(
                         ironrdp::graphics::image_processing::PixelFormat::RgbA32,
                         nw,
@@ -464,18 +525,97 @@ async fn session(
                     let (x, y) = (region.left, region.top);
                     let rw = region.right.saturating_sub(region.left) + 1;
                     let rh = region.bottom.saturating_sub(region.top) + 1;
-                    // Порядок каналов менять не нужно: выше мы просим раскодировать
-                    // прямо в RGBA, а холст ждёт именно его. Лишняя перестановка здесь
-                    // однажды уже была, и синее показывалось красным.
-                    let px = crop(&image, x, y, rw, rh);
-                    proto::send(out, &proto::packet(proto::KIND_RAW, x, y, rw, rh, &px))
-                        .map_err(|e| format!("приложение не читает вывод: {e}"))?;
+                    dirty.add(Rect::from_xywh(x, y, rw, rh));
                 }
                 ActiveStageOutput::Terminate(reason) => {
                     return Err(format!("сервер завершил сеанс: {reason}"));
                 }
                 _ => {}
             }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Rect {
+    left: u16,
+    top: u16,
+    right: u16,
+    bottom: u16,
+}
+
+impl Rect {
+    fn from_xywh(x: u16, y: u16, w: u16, h: u16) -> Self {
+        Self {
+            left: x,
+            top: y,
+            right: x.saturating_add(w.saturating_sub(1)),
+            bottom: y.saturating_add(h.saturating_sub(1)),
+        }
+    }
+
+    fn width(self) -> u16 {
+        self.right.saturating_sub(self.left) + 1
+    }
+
+    fn height(self) -> u16 {
+        self.bottom.saturating_sub(self.top) + 1
+    }
+
+    fn touches(self, other: Self) -> bool {
+        u32::from(self.left) <= u32::from(other.right) + 1
+            && u32::from(other.left) <= u32::from(self.right) + 1
+            && u32::from(self.top) <= u32::from(other.bottom) + 1
+            && u32::from(other.top) <= u32::from(self.bottom) + 1
+    }
+
+    fn union(self, other: Self) -> Self {
+        Self {
+            left: self.left.min(other.left),
+            top: self.top.min(other.top),
+            right: self.right.max(other.right),
+            bottom: self.bottom.max(other.bottom),
+        }
+    }
+}
+
+#[derive(Default)]
+struct DirtyRegions(Vec<Rect>);
+
+impl DirtyRegions {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    fn take(&mut self) -> Vec<Rect> {
+        std::mem::take(&mut self.0)
+    }
+
+    fn add(&mut self, mut incoming: Rect) {
+        let mut i = 0;
+        while i < self.0.len() {
+            if incoming.touches(self.0[i]) {
+                incoming = incoming.union(self.0.swap_remove(i));
+                i = 0;
+            } else {
+                i += 1;
+            }
+        }
+        self.0.push(incoming);
+
+        // Даже патологическая россыпь областей не должна создать неограниченную пачку.
+        // При достижении предела один общий прямоугольник дешевле очереди из сотен IPC.
+        if self.0.len() >= 32 {
+            let all = self
+                .0
+                .drain(..)
+                .reduce(Rect::union)
+                .expect("список не пуст");
+            self.0.push(all);
         }
     }
 }
@@ -559,8 +699,16 @@ fn to_operations(cmd: proto::Cmd) -> Vec<Operation> {
         }
         proto::Cmd::Key { code, down } => {
             let sc = Scancode::from_u16(code);
-            vec![if down { Operation::KeyPressed(sc) } else { Operation::KeyReleased(sc) }]
+            vec![if down {
+                Operation::KeyPressed(sc)
+            } else {
+                Operation::KeyReleased(sc)
+            }]
         }
+        proto::Cmd::Wheel { vertical, delta } => vec![Operation::WheelRotations(WheelRotations {
+            is_vertical: vertical,
+            rotation_units: delta,
+        })],
         // Эти разбираются раньше, до перевода в события ввода: смена размера идёт
         // своим каналом, полный кадр - это вообще не ввод, а выход заканчивает сеанс.
         proto::Cmd::Resize { .. } | proto::Cmd::Full | proto::Cmd::Quit => Vec::new(),
@@ -571,13 +719,7 @@ fn to_operations(cmd: proto::Cmd) -> Vec<Operation> {
 ///
 /// Обновления приходят областями, а не целым экраном - в этом весь смысл: пересылать
 /// восемь мегабайт на каждое движение курсора нельзя.
-fn crop(
-    image: &ironrdp::session::image::DecodedImage,
-    x: u16,
-    y: u16,
-    w: u16,
-    h: u16,
-) -> Vec<u8> {
+fn crop(image: &ironrdp::session::image::DecodedImage, x: u16, y: u16, w: u16, h: u16) -> Vec<u8> {
     let stride = usize::from(image.width()) * 4;
     let data = image.data();
     let mut out = Vec::with_capacity(usize::from(w) * usize::from(h) * 4);
@@ -591,4 +733,33 @@ fn crop(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+
+    #[test]
+    fn соседние_области_объединяются_без_потери_краёв() {
+        let mut dirty = DirtyRegions::default();
+        dirty.add(Rect::from_xywh(10, 20, 5, 4));
+        dirty.add(Rect::from_xywh(15, 20, 3, 4));
+        assert_eq!(
+            dirty.take(),
+            vec![Rect {
+                left: 10,
+                top: 20,
+                right: 17,
+                bottom: 23,
+            }]
+        );
+    }
+
+    #[test]
+    fn раздельные_области_не_раздуваются_в_полный_кадр() {
+        let mut dirty = DirtyRegions::default();
+        dirty.add(Rect::from_xywh(0, 0, 2, 2));
+        dirty.add(Rect::from_xywh(100, 100, 2, 2));
+        assert_eq!(dirty.take().len(), 2);
+    }
 }

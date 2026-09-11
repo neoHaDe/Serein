@@ -102,3 +102,23 @@ export function isModifier(code: string): boolean {
 export function buttonMask(buttons: number): number {
   return buttons & 0b111
 }
+
+/**
+ * Сочетание, которое при выключенном перехвате должно остаться у Serein/Windows.
+ * Обычный текст всё равно уходит в RDP; иначе выключение настройки отключило бы
+ * клавиатуру целиком вместо одних сочетаний.
+ */
+export function isRdpShortcut(
+  e: Pick<KeyboardEvent, 'code' | 'ctrlKey' | 'altKey' | 'metaKey'>
+): boolean {
+  return e.ctrlKey || e.altKey || e.metaKey || e.code === 'Tab' || /^F(?:[1-9]|1[0-2])$/.test(e.code)
+}
+
+/** Перевод браузерной прокрутки в единицы RDP; знак у DOM и RDP противоположный. */
+export function wheelRotation(delta: number, mode: number): number {
+  if (!Number.isFinite(delta) || delta === 0) return 0
+  const scale = mode === 1 ? 120 : mode === 2 ? 240 : 1
+  let units = Math.round(-delta * scale)
+  if (units === 0) units = delta > 0 ? -1 : 1
+  return Math.max(-256, Math.min(255, units))
+}

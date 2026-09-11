@@ -40,6 +40,9 @@ interface RdpDetected {
   summary: string
   canInstall: boolean
   canStart: boolean
+  /** Сервер на Windows: рабочий стол встроен в систему. */
+  windows?: boolean
+  firewall?: string
 }
 
 type Screen = 'choose' | 'vnc' | 'rdp' | 'setup' | 'rdp-setup'
@@ -392,7 +395,9 @@ function RdpSetup({
     }
   }
 
-  const needSudo = info?.sudo !== 'без пароля' && !sudo
+  // На Windows пароль sudo спрашивать не у кого: там права администратора у самой
+  // сессии, и либо они есть, либо кнопки нет.
+  const needSudo = !info?.windows && info?.sudo !== 'без пароля' && !sudo
 
   return (
     <div className="ws-panel fill">
@@ -432,7 +437,7 @@ function RdpSetup({
           </p>
         )}
 
-        {(info?.canInstall || info?.canStart) && (
+        {!info?.windows && (info?.canInstall || info?.canStart) && (
           <div className="desk-block">
             <span className="desk-block-title">Пароль sudo</span>
             <label>
@@ -470,8 +475,14 @@ function RdpSetup({
 
         {info?.canStart && (
           <div className="desk-block">
-            <span className="desk-block-title">Запустить рабочий стол</span>
-            <p className="hint">Служба включится и будет подниматься при старте сервера.</p>
+            <span className="desk-block-title">
+              {info.windows ? 'Включить удалённый рабочий стол' : 'Запустить рабочий стол'}
+            </span>
+            <p className="hint">
+              {info.windows
+                ? 'Снимет запрет в настройках, откроет межсетевой экран и поднимет службу.'
+                : 'Служба включится и будет подниматься при старте сервера.'}
+            </p>
             <button
               className="primary"
               disabled={busy !== '' || needSudo}
@@ -483,9 +494,16 @@ function RdpSetup({
                 )
               }
             >
-              {busy === 'start' ? 'Запускаю…' : 'Запустить и включить'}
+              {busy === 'start' ? 'Включаю…' : info.windows ? 'Включить' : 'Запустить и включить'}
             </button>
           </div>
+        )}
+
+        {info?.windows && info.firewall === 'off' && (
+          <p className="hint">Межсетевой экран закрыт для рабочего стола.</p>
+        )}
+        {info?.windows && !info.canStart && info.listening.length === 0 && (
+          <p className="hint">Чтобы включить, нужны права администратора на сервере.</p>
         )}
 
         <p className="hint">Вход по учётной записи сервера, отдельного пароля нет.</p>

@@ -52,6 +52,34 @@ pub const CMD: &str = concat!(
     "else echo 'VIRT:none'; fi"
 );
 
+/// То же самое для Windows - сценарием PowerShell, кодировать его будет `platform::ps`.
+///
+/// Метки строк те же, что и в команде для юниксов: `CPU`, `CORES`, `THREADS`, `MHZ`,
+/// `GPU`, `MEM`, `VIRT`. Разбор от этого остаётся один на обе системы, и панель не может
+/// показать на одной то, чего не показывает на другой.
+///
+/// Тип памяти приходит числом по таблице SMBIOS - переводим в привычное имя. Виртуальность
+/// определяем по производителю и модели: `HypervisorPresent` на машине с включённым
+/// Hyper-V истинно и у самого хозяина, так что доверять ему нельзя.
+pub const CMD_WINDOWS: &str = concat!(
+    "$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1; ",
+    "\"CPU:$($cpu.Name.Trim())\"; ",
+    "\"CORES:$((Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum)\"; ",
+    "\"THREADS:$((Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum)\"; ",
+    "\"MHZ:$($cpu.MaxClockSpeed)\"; ",
+    "Get-CimInstance Win32_VideoController | ForEach-Object { \"GPU:$($_.Name)|$($_.DriverVersion)\" }; ",
+    "$m = Get-CimInstance Win32_PhysicalMemory | Select-Object -First 1; ",
+    "if ($m) { ",
+    "  $t = switch ($m.SMBIOSMemoryType) { 20 {'DDR'} 21 {'DDR2'} 24 {'DDR3'} 26 {'DDR4'} 34 {'DDR5'} default {''} }; ",
+    "  \"MEM:$(if ($m.Speed) { \"$($m.Speed) MT/s\" })|$t\" ",
+    "} else { 'MEMWHY:сведения о модулях памяти недоступны' }; ",
+    "$cs = Get-CimInstance Win32_ComputerSystem; ",
+    "$virt = switch -Wildcard (\"$($cs.Manufacturer) $($cs.Model)\") { ",
+    "  '*VMware*' {'VMware'} '*VirtualBox*' {'VirtualBox'} '*Virtual Machine*' {'Hyper-V'} ",
+    "  '*KVM*' {'KVM'} '*QEMU*' {'QEMU'} '*Xen*' {'Xen'} default {'none'} }; ",
+    "\"VIRT:$virt\""
+);
+
 /// Человеческое имя производителя по числовому коду PCI.
 ///
 /// Без `lspci` в ответе остаются голые идентификаторы вида `0x1002:0x1638`, а по ним
@@ -104,7 +132,9 @@ pub fn parse(stdout: &str) -> Value {
     let mut virt = String::new();
 
     for line in stdout.lines() {
-        let Some((tag, val)) = line.split_once(':') else { continue };
+        let Some((tag, val)) = line.split_once(':') else {
+            continue;
+        };
         let val = val.trim();
         match tag.trim() {
             "CPU" => cpu = val.to_string(),
@@ -171,6 +201,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ответ_windows_разбирается_тем_же_разбором() {
+        // Ровно то, что отвечает настоящая машина: проверено вживую.
+        let out = concat!(
+            "CPU:AMD Ryzen 7 9800X3D 8-Core Processor\n",
+            "CORES:8\n",
+            "THREADS:16\n",
+            "MHZ:4700\n",
+            "GPU:NVIDIA GeForce RTX 5080|32.0.16.1088\n",
+            "MEM:6000 MT/s|DDR5\n",
+            "VIRT:none\n"
+        );
+        let v = parse(out);
+        assert_eq!(v["cpu"], "AMD Ryzen 7 9800X3D 8-Core Processor");
+        assert_eq!(v["cores"], 8);
+        assert_eq!(
+            v["threads"], 16,
+            "потоков больше ядер - показываем оба числа"
+        );
+        assert_eq!(v["mhz"], 4700);
+        assert_eq!(v["gpus"][0]["name"], "NVIDIA GeForce RTX 5080");
+        assert_eq!(v["gpus"][0]["driver"], "32.0.16.1088");
+        assert_eq!(v["memType"], "DDR5");
+        assert!(
+            v.get("virt").is_none(),
+            "«none» - это железо, писать о нём нечего"
+        );
+    }
+
+    #[test]
     fn разбирает_обычный_ответ() {
         let out = concat!(
             "CPU:AMD Ryzen 7 5800H with Radeon Graphics\n",
@@ -210,7 +269,10 @@ mod tests {
         let v = parse("MEM:3200 MT/s|DDR4\nMEMWHY:нужны права root\n");
         assert_eq!(v["memSpeed"], "3200 MT/s");
         assert_eq!(v["memType"], "DDR4");
-        assert!(v.get("memWhy").is_none(), "причина рядом с ответом сбивает с толку");
+        assert!(
+            v.get("memWhy").is_none(),
+            "причина рядом с ответом сбивает с толку"
+        );
     }
 
     #[test]
@@ -246,7 +308,10 @@ mod tests {
     #[test]
     fn готовое_имя_от_lspci_не_трогаем() {
         let v = parse("GPU:Advanced Micro Devices, Inc. [AMD/ATI] Cezanne|amdgpu\n");
-        assert_eq!(v["gpus"][0]["name"], "Advanced Micro Devices, Inc. [AMD/ATI] Cezanne");
+        assert_eq!(
+            v["gpus"][0]["name"],
+            "Advanced Micro Devices, Inc. [AMD/ATI] Cezanne"
+        );
     }
 
     #[test]

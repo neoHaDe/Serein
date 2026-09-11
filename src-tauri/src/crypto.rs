@@ -16,20 +16,44 @@ pub struct Kdf {
 }
 
 /// Набор 2009 года: им зашифровано всё, что создано до 2026-08-30. Читаем, но не пишем.
-pub const KDF_LEGACY: Kdf = Kdf { log_n: 14, r: 8, p: 1 };
+pub const KDF_LEGACY: Kdf = Kdf {
+    log_n: 14,
+    r: 8,
+    p: 1,
+};
 
 /// Текущий набор - рекомендация OWASP для scrypt.
 ///
 /// N=2^17 это 128 МБ памяти на попытку против 16 МБ у прежнего: замер на рабочей машине
 /// дал 154 мс вместо 19 мс. Для разблокировки раз в сессию разница незаметна, а перебор
 /// украденного файла дорожает восьмикратно - а это единственное, ради чего KDF и нужен.
-pub const KDF_CURRENT: Kdf = Kdf { log_n: 17, r: 8, p: 1 };
+pub const KDF_CURRENT: Kdf = Kdf {
+    log_n: 17,
+    r: 8,
+    p: 1,
+};
+
+/// При чтении принимаем только наборы, которые когда-либо записывал Serein.
+///
+/// Параметры из заголовка не аутентифицированы до запуска scrypt. Проверки самого
+/// крейта не являются лимитом стоимости: формально допустимый набор может потребовать
+/// гигабайты памяти. Поэтому расширять список нужно только вместе с новой версией
+/// формата и тестом совместимости.
+fn validate_kdf(k: Kdf) -> Result<(), String> {
+    if matches!(k, KDF_LEGACY | KDF_CURRENT) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Неподдерживаемые параметры scrypt: logN={}, r={}, p={}",
+            k.log_n, k.r, k.p
+        ))
+    }
+}
 
 pub fn derive_key_with(password: &str, salt: &[u8], k: Kdf) -> Result<[u8; 32], String> {
+    validate_kdf(k)?;
     let mut out = [0u8; 32];
-    // Мусорные параметры из чужого файла не должны ронять приложение - откатываемся
-    // на прежний набор: хуже, чем хотелось, но лучше, чем паника в чужом коде.
-    let params = Params::new(k.log_n, k.r, k.p, 32).or_else(|_| Params::new(14, 8, 1, 32))
+    let params = Params::new(k.log_n, k.r, k.p, 32)
         .map_err(|_| "Недопустимые параметры scrypt".to_string())?;
     scrypt(password.as_bytes(), salt, &params, &mut out)
         .map_err(|_| "Не удалось вывести ключ (scrypt)".to_string())?;
@@ -106,19 +130,20 @@ pub fn encrypt_with_password(plaintext: &str, password: &str) -> Result<String, 
 
 pub fn decrypt_with_password(packed: &str, password: &str) -> Result<String, String> {
     let buf = STANDARD.decode(packed.trim()).map_err(|e| e.to_string())?;
-    // Формат 2 узнаём по метке; всё остальное - прежний формат без параметров.
-    // Случайная соль могла бы начаться с тех же четырёх байт (шанс 1 к 4 миллиардам),
-    // поэтому при неудаче формата 2 честно пробуем прежний, а не сдаёмся.
-    let v2 = buf.starts_with(V2_MAGIC) && buf.len() >= 4 + 3 + 44;
-    if v2 {
+    // Метка означает формат 2 однозначно. Откат к старому KDF после неизвестных
+    // параметров скрыл бы повреждение заголовка и снова сделал бы его неограниченным
+    // входом для scrypt.
+    if buf.starts_with(V2_MAGIC) {
+        if buf.len() < 4 + 3 + 44 {
+            return Err("Повреждённый файл формата SRN2".into());
+        }
         let k = Kdf {
             log_n: buf[4],
             r: buf[5] as u32,
             p: buf[6] as u32,
         };
-        if let Ok(txt) = open_packet(&buf[7..], password, k) {
-            return Ok(txt);
-        }
+        validate_kdf(k)?;
+        return open_packet(&buf[7..], password, k);
     }
     open_packet(&buf, password, KDF_LEGACY)
 }
@@ -169,7 +194,9 @@ mod tests {
         let key = derive_key_with("pass", &salt, KDF_LEGACY).expect("scrypt в тесте");
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
         let iv = rand_bytes(12);
-        let ct = cipher.encrypt(Nonce::from_slice(&iv), secret.as_bytes()).unwrap();
+        let ct = cipher
+            .encrypt(Nonce::from_slice(&iv), secret.as_bytes())
+            .unwrap();
         let (body, tag) = ct.split_at(ct.len() - 16);
         let mut out = Vec::new();
         out.extend_from_slice(&salt);
@@ -190,7 +217,10 @@ mod tests {
         let buf = STANDARD.decode(&packed).unwrap();
         assert_eq!(&buf[0..4], V2_MAGIC, "нет метки формата");
         assert_eq!(buf[4], KDF_CURRENT.log_n, "записан не текущий log2(N)");
-        assert!(KDF_CURRENT.log_n > KDF_LEGACY.log_n, "новый набор должен быть строже");
+        assert!(
+            KDF_CURRENT.log_n > KDF_LEGACY.log_n,
+            "новый набор должен быть строже"
+        );
     }
 
     #[test]
@@ -249,13 +279,45 @@ mod tests {
         // роняет команду целиком и пользователь видит пустое окно без объяснения.
         let key = key("pw", &[3u8; 16]);
         for bad in ["", "не-base64!!", "AAAA", "***"] {
-            assert!(aes_decrypt(bad, &key).is_err(), "должно быть Err на {:?}", bad);
+            assert!(
+                aes_decrypt(bad, &key).is_err(),
+                "должно быть Err на {:?}",
+                bad
+            );
         }
+    }
+
+    #[test]
+    fn untrusted_kdf_is_rejected_before_scrypt() {
+        let hostile = Kdf {
+            log_n: 22,
+            r: 8,
+            p: 1,
+        };
+        let err = derive_key_with("pw", &[0u8; 16], hostile).unwrap_err();
+        assert!(err.contains("Неподдерживаемые параметры"));
+
+        // Минимально корректная оболочка SRN2 с тем же дорогим набором. До соли и
+        // шифртекста дело не должно дойти.
+        let mut packet = Vec::from(V2_MAGIC.as_slice());
+        packet.extend_from_slice(&[hostile.log_n, hostile.r as u8, hostile.p as u8]);
+        packet.extend_from_slice(&[0u8; 44]);
+        let err = decrypt_with_password(&STANDARD.encode(packet), "pw").unwrap_err();
+        assert!(err.contains("Неподдерживаемые параметры"));
+    }
+
+    #[test]
+    fn malformed_v2_does_not_fall_back_to_legacy() {
+        let err = decrypt_with_password(&STANDARD.encode(V2_MAGIC), "pw").unwrap_err();
+        assert!(err.contains("SRN2"));
     }
 
     #[test]
     fn empty_plaintext_survives_round_trip() {
         let packed = encrypt_with_password("", "master").expect("шифрование");
-        assert_eq!(decrypt_with_password(&packed, "master").expect("расшифровка"), "");
+        assert_eq!(
+            decrypt_with_password(&packed, "master").expect("расшифровка"),
+            ""
+        );
     }
 }

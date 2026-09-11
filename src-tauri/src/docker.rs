@@ -2,7 +2,9 @@
 
 use serde_json::{json, Value};
 
-pub const LIST_CMD: &str = "docker ps -a --no-trunc --format '{{json .}}'";
+/// Кавычки двойные не по вкусу, а по необходимости: одинарные `cmd.exe` не считает
+/// кавычками вовсе и передаёт докеру обломки шаблона. Двойные понимают все три оболочки.
+pub const LIST_CMD: &str = "docker ps -a --no-trunc --format \"{{json .}}\"";
 
 const ACTIONS: &[&str] = &["start", "stop", "restart", "remove"];
 
@@ -10,7 +12,13 @@ pub fn parse_list(code: i32, stdout: &str, stderr: &str) -> Value {
     if code != 0 {
         let err = stderr.trim();
         let low = err.to_lowercase();
-        let msg = if low.contains("not found") || low.contains("command not found") || low.contains("not installed") {
+        // «is not recognized as an internal or external command» - это `cmd.exe`
+        // сообщает, что программы нет. Текст непривычный, смысл тот же.
+        let msg = if low.contains("not found")
+            || low.contains("command not found")
+            || low.contains("not installed")
+            || low.contains("is not recognized")
+        {
             "Docker не установлен на сервере".to_string()
         } else if low.contains("permission denied") || low.contains("cannot connect") {
             "Нет доступа к Docker (нужны права / запущен ли демон?)".to_string()
@@ -29,7 +37,11 @@ pub fn parse_list(code: i32, stdout: &str, stderr: &str) -> Value {
             continue;
         }
         if let Ok(p) = serde_json::from_str::<Value>(s) {
-            let status = p.get("Status").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let status = p
+                .get("Status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let id = p.get("ID").and_then(|v| v.as_str()).unwrap_or("");
             let state = p
                 .get("State")
@@ -102,7 +114,7 @@ pub fn action_cmd(id: &str, action: &str) -> Option<String> {
 
 pub fn stats_cmd(id: &str) -> String {
     format!(
-        "docker stats --no-stream --format '{{{{json .}}}}' {}",
+        "docker stats --no-stream --format \"{{{{json .}}}}\" {}",
         safe_id(id)
     )
 }
@@ -113,12 +125,19 @@ pub fn logs_cmd(id: &str) -> String {
 
 fn safe_container_path(p: &str) -> Option<String> {
     let p = p.trim();
-    if p.is_empty() || p.contains("..") || p.contains('\n') || p.contains(';') || !p.starts_with('/') {
+    if p.is_empty()
+        || p.contains("..")
+        || p.contains('\n')
+        || p.contains(';')
+        || !p.starts_with('/')
+    {
         return None;
     }
     let clean: String = p
         .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '/' || *c == '.' || *c == '_' || *c == '-' || *c == ' ')
+        .filter(|c| {
+            c.is_alphanumeric() || *c == '/' || *c == '.' || *c == '_' || *c == '-' || *c == ' '
+        })
         .collect();
     if clean.is_empty() {
         None
@@ -133,11 +152,7 @@ pub fn files_cmd(id: &str, path: &str) -> Option<String> {
     if cid.is_empty() {
         return None;
     }
-    Some(format!(
-        "docker exec {} ls -1F -- {}",
-        cid,
-        shell_quote(&p)
-    ))
+    Some(format!("docker exec {} ls -1F -- {}", cid, shell_quote(&p)))
 }
 
 fn shell_quote(s: &str) -> String {
@@ -177,7 +192,12 @@ pub fn parse_files(code: i32, stdout: &str, stderr: &str, path: &str) -> Value {
     entries.sort_by(|a, b| {
         let ka = a["kind"].as_str().unwrap_or("");
         let kb = b["kind"].as_str().unwrap_or("");
-        ka.cmp(kb).then_with(|| a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or("")))
+        ka.cmp(kb).then_with(|| {
+            a["name"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["name"].as_str().unwrap_or(""))
+        })
     });
     json!({ "ok": true, "path": path, "entries": entries })
 }
@@ -185,6 +205,20 @@ pub fn parse_files(code: i32, stdout: &str, stderr: &str, path: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn отсутствие_докера_на_windows_объясняется_словами() {
+        // `cmd.exe` сообщает об отсутствии программы своей формулировкой, и она уходила
+        // в панель как есть: «is not recognized as an internal or external command».
+        let v = parse_list(
+            1,
+            "",
+            "'docker' is not recognized as an internal or external command,
+operable program or batch file.",
+        );
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"], "Docker не установлен на сервере");
+    }
 
     #[test]
     fn parse_list_ok() {

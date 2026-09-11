@@ -82,6 +82,32 @@ pub fn expand_tokens(template: &str, host: &str, port: u16, user: &str) -> Strin
     out
 }
 
+/// `%h` и `%r` попадают внутрь строки оболочки. Разрешаем только символы, которые не
+/// меняют её синтаксис ни в `sh`, ни в `cmd.exe`. Для необычного адреса всегда остаётся
+/// возможность записать фиксированный аргумент прямо в ProxyCommand.
+fn validate_substitutions(host: &str, user: &str) -> Result<(), String> {
+    let safe_host = !host.is_empty()
+        && host.len() <= 255
+        && host
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b".-_:[]".contains(&c));
+    if !safe_host {
+        return Err("Host содержит символы, небезопасные для подстановки %h в ProxyCommand".into());
+    }
+    let safe_user = !user.is_empty()
+        && user.len() <= 255
+        && user
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b".-_@".contains(&c));
+    if !safe_user {
+        return Err(
+            "Имя пользователя содержит символы, небезопасные для подстановки %r в ProxyCommand"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 /// Найти в команде путь, записанный для другой системы.
 ///
 /// Ищем только заведомо чужую форму: на Unix - `C:\…`, на Windows - абсолютный юниксовый
@@ -110,6 +136,7 @@ fn foreign_program_path(line: &str) -> Option<String> {
 
 /// Запускает посредника и отдаёт поток для russh.
 pub fn spawn(command: &str, host: &str, port: u16, user: &str) -> Result<ProxyStream, String> {
+    validate_substitutions(host, user)?;
     let line = expand_tokens(command, host, port, user);
     if line.trim().is_empty() {
         return Err("Пустая команда прокси".into());
@@ -162,12 +189,16 @@ pub fn spawn(command: &str, host: &str, port: u16, user: &str) -> Result<ProxySt
 
     let stdin = child.stdin.take().ok_or("Прокси-команда не дала stdin")?;
     let stdout = child.stdout.take().ok_or("Прокси-команда не дала stdout")?;
-    Ok(ProxyStream { child, stdin, stdout })
+    Ok(ProxyStream {
+        child,
+        stdin,
+        stdout,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_tokens, foreign_program_path};
+    use super::{expand_tokens, foreign_program_path, validate_substitutions};
 
     #[test]
     fn substitutes_host_port_user() {
@@ -243,5 +274,22 @@ mod tests {
             expand_tokens("go %h", "weird%phost", 22, "u"),
             "go weird%phost"
         );
+    }
+
+    #[test]
+    fn shell_metacharacters_are_rejected_in_substitutions() {
+        for host in ["srv;calc", "srv && whoami", "$(touch x)", "%PATH%"] {
+            assert!(
+                validate_substitutions(host, "hade").is_err(),
+                "host: {host}"
+            );
+        }
+        for user in ["hade;id", "$(id)", "name\\with-slash", "%USERNAME%"] {
+            assert!(
+                validate_substitutions("srv.example", user).is_err(),
+                "user: {user}"
+            );
+        }
+        assert!(validate_substitutions("[2001:db8::1]", "user@example.com").is_ok());
     }
 }

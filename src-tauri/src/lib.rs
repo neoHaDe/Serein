@@ -3,6 +3,8 @@
 mod backup;
 mod clipboard;
 mod crypto;
+pub mod db;
+pub mod deskout;
 mod dnd;
 mod docker;
 mod docker_compose;
@@ -10,8 +12,6 @@ mod dpapi;
 mod error;
 pub mod filediff;
 mod importers;
-mod os_secrets;
-mod ownership;
 mod keygen;
 mod knownhosts;
 pub mod ldap;
@@ -19,40 +19,44 @@ mod localfs;
 pub mod monitor;
 mod multihost;
 pub mod mysql;
+mod os_secrets;
+mod ownership;
 mod paths;
-pub mod sysinfo;
-mod proxycmd;
-mod schema;
-mod pty;
-mod remoteedit;
-pub mod remote_fs;
-pub mod db;
 pub mod platform;
-pub mod scp;
+mod proxycmd;
+mod pty;
 pub mod rdp;
-pub mod vnc;
-pub mod vncsetup;
 pub mod rdpsetup;
-pub mod deskout;
+pub mod remote_fs;
+mod remoteedit;
+mod schema;
+pub mod scp;
 mod serial;
 pub mod sftp;
+pub mod ssh;
 mod ssh_agent;
 mod ssh_algos;
-pub mod ssh;
 pub mod store;
 mod sync;
+pub mod sysinfo;
 mod telnet;
 mod term_out;
 pub mod tools;
 mod tunnels;
 mod vault;
 mod vaultkey;
+pub mod vnc;
+pub mod vncsetup;
 pub mod workspace;
 
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
+
+/// scrypt специально дорогой. Один процесс не должен одновременно запускать несколько
+/// операций с мастер-паролем/бэкапом и умножать их расход памяти.
+static PASSWORD_KDF_GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 
 pub(crate) enum Session {
     Local(pty::LocalSession),
@@ -300,7 +304,8 @@ fn resolve_chain(server_id: &str) -> Result<Vec<Value>, String> {
         if !seen.insert(sid.clone()) {
             return Err("Циклическая цепочка jump-хостов".into());
         }
-        let s = store::server_with_secrets(&sid).ok_or("Сервер из цепочки jump-хостов не найден")?;
+        let s =
+            store::server_with_secrets(&sid).ok_or("Сервер из цепочки jump-хостов не найден")?;
         let next = s
             .get("proxyJump")
             .and_then(|v| v.as_str())
@@ -313,7 +318,12 @@ fn resolve_chain(server_id: &str) -> Result<Vec<Value>, String> {
 }
 
 #[tauri::command]
-fn session_open_local(window: tauri::Window, app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
+fn session_open_local(
+    window: tauri::Window,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    p: Value,
+) -> Result<String, String> {
     let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
     let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
     let cwd = p.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -341,7 +351,12 @@ fn serial_ports() -> Vec<Value> {
 /// Открывает сессию по COM-порту. `p.serial` - секция параметров линии из профиля,
 /// либо разовые настройки, если пользователь открывает порт без сохранённого профиля.
 #[tauri::command]
-fn session_open_serial(window: tauri::Window, app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
+fn session_open_serial(
+    window: tauri::Window,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    p: Value,
+) -> Result<String, String> {
     // Профиль сервера имеет приоритет: в нём настройки, которые пользователь сохранил.
     let cfg = match p.get("serverId").and_then(|v| v.as_str()) {
         Some(sid) => {
@@ -349,9 +364,14 @@ fn session_open_serial(window: tauri::Window, app: AppHandle, state: State<'_, A
                 .into_iter()
                 .find(|s| s.get("id").and_then(|v| v.as_str()) == Some(sid))
                 .ok_or("Сервер не найден")?;
-            srv.get("serial").cloned().ok_or("У профиля нет настроек COM-порта")?
+            srv.get("serial")
+                .cloned()
+                .ok_or("У профиля нет настроек COM-порта")?
         }
-        None => p.get("serial").cloned().ok_or("Не заданы настройки COM-порта")?,
+        None => p
+            .get("serial")
+            .cloned()
+            .ok_or("Не заданы настройки COM-порта")?,
     };
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -380,7 +400,12 @@ fn serial_send_break(state: State<'_, AppState>, id: String) -> Result<(), Strin
 }
 
 #[tauri::command]
-fn serial_set_signal(state: State<'_, AppState>, id: String, line: String, on: bool) -> Result<(), String> {
+fn serial_set_signal(
+    state: State<'_, AppState>,
+    id: String,
+    line: String,
+    on: bool,
+) -> Result<(), String> {
     match crate::sync::lock(&state.sessions).get(&id) {
         Some(Session::Serial(p)) => p.set_signal(&line, on),
         _ => Err("Это не сессия COM-порта".into()),
@@ -393,7 +418,12 @@ fn serial_set_signal(state: State<'_, AppState>, id: String, line: String, on: b
 /// прямо из запроса (разовое подключение из палитры). `cols`/`rows` нужны сразу: telnet
 /// сообщает размер окна в момент согласования, и без них сервер считает экран 80x24.
 #[tauri::command]
-fn session_open_tcp(window: tauri::Window, app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, String> {
+fn session_open_tcp(
+    window: tauri::Window,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    p: Value,
+) -> Result<String, String> {
     let profile = match p.get("serverId").and_then(|v| v.as_str()) {
         Some(sid) => store::servers_list()
             .into_iter()
@@ -420,8 +450,16 @@ fn session_open_tcp(window: tauri::Window, app: AppHandle, state: State<'_, AppS
         return Err("Укажите порт: у TCP-подключения нет значения по умолчанию".into());
     }
 
-    let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80).clamp(20, 500) as u16;
-    let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24).clamp(5, 200) as u16;
+    let cols = p
+        .get("cols")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(80)
+        .clamp(20, 500) as u16;
+    let rows = p
+        .get("rows")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(24)
+        .clamp(5, 200) as u16;
     let eol = profile.get("telnetEol").and_then(|v| v.as_str());
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -452,8 +490,16 @@ fn telnet_command(state: State<'_, AppState>, id: String, name: String) -> Resul
 }
 
 #[tauri::command]
-async fn session_open_ssh(window: tauri::Window, app: AppHandle, state: State<'_, AppState>, p: Value) -> Result<String, crate::error::OpenError> {
-    let server_id = p.get("serverId").and_then(|v| v.as_str()).ok_or("Не задан serverId")?;
+async fn session_open_ssh(
+    window: tauri::Window,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    p: Value,
+) -> Result<String, crate::error::OpenError> {
+    let server_id = p
+        .get("serverId")
+        .and_then(|v| v.as_str())
+        .ok_or("Не задан serverId")?;
     let chain = resolve_chain(server_id)?;
     let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u32;
     let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u32;
@@ -472,12 +518,25 @@ async fn session_open_ssh(window: tauri::Window, app: AppHandle, state: State<'_
             for t in tunnels {
                 let _ = state
                     .tunnels
-                    .open(app.clone(), sess.handle.clone(), id.clone(), t.clone(), sess.remote_forwards.clone(), sess.cancel.subscribe())
+                    .open(
+                        app.clone(),
+                        sess.handle.clone(),
+                        id.clone(),
+                        t.clone(),
+                        sess.remote_forwards.clone(),
+                        sess.cancel.subscribe(),
+                    )
                     .await;
             }
         }
-        if let Some(cmd) = srv.get("executeOnConnect").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
-            let _ = sess.tx.send(ssh::SshCmd::Write(format!("{cmd}\r").into_bytes()));
+        if let Some(cmd) = srv
+            .get("executeOnConnect")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            let _ = sess
+                .tx
+                .send(ssh::SshCmd::Write(format!("{cmd}\r").into_bytes()));
         }
     }
     crate::sync::lock(&state.sessions).insert(id.clone(), Session::Ssh(sess));
@@ -503,7 +562,11 @@ fn session_write(state: State<'_, AppState>, id: String, data: String) {
 
 #[tauri::command]
 fn session_resize(state: State<'_, AppState>, p: Value) {
-    let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let id = p
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80);
     let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24);
     if cols < 20 || rows < 5 {
@@ -633,10 +696,13 @@ async fn session_sysinfo(state: State<'_, AppState>, id: String) -> Result<Value
     }
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
     let (kind, _) = platform::of_session(&id, &s.handle).await;
-    if kind == platform::Kind::Windows {
-        return Ok(json!({ "gpus": [], "unsupported": "Сведения о железе Windows-сервера пока не читаем" }));
-    }
-    let (_c, out, _e) = ssh::exec(&s.handle, sysinfo::CMD, Some(s.cancel.subscribe())).await?;
+    // Команда разная, разбор один: сценарий для Windows отвечает теми же строками.
+    let cmd = if kind == platform::Kind::Windows {
+        platform::ps(sysinfo::CMD_WINDOWS)
+    } else {
+        sysinfo::CMD.to_owned()
+    };
+    let (_c, out, _e) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
     let v = sysinfo::parse(&out);
     crate::sync::lock(&SYSINFO)
         .get_or_insert_with(Default::default)
@@ -667,14 +733,19 @@ async fn session_monitor(state: State<'_, AppState>, id: String) -> Result<Value
     // Снимок собирается одной командой, но команда у Windows своя: /proc там нет.
     let (kind, _) = platform::of_session(&id, &s.handle).await;
     if kind == platform::Kind::Windows {
-        let (_c, out, err) =
-            ssh::exec(&s.handle, platform::cmd::SAMPLE_WINDOWS, Some(s.cancel.subscribe())).await?;
+        let (_c, out, err) = ssh::exec(
+            &s.handle,
+            &platform::ps(platform::cmd::SAMPLE_WINDOWS),
+            Some(s.cancel.subscribe()),
+        )
+        .await?;
         if out.trim().is_empty() && !err.trim().is_empty() {
             return Ok(json!({ "ok": false, "error": err.trim() }));
         }
         return Ok(platform::win::parse_sample(&out));
     }
-    let (_c, out, _e) = ssh::exec(&s.handle, monitor::SAMPLE_CMD, Some(s.cancel.subscribe())).await?;
+    let (_c, out, _e) =
+        ssh::exec(&s.handle, monitor::SAMPLE_CMD, Some(s.cancel.subscribe())).await?;
     Ok(monitor::parse(&out))
 }
 
@@ -727,7 +798,7 @@ async fn desktop_detect(state: State<'_, AppState>, session_id: String) -> Resul
     if kind == platform::Kind::Windows {
         return Ok(json!({
             "installed": [], "listening": [], "canInstall": false,
-            "summary": "На Windows-сервере рабочий стол настраивается иначе - этого мы пока не умеем",
+            "summary": "VNC на Windows не ставим - там есть встроенный RDP, смотри соседнюю плитку",
         }));
     }
     let (_c, out, _e) =
@@ -749,9 +820,13 @@ async fn desktop_install(
     let cmd = vncsetup::install_cmd(&package_manager)
         .ok_or("Не знаем, как ставить пакеты этим менеджером")?;
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    let (code, out, err) =
-        ssh::exec_with_input(&s.handle, &cmd, &format!("{sudo_password}\n"), Some(s.cancel.subscribe()))
-            .await?;
+    let (code, out, err) = ssh::exec_with_input(
+        &s.handle,
+        &cmd,
+        &format!("{sudo_password}\n"),
+        Some(s.cancel.subscribe()),
+    )
+    .await?;
     if code != 0 {
         // Неверный пароль sudo выглядит именно так, и сказать об этом прямо полезнее,
         // чем показать сырой вывод пакетного менеджера.
@@ -760,7 +835,11 @@ async fn desktop_install(
         } else {
             let x = format!("{out}\n{err}");
             let x = x.trim();
-            if x.is_empty() { format!("установка вернула код {code}") } else { x.to_string() }
+            if x.is_empty() {
+                format!("установка вернула код {code}")
+            } else {
+                x.to_string()
+            }
         };
         return Ok(json!({ "ok": false, "error": текст }));
     }
@@ -845,7 +924,11 @@ fn vnc_key(id: String, keysym: u32, down: bool) {
 fn vnc_refresh(id: String, full: bool) {
     vnc::input(
         &id,
-        if full { vnc::X11Event::FullRefresh } else { vnc::X11Event::Refresh },
+        if full {
+            vnc::X11Event::FullRefresh
+        } else {
+            vnc::X11Event::Refresh
+        },
     );
 }
 
@@ -872,20 +955,26 @@ fn vnc_close(id: String) {
 /// ввода пароля - тот же сеанс, тот же сервер, зачем спрашивать дважды.
 #[tauri::command]
 fn desktop_active(session_id: String) -> Option<Value> {
-    deskout::active(&session_id).map(|a| {
-        json!({ "kind": a.kind.as_str(), "id": a.id, "width": a.size.0, "height": a.size.1 })
-    })
+    deskout::active(&session_id).map(
+        |a| json!({ "kind": a.kind.as_str(), "id": a.id, "width": a.size.0, "height": a.size.1 }),
+    )
 }
 
 /// Переводит выдачу кадров VNC в это окно и просит перерисовать экран целиком.
 #[tauri::command]
-fn vnc_attach(id: String, on_frame: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>) -> Result<(), String> {
+fn vnc_attach(
+    id: String,
+    on_frame: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
+) -> Result<(), String> {
     vnc::attach(&id, on_frame)
 }
 
 /// То же для RDP.
 #[tauri::command]
-fn rdp_attach(id: String, on_frame: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>) -> Result<(), String> {
+fn rdp_attach(
+    id: String,
+    on_frame: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
+) -> Result<(), String> {
     rdp::attach(&id, on_frame)
 }
 
@@ -894,15 +983,22 @@ fn rdp_attach(id: String, on_frame: tauri::ipc::Channel<tauri::ipc::InvokeRespon
 /// Отдельно от разведки VNC: смотреть надо другое, а лишний вопрос серверу дешевле, чем
 /// одна команда, отвечающая сразу за двоих и путающая оба ответа.
 #[tauri::command]
-async fn desktop_rdp_detect(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
+async fn desktop_rdp_detect(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let (kind, _) = platform::of_session(&session_id, &s.handle).await;
     if kind == platform::Kind::Windows {
-        // На Windows RDP свой, встроенный, и ставить нечего - но он может быть выключен.
-        return Ok(json!({
-            "installed": [], "listening": [], "canInstall": false, "canStart": false,
-            "summary": "На Windows рабочий стол включается в настройках системы, ставить нечего",
-        }));
+        // На Windows RDP встроенный, ставить нечего - но он бывает выключен, и панель
+        // должна сказать, чем именно: настройками, службой или межсетевым экраном.
+        let (_c, out, _e) = ssh::exec(
+            &s.handle,
+            &platform::ps(rdpsetup::DETECT_WINDOWS),
+            Some(s.cancel.subscribe()),
+        )
+        .await?;
+        return Ok(rdpsetup::parse_detect_windows(&out));
     }
     let (_c, out, _e) =
         ssh::exec(&s.handle, rdpsetup::DETECT_CMD, Some(s.cancel.subscribe())).await?;
@@ -934,6 +1030,18 @@ async fn desktop_rdp_start(
     sudo_password: String,
 ) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    // На Windows включать нечего ставить: снимаем запрет, открываем экран и поднимаем
+    // службу. Пароль sudo там не при чём - нужны права администратора самой сессии.
+    let (kind, _) = platform::of_session(&session_id, &s.handle).await;
+    if kind == platform::Kind::Windows {
+        let (_c, out, _e) = ssh::exec(
+            &s.handle,
+            &platform::ps(rdpsetup::ENABLE_WINDOWS),
+            Some(s.cancel.subscribe()),
+        )
+        .await?;
+        return Ok(rdpsetup::parse_enable_windows(&out));
+    }
     let r = run_setup_step(&s, rdpsetup::ENABLE_CMD, &sudo_password, "запуск").await?;
     if r["ok"] != true {
         return Ok(r);
@@ -974,7 +1082,11 @@ async fn run_setup_step(
         } else {
             let x = format!("{out}\n{err}");
             let x = x.trim();
-            if x.is_empty() { format!("{что} вернулась с кодом {code}") } else { x.to_string() }
+            if x.is_empty() {
+                format!("{что} вернулась с кодом {code}")
+            } else {
+                x.to_string()
+            }
         };
         return Ok(json!({ "ok": false, "error": текст }));
     }
@@ -1000,6 +1112,7 @@ async fn rdp_open(
     color_depth: Option<u16>,
     economy: Option<bool>,
     autologon: Option<bool>,
+    network_profile: Option<String>,
     on_frame: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
 ) -> Result<String, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
@@ -1008,6 +1121,11 @@ async fn rdp_open(
         handle: s.handle.clone(),
         host: host.unwrap_or_else(|| "127.0.0.1".to_owned()),
         port: port.unwrap_or(3389),
+    };
+    let network_profile = match network_profile.as_deref().unwrap_or("vpn") {
+        "vpn" => rdp::NetworkProfile::Vpn,
+        "lan" => rdp::NetworkProfile::Lan,
+        other => return Err(format!("неизвестный профиль сети RDP: {other}")),
     };
     rdp::open(
         id.clone(),
@@ -1018,9 +1136,10 @@ async fn rdp_open(
         domain,
         (width.unwrap_or(1280), height.unwrap_or(800)),
         rdp::Options {
-            color_depth: color_depth.unwrap_or(32),
-            economy: economy.unwrap_or(false),
+            color_depth: color_depth.unwrap_or(16),
+            economy: economy.unwrap_or(true),
             autologon: autologon.unwrap_or(true),
+            network_profile,
         },
         on_frame,
     )
@@ -1036,6 +1155,16 @@ fn rdp_pointer(id: String, x: u16, y: u16, buttons: u8) {
 #[tauri::command]
 fn rdp_key(id: String, code: u16, down: bool) {
     rdp::key(&id, code, down);
+}
+
+#[tauri::command]
+fn rdp_wheel(id: String, vertical: bool, delta: i16) {
+    rdp::wheel(&id, vertical, delta);
+}
+
+#[tauri::command]
+fn rdp_secure_attention(id: String) {
+    rdp::secure_attention(&id);
 }
 
 /// Меняет размер рабочего стола в уже открытом сеансе.
@@ -1057,24 +1186,32 @@ fn rdp_note(line: String) {
 
 /// Какая система на сервере. Определяется один раз за сессию и кэшируется.
 #[tauri::command]
-async fn workspace_platform(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
+async fn workspace_platform(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let (kind, version) = platform::of_session(&session_id, &s.handle).await;
     Ok(platform::to_json(kind, &version))
 }
 
 #[tauri::command]
-async fn workspace_processes(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
+async fn workspace_processes(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     // Набор команд зависит от системы: `ps` на Windows не существует, и слать его туда
     // значит показать пользователю ошибку вместо таблицы процессов.
     let (kind, _) = platform::of_session(&session_id, &s.handle).await;
     let cmd = match kind {
-        platform::Kind::Windows => platform::cmd::PS_WINDOWS,
-        platform::Kind::BusyBox => platform::cmd::PS_BUSYBOX,
-        _ => workspace::PS_CMD,
+        // Сценарий PowerShell кодируется: в открытом виде его портит оболочка сервера,
+        // и на живой проверке команда рвалась ровно посередине.
+        platform::Kind::Windows => platform::ps(platform::cmd::PS_WINDOWS),
+        platform::Kind::BusyBox => platform::cmd::PS_BUSYBOX.to_owned(),
+        _ => workspace::PS_CMD.to_owned(),
     };
-    let (code, out, err) = ssh::exec(&s.handle, cmd, Some(s.cancel.subscribe())).await?;
+    let (code, out, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
     if code != 0 && out.trim().is_empty() {
         let error = if err.trim().is_empty() {
             "ps недоступен".to_string()
@@ -1091,7 +1228,11 @@ async fn workspace_processes(state: State<'_, AppState>, session_id: String) -> 
 }
 
 #[tauri::command]
-async fn workspace_kill(state: State<'_, AppState>, session_id: String, pid: u32) -> Result<Value, String> {
+async fn workspace_kill(
+    state: State<'_, AppState>,
+    session_id: String,
+    pid: u32,
+) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     // `kill` в Windows нет: там процесс снимает PowerShell.
     let (kind, _) = platform::of_session(&session_id, &s.handle).await;
@@ -1109,15 +1250,18 @@ async fn workspace_kill(state: State<'_, AppState>, session_id: String, pid: u32
 }
 
 #[tauri::command]
-async fn workspace_services(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
+async fn workspace_services(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let (kind, _) = platform::of_session(&session_id, &s.handle).await;
     let cmd = match kind {
-        platform::Kind::Windows => platform::cmd::SERVICES_WINDOWS,
-        platform::Kind::BusyBox => platform::cmd::SERVICES_BUSYBOX,
-        _ => workspace::SERVICES_CMD,
+        platform::Kind::Windows => platform::ps(platform::cmd::SERVICES_WINDOWS),
+        platform::Kind::BusyBox => platform::cmd::SERVICES_BUSYBOX.to_owned(),
+        _ => workspace::SERVICES_CMD.to_owned(),
     };
-    let (code, out, err) = ssh::exec(&s.handle, cmd, Some(s.cancel.subscribe())).await?;
+    let (code, out, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
     Ok(match kind {
         platform::Kind::Windows => platform::win::parse_services(&out),
         platform::Kind::BusyBox => platform::busybox::parse_services(&out),
@@ -1154,14 +1298,19 @@ async fn workspace_logs(state: State<'_, AppState>, session_id: String) -> Resul
     let (kind, _) = platform::of_session(&session_id, &s.handle).await;
     // На Windows роль journalctl играет журнал событий, и читается он совсем иначе.
     if kind == platform::Kind::Windows {
-        let (_c, out, err) =
-            ssh::exec(&s.handle, platform::cmd::LOGS_WINDOWS, Some(s.cancel.subscribe())).await?;
+        let (_c, out, err) = ssh::exec(
+            &s.handle,
+            &platform::ps(platform::cmd::LOGS_WINDOWS),
+            Some(s.cancel.subscribe()),
+        )
+        .await?;
         if out.trim().is_empty() && !err.trim().is_empty() {
             return Ok(json!({ "ok": false, "error": err.trim() }));
         }
         return Ok(platform::win::parse_logs(&out));
     }
-    let (_code, out, err) = ssh::exec(&s.handle, workspace::LOGS_CMD, Some(s.cancel.subscribe())).await?;
+    let (_code, out, err) =
+        ssh::exec(&s.handle, workspace::LOGS_CMD, Some(s.cancel.subscribe())).await?;
     let text = if out.trim().is_empty() { err } else { out };
     Ok(json!({ "ok": true, "text": text }))
 }
@@ -1178,16 +1327,25 @@ fn session_ki_respond(state: State<'_, AppState>, id: String, answers: Vec<Strin
 #[tauri::command]
 async fn docker_list(state: State<'_, AppState>, id: String) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let (code, out, err) = ssh::exec(&s.handle, docker::LIST_CMD, Some(s.cancel.subscribe())).await?;
+    let (code, out, err) =
+        ssh::exec(&s.handle, docker::LIST_CMD, Some(s.cancel.subscribe())).await?;
     Ok(docker::parse_list(code, &out, &err))
 }
 #[tauri::command]
-async fn docker_action(state: State<'_, AppState>, id: String, container_id: String, action: String) -> Result<Value, String> {
+async fn docker_action(
+    state: State<'_, AppState>,
+    id: String,
+    container_id: String,
+    action: String,
+) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let cmd = docker::action_cmd(&container_id, &action).ok_or_else(|| format!("Неизвестное действие: {action}"))?;
+    let cmd = docker::action_cmd(&container_id, &action)
+        .ok_or_else(|| format!("Неизвестное действие: {action}"))?;
     let (code, _o, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
     if code != 0 {
-        Ok(json!({ "ok": false, "error": if err.trim().is_empty() { format!("Код {code}") } else { err.trim().to_string() } }))
+        Ok(
+            json!({ "ok": false, "error": if err.trim().is_empty() { format!("Код {code}") } else { err.trim().to_string() } }),
+        )
     } else {
         Ok(json!({ "ok": true }))
     }
@@ -1228,9 +1386,18 @@ async fn docker_logs(
 }
 
 #[tauri::command]
-async fn docker_stats(state: State<'_, AppState>, id: String, container_id: String) -> Result<Value, String> {
+async fn docker_stats(
+    state: State<'_, AppState>,
+    id: String,
+    container_id: String,
+) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let (code, out, err) = ssh::exec(&s.handle, &docker::stats_cmd(&container_id), Some(s.cancel.subscribe())).await?;
+    let (code, out, err) = ssh::exec(
+        &s.handle,
+        &docker::stats_cmd(&container_id),
+        Some(s.cancel.subscribe()),
+    )
+    .await?;
     Ok(docker::parse_stats(code, &out, &err))
 }
 
@@ -1261,7 +1428,12 @@ async fn docker_exec(
     cancel: Option<ssh::CancelRx>,
     secs: u64,
 ) -> Result<(i32, String, String), String> {
-    match tokio::time::timeout(std::time::Duration::from_secs(secs), ssh::exec(handle, cmd, cancel)).await {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(secs),
+        ssh::exec(handle, cmd, cancel),
+    )
+    .await
+    {
         Ok(r) => r,
         Err(_) => Err(format!("Таймаут команды ({secs} с)")),
     }
@@ -1275,10 +1447,15 @@ async fn docker_compose_list(state: State<'_, AppState>, id: String) -> Result<V
         Ok((code, out, err)) => docker_compose::parse_list(code, &out, &err),
         Err(e) => json!({ "ok": false, "error": e }),
     };
-    if primary["projects"].as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+    if primary["projects"]
+        .as_array()
+        .map(|a| !a.is_empty())
+        .unwrap_or(false)
+    {
         return Ok(primary);
     }
-    let fallback = match docker_exec(&s.handle, docker_compose::LIST_PS_JSON_CMD, cancel, 15).await {
+    let fallback = match docker_exec(&s.handle, docker_compose::LIST_PS_JSON_CMD, cancel, 15).await
+    {
         Ok((code, out, err)) => docker_compose::parse_list_from_ps_json(code, &out, &err),
         Err(e) => json!({ "ok": false, "error": e }),
     };
@@ -1293,7 +1470,8 @@ async fn docker_compose_ps(
     project: String,
 ) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let cmd = docker_compose::ps_cmd(&compose_file, &project).ok_or("Недопустимые параметры compose")?;
+    let cmd =
+        docker_compose::ps_cmd(&compose_file, &project).ok_or("Недопустимые параметры compose")?;
     match docker_exec(&s.handle, &cmd, Some(s.cancel.subscribe()), 20).await {
         Ok((code, out, err)) => Ok(docker_compose::parse_ps(code, &out, &err)),
         Err(e) => Ok(json!({ "ok": false, "error": e })),
@@ -1315,14 +1493,20 @@ async fn docker_compose_action(
         .ok_or_else(|| format!("Неизвестное действие: {action}"))?;
     let (code, _o, err) = docker_exec(&s.handle, &cmd, Some(s.cancel.subscribe()), 60).await?;
     if code != 0 {
-        Ok(json!({ "ok": false, "error": if err.trim().is_empty() { format!("Код {code}") } else { err.trim().to_string() } }))
+        Ok(
+            json!({ "ok": false, "error": if err.trim().is_empty() { format!("Код {code}") } else { err.trim().to_string() } }),
+        )
     } else {
         Ok(json!({ "ok": true }))
     }
 }
 
 #[tauri::command]
-async fn docker_compose_read(state: State<'_, AppState>, id: String, compose_file: String) -> Result<Value, String> {
+async fn docker_compose_read(
+    state: State<'_, AppState>,
+    id: String,
+    compose_file: String,
+) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
     let cmd = docker_compose::read_compose_cmd(&compose_file).ok_or("Недопустимый compose-файл")?;
     let (code, out, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
@@ -1339,7 +1523,8 @@ async fn docker_compose_logs(
     service: String,
 ) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let cmd = docker_compose::logs_cmd(&compose_file, &project, &service).ok_or("Недопустимые параметры")?;
+    let cmd = docker_compose::logs_cmd(&compose_file, &project, &service)
+        .ok_or("Недопустимые параметры")?;
     let key = format!("{id}:compose-logs:{compose_file}:{service}");
     let op = state.ops.begin(&key);
     let cancel = ssh::race_cancel(s.cancel.subscribe(), op);
@@ -1386,44 +1571,92 @@ fn docker_compose_logs_cancel(
 // ---------------- SFTP ----------------
 
 #[tauri::command]
-async fn sftp_list(state: State<'_, AppState>, session_id: String, path: String) -> Result<Value, String> {
+async fn sftp_list(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     remote_fs::list(&s.remote_fs, &s.handle, &path).await
 }
 #[tauri::command]
-async fn sftp_mkdir(state: State<'_, AppState>, session_id: String, path: String) -> Result<(), String> {
+async fn sftp_mkdir(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     remote_fs::mkdir(&s.remote_fs, &s.handle, &path).await
 }
 #[tauri::command]
-async fn sftp_remove(state: State<'_, AppState>, session_id: String, path: String, is_dir: bool) -> Result<(), String> {
+async fn sftp_remove(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+    is_dir: bool,
+) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     remote_fs::remove(&s.remote_fs, &s.handle, &path, is_dir).await
 }
 #[tauri::command]
-async fn sftp_rename(state: State<'_, AppState>, session_id: String, from: String, to: String) -> Result<(), String> {
+async fn sftp_rename(
+    state: State<'_, AppState>,
+    session_id: String,
+    from: String,
+    to: String,
+) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     remote_fs::rename(&s.remote_fs, &s.handle, &from, &to).await
 }
 #[tauri::command]
-async fn sftp_chmod(state: State<'_, AppState>, session_id: String, path: String, mode: u32) -> Result<(), String> {
+async fn sftp_chmod(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+    mode: u32,
+) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     remote_fs::chmod(&s.remote_fs, &s.handle, &path, mode).await
 }
 #[tauri::command]
-async fn sftp_preview(state: State<'_, AppState>, session_id: String, remote_path: String) -> Result<Value, String> {
+async fn sftp_preview(
+    state: State<'_, AppState>,
+    session_id: String,
+    remote_path: String,
+) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     remote_fs::preview(&s.remote_fs, &s.handle, &remote_path).await
 }
 #[tauri::command]
-async fn sftp_read_file(state: State<'_, AppState>, session_id: String, remote_path: String) -> Result<Value, String> {
+async fn sftp_read_file(
+    state: State<'_, AppState>,
+    session_id: String,
+    remote_path: String,
+) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     remote_fs::read_file(&s.remote_fs, &s.handle, &remote_path).await
 }
 #[tauri::command]
-async fn sftp_write_file(state: State<'_, AppState>, session_id: String, remote_path: String, content: String, mode: u32, base_mtime: u64, eol: String) -> Result<Value, String> {
+async fn sftp_write_file(
+    state: State<'_, AppState>,
+    session_id: String,
+    remote_path: String,
+    content: String,
+    mode: u32,
+    base_mtime: u64,
+    eol: String,
+) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    remote_fs::write_file(&s.remote_fs, &s.handle, &remote_path, &content, mode, base_mtime, &eol).await
+    remote_fs::write_file(
+        &s.remote_fs,
+        &s.handle,
+        &remote_path,
+        &content,
+        mode,
+        base_mtime,
+        &eol,
+    )
+    .await
 }
 #[tauri::command]
 async fn sftp_name_conflicts(
@@ -1436,7 +1669,13 @@ async fn sftp_name_conflicts(
     remote_fs::name_conflicts(&s.remote_fs, &s.handle, &remote_dir, &names).await
 }
 #[tauri::command]
-async fn sftp_upload_paths(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_dir: String, paths: Vec<String>) -> Result<Value, String> {
+async fn sftp_upload_paths(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    remote_dir: String,
+    paths: Vec<String>,
+) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let n = paths.len();
     let handle = s.handle.clone();
@@ -1453,16 +1692,34 @@ async fn sftp_upload_paths(app: AppHandle, state: State<'_, AppState>, session_i
             let remote = remote_dir.clone();
             let alive = alive.clone();
             let hub = hub.clone();
-            async move { remote_fs::upload_path(app, remote_fs, handle, &sid, &p, &remote, alive, hub).await }
+            async move {
+                remote_fs::upload_path(app, remote_fs, handle, &sid, &p, &remote, alive, hub).await
+            }
         })
         .collect();
     futures::future::join_all(futs).await;
     Ok(json!({ "uploaded": n }))
 }
 #[tauri::command]
-async fn sftp_download_to(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_path: String, local_dir: String) -> Result<(), String> {
+async fn sftp_download_to(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    remote_path: String,
+    local_dir: String,
+) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    remote_fs::download_path(app, s.remote_fs.clone(), s.handle.clone(), &session_id, &remote_path, &local_dir, s.alive.clone(), state.transfers.clone()).await
+    remote_fs::download_path(
+        app,
+        s.remote_fs.clone(),
+        s.handle.clone(),
+        &session_id,
+        &remote_path,
+        &local_dir,
+        s.alive.clone(),
+        state.transfers.clone(),
+    )
+    .await
 }
 #[tauri::command]
 async fn sftp_drag_out(
@@ -1550,9 +1807,23 @@ async fn sftp_drag_out(
     Ok(())
 }
 #[tauri::command]
-async fn sftp_edit(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_path: String) -> Result<(), String> {
+async fn sftp_edit(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    remote_path: String,
+) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    state.edit.open(app, s.handle.clone(), s.remote_fs.clone(), session_id, remote_path).await
+    state
+        .edit
+        .open(
+            app,
+            s.handle.clone(),
+            s.remote_fs.clone(),
+            session_id,
+            remote_path,
+        )
+        .await
 }
 #[tauri::command]
 fn sftp_cancel_transfer(state: State<'_, AppState>, id: String) {
@@ -1567,7 +1838,12 @@ fn sftp_resume_transfer(state: State<'_, AppState>, id: String) {
     let _ = state.transfers.resume(&id);
 }
 #[tauri::command]
-fn sftp_edit_stop(app: AppHandle, state: State<'_, AppState>, session_id: String, remote_path: String) {
+fn sftp_edit_stop(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    remote_path: String,
+) {
     state.edit.stop(&app, &session_id, &remote_path);
 }
 
@@ -1578,16 +1854,34 @@ fn tunnel_list_status(state: State<'_, AppState>, session_id: String) -> Vec<Val
     state.tunnels.list_status(&session_id)
 }
 #[tauri::command]
-async fn tunnel_open(app: AppHandle, state: State<'_, AppState>, session_id: String, tunnel_id: String) -> Result<(), String> {
+async fn tunnel_open(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    tunnel_id: String,
+) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let server = store::server_with_secrets(&s.server_id).ok_or("Сервер не найден")?;
     let cfg = server
         .get("tunnels")
         .and_then(|v| v.as_array())
-        .and_then(|arr| arr.iter().find(|t| t.get("id").and_then(|v| v.as_str()) == Some(tunnel_id.as_str())))
+        .and_then(|arr| {
+            arr.iter()
+                .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(tunnel_id.as_str()))
+        })
         .cloned()
         .ok_or("Конфиг туннеля не найден")?;
-    state.tunnels.open(app, s.handle.clone(), session_id, cfg, s.remote_forwards.clone(), s.cancel.subscribe()).await
+    state
+        .tunnels
+        .open(
+            app,
+            s.handle.clone(),
+            session_id,
+            cfg,
+            s.remote_forwards.clone(),
+            s.cancel.subscribe(),
+        )
+        .await
 }
 #[tauri::command]
 fn tunnel_close(app: AppHandle, state: State<'_, AppState>, session_id: String, tunnel_id: String) {
@@ -1601,33 +1895,91 @@ fn vault_status() -> Value {
     vault::status()
 }
 #[tauri::command]
-fn vault_unlock(password: String) -> bool {
-    vault::unlock(&password)
+async fn vault_unlock(password: String) -> bool {
+    let Ok(_permit) = PASSWORD_KDF_GATE.acquire().await else {
+        return false;
+    };
+    tokio::task::spawn_blocking(move || vault::unlock(&password))
+        .await
+        .unwrap_or(false)
 }
 #[tauri::command]
-fn vault_enable(password: String) -> Value {
-    vault::enable(&password)
+async fn vault_enable(password: String) -> Value {
+    let Ok(_permit) = PASSWORD_KDF_GATE.acquire().await else {
+        return json!({ "ok": false, "error": "Очередь операций с паролем закрыта" });
+    };
+    tokio::task::spawn_blocking(move || vault::enable(&password))
+        .await
+        .unwrap_or_else(|e| json!({ "ok": false, "error": format!("Операция прервана: {e}") }))
 }
 #[tauri::command]
-fn vault_disable(password: String) -> Value {
-    vault::disable(&password)
+async fn vault_disable(password: String) -> Value {
+    let Ok(_permit) = PASSWORD_KDF_GATE.acquire().await else {
+        return json!({ "ok": false, "error": "Очередь операций с паролем закрыта" });
+    };
+    tokio::task::spawn_blocking(move || vault::disable(&password))
+        .await
+        .unwrap_or_else(|e| json!({ "ok": false, "error": format!("Операция прервана: {e}") }))
 }
 
 #[tauri::command]
-fn backup_export(password: String, path: String) -> Result<Value, String> {
-    let content = backup::export(&password)?;
-    std::fs::write(&path, content).map_err(|e| e.to_string())?;
-    Ok(json!({ "saved": true, "path": path }))
+async fn backup_export(password: String, path: String) -> Result<Value, String> {
+    let _permit = PASSWORD_KDF_GATE
+        .acquire()
+        .await
+        .map_err(|_| "Очередь операций с бэкапом закрыта".to_owned())?;
+    tokio::task::spawn_blocking(move || {
+        let content = backup::export(&password)?;
+        if content.len() as u64 > backup::MAX_BACKUP_BYTES {
+            return Err("Бэкап превышает допустимые 32 МиБ".to_owned());
+        }
+        std::fs::write(&path, content).map_err(|e| e.to_string())?;
+        Ok(json!({ "saved": true, "path": path }))
+    })
+    .await
+    .map_err(|e| format!("Операция с бэкапом прервана: {e}"))?
 }
+
 #[tauri::command]
-fn backup_import(password: String, path: String) -> Result<Value, String> {
-    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let counts = backup::import(&content, &password)?;
-    Ok(json!({
-        "imported": true,
-        "servers": counts.get("servers"),
-        "snippets": counts.get("snippets"),
-    }))
+async fn backup_preview(password: String, path: String) -> Result<Value, String> {
+    let _permit = PASSWORD_KDF_GATE
+        .acquire()
+        .await
+        .map_err(|_| "Очередь операций с бэкапом закрыта".to_owned())?;
+    tokio::task::spawn_blocking(move || {
+        let content = backup::read_file(&path)?;
+        let preview = backup::preview(&content, &password)?;
+        serde_json::to_value(preview).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Предпросмотр бэкапа прерван: {e}"))?
+}
+
+#[tauri::command]
+async fn backup_import(
+    password: String,
+    path: String,
+    expected_sha256: String,
+    accepted_proxy_commands: Vec<usize>,
+) -> Result<Value, String> {
+    let _permit = PASSWORD_KDF_GATE
+        .acquire()
+        .await
+        .map_err(|_| "Очередь операций с бэкапом закрыта".to_owned())?;
+    tokio::task::spawn_blocking(move || {
+        let content = backup::read_file(&path)?;
+        let counts = backup::import(
+            &content,
+            &password,
+            &expected_sha256,
+            &accepted_proxy_commands,
+        )?;
+        let mut value = serde_json::to_value(counts).map_err(|e| e.to_string())?;
+        value["imported"] = json!(true);
+        Ok(value)
+    })
+    .await
+    .map_err(|e| format!("Импорт бэкапа прерван: {e}"))?
 }
 
 #[tauri::command]
@@ -1644,11 +1996,24 @@ fn keygen_save(path: String, key: Value) -> Result<Value, String> {
     keygen::save_to(&path, &key)
 }
 #[tauri::command]
-async fn keygen_install(state: State<'_, AppState>, session_id: String, public_key: String) -> Result<Value, String> {
+async fn keygen_install(
+    state: State<'_, AppState>,
+    session_id: String,
+    public_key: String,
+) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    let (code, _o, err) = ssh::exec(&s.handle, &keygen::install_cmd(&public_key), Some(s.cancel.subscribe())).await?;
+    let (code, _o, err) = ssh::exec(
+        &s.handle,
+        &keygen::install_cmd(&public_key),
+        Some(s.cancel.subscribe()),
+    )
+    .await?;
     if code != 0 {
-        return Err(if err.trim().is_empty() { format!("Код {code}") } else { err.trim().to_string() });
+        return Err(if err.trim().is_empty() {
+            format!("Код {code}")
+        } else {
+            err.trim().to_string()
+        });
     }
     Ok(json!({ "installed": true }))
 }
@@ -1677,7 +2042,11 @@ fn servers_import_securecrt() -> Result<Value, String> {
 // ---------------- Утилиты (P2.1) ----------------
 
 #[tauri::command]
-async fn tools_port_test(host: String, port: u16, timeout_ms: Option<u64>) -> Result<Value, String> {
+async fn tools_port_test(
+    host: String,
+    port: u16,
+    timeout_ms: Option<u64>,
+) -> Result<Value, String> {
     tools::port_test(host, port, timeout_ms).await
 }
 #[tauri::command]
@@ -1764,7 +2133,10 @@ async fn diff_side_text(state: &State<'_, AppState>, side: &DiffSide) -> Result<
             if v.get("tooLarge").and_then(|b| b.as_bool()).unwrap_or(false) {
                 return Err(format!("Файл {} слишком большой для сравнения", side.path));
             }
-            Ok(v.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string())
+            Ok(v.get("content")
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .to_string())
         }
         None => tokio::fs::read_to_string(&side.path)
             .await
@@ -1774,12 +2146,11 @@ async fn diff_side_text(state: &State<'_, AppState>, side: &DiffSide) -> Result<
 
 /// Сравнение двух файлов. Каждая сторона - эта машина или любая открытая сессия.
 #[tauri::command]
-async fn tools_diff(
-    state: State<'_, AppState>,
-    a: DiffSide,
-    b: DiffSide,
-) -> Result<Value, String> {
-    let (ta, tb) = (diff_side_text(&state, &a).await?, diff_side_text(&state, &b).await?);
+async fn tools_diff(state: State<'_, AppState>, a: DiffSide, b: DiffSide) -> Result<Value, String> {
+    let (ta, tb) = (
+        diff_side_text(&state, &a).await?,
+        diff_side_text(&state, &b).await?,
+    );
     // Двоичные файлы не сравниваем построчно: получился бы мусор, не отвечающий ни на
     // один вопрос. Но сказать, совпадают ли они, всё равно можем.
     if filediff::looks_binary(&ta) || filediff::looks_binary(&tb) {
@@ -2053,7 +2424,8 @@ fn windows_raise_group_impl(app: &AppHandle, focused: &str) {
     use std::ffi::c_void;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        IsIconic, SetForegroundWindow, SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        IsIconic, SetForegroundWindow, SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE,
     };
 
     let mut others: Vec<HWND> = Vec::new();
@@ -2095,9 +2467,15 @@ fn disable_browser_accelerators(w: &tauri::WebviewWindow) {
     let _ = w.with_webview(|wv| {
         let controller = wv.controller();
         unsafe {
-            let Ok(core) = controller.CoreWebView2() else { return };
-            let Ok(settings) = core.Settings() else { return };
-            let Ok(s3) = settings.cast::<ICoreWebView2Settings3>() else { return };
+            let Ok(core) = controller.CoreWebView2() else {
+                return;
+            };
+            let Ok(settings) = core.Settings() else {
+                return;
+            };
+            let Ok(s3) = settings.cast::<ICoreWebView2Settings3>() else {
+                return;
+            };
             let _ = s3.SetAreBrowserAcceleratorKeysEnabled(false);
         }
     });
@@ -2114,7 +2492,8 @@ pub fn run() {
             // первая же запись выбросит поля, которых мы не знаем.
             if let Err(e) = schema::migrate(&store::config_dir()) {
                 use tauri_plugin_dialog::DialogExt;
-                let _ = app.dialog()
+                let _ = app
+                    .dialog()
                     .message(&e)
                     .title("Serein - профиль несовместим")
                     .blocking_show();
@@ -2128,44 +2507,155 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            settings_get, settings_set,
-            servers_list, servers_save, servers_delete, servers_reorder,
-            snippets_list, snippets_save, snippets_delete,
-            layout_get, layout_set, aux_layout_get, aux_layout_set,
-            localfs_home, localfs_parent, localfs_list, localfs_copy_into,
-            session_open_local, session_open_ssh, session_write, session_resize, session_close,
-            session_ping, session_replay, session_claim, session_monitor, session_ki_respond,
-            session_log_status, session_log_toggle, ssh_agent_identities,
-            session_hostkey_respond, knownhosts_list, knownhosts_forget, knownhosts_import,
-            serial_ports, session_open_serial, serial_send_break, serial_set_signal,
-            session_open_tcp, telnet_command,
-            docker_list, docker_action, docker_logs, docker_stats, docker_logs_cancel, docker_container_files,
-            docker_compose_list, docker_compose_ps, docker_compose_action, docker_compose_read,
-            docker_compose_logs, docker_compose_logs_cancel,
-            sftp_list, sftp_mkdir, sftp_remove, sftp_rename, sftp_chmod, sftp_preview, sftp_read_file, sftp_write_file,
-            sftp_upload_paths, sftp_download_to, sftp_drag_out, sftp_name_conflicts, sftp_edit, sftp_edit_stop, sftp_cancel_transfer,
-            sftp_pause_transfer, sftp_resume_transfer,
-            tunnel_list_status, tunnel_open, tunnel_close,
-            workspace_processes, workspace_kill, workspace_services, workspace_service_action, workspace_logs,
+            settings_get,
+            settings_set,
+            servers_list,
+            servers_save,
+            servers_delete,
+            servers_reorder,
+            snippets_list,
+            snippets_save,
+            snippets_delete,
+            layout_get,
+            layout_set,
+            aux_layout_get,
+            aux_layout_set,
+            localfs_home,
+            localfs_parent,
+            localfs_list,
+            localfs_copy_into,
+            session_open_local,
+            session_open_ssh,
+            session_write,
+            session_resize,
+            session_close,
+            session_ping,
+            session_replay,
+            session_claim,
+            session_monitor,
+            session_ki_respond,
+            session_log_status,
+            session_log_toggle,
+            ssh_agent_identities,
+            session_hostkey_respond,
+            knownhosts_list,
+            knownhosts_forget,
+            knownhosts_import,
+            serial_ports,
+            session_open_serial,
+            serial_send_break,
+            serial_set_signal,
+            session_open_tcp,
+            telnet_command,
+            docker_list,
+            docker_action,
+            docker_logs,
+            docker_stats,
+            docker_logs_cancel,
+            docker_container_files,
+            docker_compose_list,
+            docker_compose_ps,
+            docker_compose_action,
+            docker_compose_read,
+            docker_compose_logs,
+            docker_compose_logs_cancel,
+            sftp_list,
+            sftp_mkdir,
+            sftp_remove,
+            sftp_rename,
+            sftp_chmod,
+            sftp_preview,
+            sftp_read_file,
+            sftp_write_file,
+            sftp_upload_paths,
+            sftp_download_to,
+            sftp_drag_out,
+            sftp_name_conflicts,
+            sftp_edit,
+            sftp_edit_stop,
+            sftp_cancel_transfer,
+            sftp_pause_transfer,
+            sftp_resume_transfer,
+            tunnel_list_status,
+            tunnel_open,
+            tunnel_close,
+            workspace_processes,
+            workspace_kill,
+            workspace_services,
+            workspace_service_action,
+            workspace_logs,
             workspace_platform,
-            vnc_open, vnc_pointer, vnc_key, vnc_refresh, vnc_paste, vnc_close,
-            rdp_open, rdp_pointer, rdp_key, rdp_resize, rdp_close, rdp_note, rdp_attach,
-            desktop_active, vnc_attach,
-            desktop_rdp_detect, desktop_rdp_install, desktop_rdp_start,
-            desktop_detect, desktop_install, desktop_set_password,
-            db_open, db_query, db_close, db_current,
+            vnc_open,
+            vnc_pointer,
+            vnc_key,
+            vnc_refresh,
+            vnc_paste,
+            vnc_close,
+            rdp_open,
+            rdp_pointer,
+            rdp_key,
+            rdp_wheel,
+            rdp_secure_attention,
+            rdp_resize,
+            rdp_close,
+            rdp_note,
+            rdp_attach,
+            desktop_active,
+            vnc_attach,
+            desktop_rdp_detect,
+            desktop_rdp_install,
+            desktop_rdp_start,
+            desktop_detect,
+            desktop_install,
+            desktop_set_password,
+            db_open,
+            db_query,
+            db_close,
+            db_current,
             session_sysinfo,
-            vault_status, vault_unlock, vault_enable, vault_disable,
-            backup_export, backup_import,
+            vault_status,
+            vault_unlock,
+            vault_enable,
+            vault_disable,
+            backup_export,
+            backup_preview,
+            backup_import,
             export_text_file,
-            keygen_generate, keygen_save, keygen_install,
-            servers_import_ssh_config, servers_import_putty,
-            servers_import_mobaxterm, servers_import_xshell, servers_import_securecrt,
-            tools_port_test, tools_dns_lookup, tools_tls_cert, tools_subnet, tools_hash, tools_jwt_decode,
-            tools_port_test_on, tools_dns_lookup_on, tools_port_scan, tools_port_scan_on, tools_trace, tools_trace_on, tools_http, tools_http_on, tools_ldap, tools_diff,
-            app_platform, app_paths, app_install_kind, multi_exec, multi_exec_cancel,
-            windows_nudge_group, windows_raise_group, windows_restore_minimized, windows_count_minimized,
-            clipboard_write, clipboard_read
+            keygen_generate,
+            keygen_save,
+            keygen_install,
+            servers_import_ssh_config,
+            servers_import_putty,
+            servers_import_mobaxterm,
+            servers_import_xshell,
+            servers_import_securecrt,
+            tools_port_test,
+            tools_dns_lookup,
+            tools_tls_cert,
+            tools_subnet,
+            tools_hash,
+            tools_jwt_decode,
+            tools_port_test_on,
+            tools_dns_lookup_on,
+            tools_port_scan,
+            tools_port_scan_on,
+            tools_trace,
+            tools_trace_on,
+            tools_http,
+            tools_http_on,
+            tools_ldap,
+            tools_diff,
+            app_platform,
+            app_paths,
+            app_install_kind,
+            multi_exec,
+            multi_exec_cancel,
+            windows_nudge_group,
+            windows_raise_group,
+            windows_restore_minimized,
+            windows_count_minimized,
+            clipboard_write,
+            clipboard_read
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

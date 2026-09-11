@@ -7,6 +7,7 @@ import { checkForUpdates } from '../updater'
 import { getVersion } from '@tauri-apps/api/app'
 import { errText } from '../errText'
 import { appPlatform } from '../platform'
+import type { BackupPreview } from '../../api'
 
 const FONTS = [
   'Cascadia Code, Consolas, "Courier New", monospace',
@@ -40,6 +41,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
   const [password, setPassword] = useState('')
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [backupPreview, setBackupPreview] = useState<BackupPreview | null>(null)
+  const [acceptedProxyCommands, setAcceptedProxyCommands] = useState<number[]>([])
   const [appVersion, setAppVersion] = useState('')
   const [paths, setPaths] = useState<{ config: string; logs: string } | null>(null)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
@@ -63,6 +66,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
     setAction(a)
     setPassword('')
     setMsg(null)
+    setBackupPreview(null)
+    setAcceptedProxyCommands([])
   }
 
   const runAction = async (): Promise<void> => {
@@ -86,32 +91,51 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
         const r = await window.api.backup.export(password)
         setMsg(r.saved ? { text: `Бэкап сохранён: ${r.path}`, ok: true } : { text: 'Отменено', ok: false })
       } else if (action === 'import') {
-        const r = await window.api.backup.import(password)
-        if (r.imported) {
-          // Про переставленные пути к ключам говорим прямо: иначе непонятно, почему
-          // в профиле теперь другой путь, чем был на прежней машине.
-          const remapped = r.keysRemapped
-            ? `; путей к ключам поправлено под эту систему: ${r.keysRemapped}`
-            : ''
-          const base = `Импортировано серверов: ${r.servers}, сниппетов: ${r.snippets}${remapped}`
-          // `proxyCommand` запускается на этой машине при подключении. Для своего бэкапа
-          // это обычная настройка, для присланного со стороны - чужой код. Молча принимать
-          // такое нельзя, запрещать тоже: показываем, что именно приехало.
-          const proxies = r.proxyCommands ?? []
-          if (proxies.length) {
-            const list = proxies.map((p) => `${p.name}: ${p.command}`).join('; ')
-            setMsg({
-              text:
-                `${base}. Внимание: у ${proxies.length} профилей задана команда-посредник, ` +
-                `она выполнится на этом компьютере при подключении - ${list}`,
-              ok: false
-            })
-          } else {
-            setMsg({ text: base, ok: true })
-          }
-        } else setMsg({ text: 'Отменено', ok: false })
+        const r = await window.api.backup.preview(password)
+        if (!r.previewed) {
+          setMsg({ text: 'Отменено', ok: false })
+          setAction(null)
+          setPassword('')
+          return
+        }
+        setBackupPreview(r)
+        setAcceptedProxyCommands([])
+        setAction(null)
+        return
       }
       setAction(null)
+      setPassword('')
+    } catch (e) {
+      setMsg({ text: errText(e), ok: false })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const applyBackupImport = async (): Promise<void> => {
+    const preview = backupPreview
+    if (!preview?.path || !preview.contentSha256 || !password) return
+    setBusy(true)
+    setMsg(null)
+    try {
+      const r = await window.api.backup.import(
+        password,
+        preview.path,
+        preview.contentSha256,
+        acceptedProxyCommands
+      )
+      const remapped = r.keysRemapped
+        ? `; путей к ключам поправлено под эту систему: ${r.keysRemapped}`
+        : ''
+      const enabled = r.proxyCommandsEnabled
+        ? `; команд-посредников разрешено: ${r.proxyCommandsEnabled}`
+        : ''
+      setMsg({
+        text: `Импортировано серверов: ${r.servers}, сниппетов: ${r.snippets}${remapped}${enabled}`,
+        ok: true
+      })
+      setBackupPreview(null)
+      setAcceptedProxyCommands([])
       setPassword('')
     } catch (e) {
       setMsg({ text: errText(e), ok: false })
@@ -205,6 +229,18 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           />
           Авто-переподключение SSH при обрыве (до 5 попыток)
         </label>
+
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={settings.rdpCaptureShortcuts !== false}
+            onChange={(e) => update({ rdpCaptureShortcuts: e.target.checked })}
+          />
+          Перехватывать сочетания клавиш в окне RDP
+        </label>
+        <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
+          Пока холст RDP в фокусе, сочетания Serein и доступные Windows-клавиши уходят на сервер.
+        </div>
 
         <label className="checkbox-row">
           <input
@@ -438,6 +474,61 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
                 <button className="secondary" onClick={() => setAction(null)}>Отмена</button>
                 <button className="primary" disabled={busy} onClick={() => void runAction()}>
                   {busy ? '…' : 'OK'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {backupPreview && (
+            <div className="settings-action-form">
+              <div className="settings-row-name">Проверьте бэкап перед импортом</div>
+              <div className="settings-row-desc">
+                Серверов: {backupPreview.servers ?? 0}, сниппетов: {backupPreview.snippets ?? 0}.
+                {backupPreview.keysRemapped
+                  ? ` Путей к ключам будет поправлено: ${backupPreview.keysRemapped}.`
+                  : ''}
+              </div>
+
+              {(backupPreview.proxyCommands?.length ?? 0) > 0 && (
+                <div>
+                  <div className="settings-msg err">
+                    Команды-посредники запускают локальные программы при подключении.
+                    Они выключены, пока вы не разрешите каждую отдельно.
+                  </div>
+                  {backupPreview.proxyCommands?.map((proxy) => (
+                    <label className="checkbox-row" key={`${proxy.serverIndex}:${proxy.serverId ?? ''}`}>
+                      <input
+                        type="checkbox"
+                        checked={acceptedProxyCommands.includes(proxy.serverIndex)}
+                        onChange={(e) =>
+                          setAcceptedProxyCommands((current) =>
+                            e.target.checked
+                              ? [...current, proxy.serverIndex]
+                              : current.filter((index) => index !== proxy.serverIndex)
+                          )
+                        }
+                      />
+                      <span>
+                        Разрешить для «{proxy.name}»: <code>{proxy.command}</code>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    setBackupPreview(null)
+                    setAcceptedProxyCommands([])
+                    setPassword('')
+                  }}
+                >
+                  Отмена
+                </button>
+                <button className="primary" disabled={busy} onClick={() => void applyBackupImport()}>
+                  {busy ? 'Импортирую…' : 'Импортировать'}
                 </button>
               </div>
             </div>
