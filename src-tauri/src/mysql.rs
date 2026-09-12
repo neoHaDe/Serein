@@ -240,7 +240,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
     }
 
     /// Выполняет запрос текстовым протоколом.
-    pub async fn query(&mut self, sql: &str) -> Result<QueryOut, String> {
+    pub async fn query(&mut self, sql: &str) -> Result<Vec<QueryOut>, String> {
         // Каждая команда начинает счёт пакетов заново.
         self.seq = 0;
         let mut cmd = Vec::with_capacity(sql.len() + 1);
@@ -248,17 +248,20 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
         cmd.extend_from_slice(sql.as_bytes());
         self.write_packet(&cmd).await?;
 
-        let (out, mut status) = self.read_result().await?;
+        let (first, mut status) = self.read_result().await?;
 
-        // Хранимая процедура отвечает не одним результатом, а несколькими. Показываем
-        // первый, но остальные обязаны быть вычитаны из потока: иначе следующий запрос
-        // прочтёт хвост предыдущего, и соединение разъедется молча - а выглядеть это
-        // будет как «база вернула ерунду».
+        // Хранимая процедура и несколько операторов в одном запросе отвечают не одним
+        // результатом, а несколькими. Раньше показывался первый, а остальные только
+        // вычитывались из потока и выбрасывались: человек видел пустую таблицу там, где
+        // данные пришли вторым набором. Вычитать их всё равно обязательно - иначе
+        // следующий запрос прочтёт хвост предыдущего, и соединение разъедется молча.
+        let mut sets = vec![first];
         while status.contains(StatusFlags::SERVER_MORE_RESULTS_EXISTS) {
-            let (_, next) = self.read_result().await?;
-            status = next;
+            let (next, flags) = self.read_result().await?;
+            sets.push(next);
+            status = flags;
         }
-        Ok(out)
+        Ok(sets)
     }
 
     /// Читает один результат целиком и возвращает его вместе с флагами состояния.

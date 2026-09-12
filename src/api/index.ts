@@ -557,6 +557,13 @@ export const api = {
       ms: number
       /** Показано не всё: сработал предел на строки, объём ответа или размер ячейки. */
       truncated?: boolean
+      /**
+       * Все наборы результатов: несколько операторов подряд и хранимые процедуры
+       * отвечают не одной выборкой.
+       */
+      sets?: { columns: string[]; rows: Record<string, unknown>[]; affected: number; truncated?: boolean }[]
+      /** Какой набор показывать по умолчанию: первый со строками. */
+      shown?: number
     }> => invoke('db_query', { id, text }),
     close: (id: string): Promise<void> => invoke('db_close', { id }),
     /**

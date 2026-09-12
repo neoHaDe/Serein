@@ -87,6 +87,10 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
 
   const [text, setText] = useState(saved?.text ?? '')
   const [result, setResult] = useState<QueryResult | null>(saved?.result ?? null)
+  // Какой набор показан. Сбрасывается на выбор бэкенда при каждом новом ответе: там уже
+  // выбран первый набор со строками, а он и нужен чаще всего.
+  const [setIndex, setSetIndex] = useState(0)
+  const shownSet = result?.sets?.[setIndex] ?? result ?? { columns: [], rows: [], affected: 0 }
 
   /**
    * Подхватывает соединение, о котором панель не знает.
@@ -186,6 +190,7 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
     try {
       const out = await window.api.db.query(id, query)
       setResult(out)
+      setSetIndex(out.shown ?? 0)
       // Помним именно содержимое поля, а не выполненный запрос: заготовки из списка
       // текст в поле не меняют, и подменять его при возвращении было бы неожиданно.
       update(sessionId, { result: out })
@@ -326,28 +331,45 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
 
           {result && (
             <div className="db-result">
+              {(result.sets?.length ?? 0) > 1 && (
+                <div className="db-sets">
+                  {/* Несколько наборов - несколько кнопок. Прятать остальные нельзя:
+                      данные могли прийти вторым оператором, и пустая таблица без
+                      объяснения выглядит как «запрос ничего не вернул». */}
+                  {result.sets?.map((s, i) => (
+                    <button
+                      key={i}
+                      className={'mini' + (i === setIndex ? ' on' : '')}
+                      title={`${s.rows.length} строк, изменено ${s.affected}`}
+                      onClick={() => setSetIndex(i)}
+                    >
+                      набор {i + 1}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="ws-table-wrap">
                 <table className="ws-table">
                   <thead>
                     <tr>
-                      {result.columns.map((c) => (
+                      {shownSet.columns.map((c) => (
                         <th key={c}>{c}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {result.rows.map((row, i) => (
+                    {shownSet.rows.map((row, i) => (
                       <tr key={i}>
-                        {result.columns.map((c) => (
+                        {shownSet.columns.map((c) => (
                           <td key={c} className={isNull(row[c]) ? 'db-null' : undefined}>
                             {cellText(row[c])}
                           </td>
                         ))}
                       </tr>
                     ))}
-                    {result.rows.length === 0 && (
+                    {shownSet.rows.length === 0 && (
                       <tr>
-                        <td colSpan={Math.max(1, result.columns.length)} className="hint">
+                        <td colSpan={Math.max(1, shownSet.columns.length)} className="hint">
                           Строк нет
                         </td>
                       </tr>
@@ -355,7 +377,7 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
                   </tbody>
                 </table>
               </div>
-              <div className="db-summary">{summarize(result)}</div>
+              <div className="db-summary">{summarize({ ...result, ...shownSet })}</div>
             </div>
           )}
         </>

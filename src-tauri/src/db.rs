@@ -223,6 +223,73 @@ const MAX_CELL: usize = 64 * 1024;
 /// Сколько ждём ответа. Дальше соединение закрывается: продолжать по нему нельзя.
 const QUERY_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Делает имена колонок различимыми.
+///
+/// `SELECT 1 AS a, 2 AS a` возвращает две колонки с одним именем, а строка в ответе -
+/// словарь: второе значение затирало первое, и человек видел таблицу, где одного столбца
+/// просто нет. Повторы получают номер.
+fn unique_names<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for name in names {
+        let mut candidate = name.to_owned();
+        let mut n = 2;
+        while out.contains(&candidate) {
+            candidate = format!("{name}#{n}");
+            n += 1;
+        }
+        out.push(candidate);
+    }
+    out
+}
+
+/// Один набор результатов: свои колонки, свои строки, своё число изменённых.
+struct ResultSet {
+    columns: Vec<String>,
+    budget: Budget,
+    affected: u64,
+}
+
+impl ResultSet {
+    fn new(columns: Vec<String>) -> Self {
+        Self { columns, budget: Budget::new(), affected: 0 }
+    }
+
+    fn json(self) -> Value {
+        json!({
+            "columns": self.columns,
+            "rows": self.budget.rows,
+            "affected": self.affected,
+            "truncated": self.budget.truncated,
+        })
+    }
+}
+
+/// Собирает ответ из наборов.
+///
+/// В таблицу идёт первый набор со строками - обычно его и ждут, когда пишут несколько
+/// операторов подряд. Остальные не выбрасываются: они уходят в `sets`, и панель даёт
+/// переключиться. Прежний разбор запоминал колонки первой строки и применял их ко всем
+/// следующим наборам - на `SELECT 1 AS a, 2 AS b; SELECT 3 AS c` это означало обращение к
+/// колонке, которой в строке нет, а закреплённая библиотека на таком обращении паникует.
+fn answer(sets: Vec<ResultSet>) -> Value {
+    let affected: u64 = sets.iter().map(|s| s.affected).sum();
+    let truncated = sets.iter().any(|s| s.budget.truncated);
+    let sets: Vec<Value> = sets.into_iter().map(ResultSet::json).collect();
+    let shown = sets
+        .iter()
+        .position(|s| !s["rows"].as_array().map(|r| r.is_empty()).unwrap_or(true))
+        .unwrap_or(0);
+    let head = sets.get(shown).cloned().unwrap_or_else(|| json!({}));
+    json!({
+        "columns": head.get("columns").cloned().unwrap_or_else(|| json!([])),
+        "rows": head.get("rows").cloned().unwrap_or_else(|| json!([])),
+        "affected": affected,
+        "truncated": truncated,
+        "sets": sets,
+        "shown": shown,
+    })
+}
+
 /// Складывает строки, пока они укладываются в пределы.
 ///
 /// Общая для всех трёх баз: пределы обязаны быть одинаковыми, иначе «много строк» в одной
@@ -307,75 +374,91 @@ async fn pg_query(client: &tokio_postgres::Client, sql: &str) -> Result<Value, S
     // в котором может быть несколько операторов сразу, а типов параметров тут нет вовсе.
     let msgs = client.simple_query(sql).await.map_err(|e| pg_err(&e))?;
 
-    let mut columns: Vec<String> = Vec::new();
-    let mut budget = Budget::new();
-    let mut affected: u64 = 0;
+    let mut sets: Vec<ResultSet> = Vec::new();
+    let mut current: Option<ResultSet> = None;
 
     for m in msgs {
         match m {
-            tokio_postgres::SimpleQueryMessage::Row(r) => {
-                if columns.is_empty() {
-                    columns = r.columns().iter().map(|c| c.name().to_string()).collect();
+            // Описание колонок начинает новый набор - это и есть граница между выборками.
+            tokio_postgres::SimpleQueryMessage::RowDescription(cols) => {
+                if let Some(done) = current.take() {
+                    sets.push(done);
                 }
+                current = Some(ResultSet::new(unique_names(cols.iter().map(|c| c.name()))));
+            }
+            tokio_postgres::SimpleQueryMessage::Row(r) => {
+                // Колонки берём из самой строки, если описания не было: обращаться по
+                // индексу, которого в строке нет, нельзя - библиотека на этом паникует.
+                let set = current.get_or_insert_with(|| {
+                    ResultSet::new(unique_names(r.columns().iter().map(|c| c.name())))
+                });
                 let mut obj = Map::new();
                 let mut size = 0usize;
-                for (i, name) in columns.iter().enumerate() {
+                for (i, name) in set.columns.iter().enumerate() {
+                    if i >= r.len() {
+                        obj.insert(name.clone(), Value::Null);
+                        continue;
+                    }
                     // NULL и пустая строка - разные вещи, и в таблице их надо различать.
                     let cell = match r.get(i) {
                         Some(v) => {
                             size += v.len();
-                            budget.cell(v)
+                            set.budget.cell(v)
                         }
                         None => Value::Null,
                     };
                     obj.insert(name.clone(), cell);
                 }
-                if !budget.push(Value::Object(obj), size) {
-                    break;
+                if !set.budget.push(Value::Object(obj), size) {
+                    // Место кончилось - остальные строки этого набора не берём, но
+                    // следующие наборы разобрать обязаны.
+                    continue;
                 }
             }
-            tokio_postgres::SimpleQueryMessage::CommandComplete(n) => affected += n,
+            tokio_postgres::SimpleQueryMessage::CommandComplete(n) => {
+                let mut set = current.take().unwrap_or_else(|| ResultSet::new(Vec::new()));
+                set.affected = n;
+                sets.push(set);
+            }
             _ => {}
         }
     }
-    Ok(json!({
-        "columns": columns,
-        "rows": budget.rows,
-        "affected": affected,
-        "truncated": budget.truncated,
-    }))
+    if let Some(done) = current.take() {
+        sets.push(done);
+    }
+    Ok(answer(sets))
 }
 
 async fn mysql_query(conn: &AsyncMutex<MysqlConn>, sql: &str) -> Result<Value, String> {
-    let out = {
+    let outs = {
         let mut g = conn.lock().await;
         g.query(sql).await?
     };
-    let mut budget = Budget::new();
-    for r in out.rows {
-        let mut obj = Map::new();
-        let mut size = 0usize;
-        for (name, cell) in out.columns.iter().zip(r) {
-            // NULL и пустая строка - разные вещи, как и у PostgreSQL.
-            let value = match cell {
-                Some(v) => {
-                    size += v.len();
-                    budget.cell(&v)
-                }
-                None => Value::Null,
-            };
-            obj.insert(name.clone(), value);
+    let mut sets: Vec<ResultSet> = Vec::new();
+    for out in outs {
+        let mut set = ResultSet::new(unique_names(out.columns.iter().map(String::as_str)));
+        set.affected = out.affected;
+        for r in out.rows {
+            let mut obj = Map::new();
+            let mut size = 0usize;
+            for (name, cell) in set.columns.iter().zip(r) {
+                // NULL и пустая строка - разные вещи, как и у PostgreSQL.
+                let value = match cell {
+                    Some(v) => {
+                        size += v.len();
+                        set.budget.cell(&v)
+                    }
+                    None => Value::Null,
+                };
+                obj.insert(name.clone(), value);
+            }
+            if !set.budget.push(Value::Object(obj), size) {
+                break;
+            }
         }
-        if !budget.push(Value::Object(obj), size) {
-            break;
-        }
+        sets.push(set);
     }
-    Ok(json!({
-        "columns": out.columns,
-        "rows": budget.rows,
-        "affected": out.affected,
-        "truncated": budget.truncated,
-    }))
+    Ok(answer(sets))
 }
 
 async fn redis_query(
@@ -394,21 +477,16 @@ async fn redis_query(
         let mut g = conn.lock().await;
         cmd.query_async(&mut *g).await.map_err(|e| redis_err(&e))?
     };
-    let mut budget = Budget::new();
+    let mut set = ResultSet::new(vec!["значение".to_owned()]);
     for row in redis_rows(value) {
         let text = row["значение"].as_str().unwrap_or("").to_owned();
         let size = text.len();
-        let cell = if text.is_empty() { row["значение"].clone() } else { budget.cell(&text) };
-        if !budget.push(json!({ "значение": cell }), size) {
+        let cell = if text.is_empty() { row["значение"].clone() } else { set.budget.cell(&text) };
+        if !set.budget.push(json!({ "значение": cell }), size) {
             break;
         }
     }
-    Ok(json!({
-        "columns": ["значение"],
-        "rows": budget.rows,
-        "affected": 0,
-        "truncated": budget.truncated,
-    }))
+    Ok(answer(vec![set]))
 }
 
 /// Ответ Redis - дерево, а таблица плоская. Разворачиваем список в строки, всё остальное
@@ -527,6 +605,31 @@ fn redis_err(e: &redis::RedisError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn одинаковые_имена_колонок_не_съедают_друг_друга() {
+        // `SELECT 1 AS a, 2 AS a` - строка в ответе словарь, и второе значение затирало
+        // первое: в таблице просто не было одного столбца.
+        assert_eq!(unique_names(["a", "b", "a", "a"].into_iter()), vec!["a", "b", "a#2", "a#3"]);
+        assert_eq!(unique_names([].into_iter()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn показывается_первый_набор_со_строками() {
+        // Несколько операторов подряд: данные часто приходят не первым набором, а вторым.
+        // Раньше показывался первый, и человек видел пустую таблицу без объяснений.
+        let mut пустой = ResultSet::new(vec!["a".into()]);
+        пустой.affected = 3;
+        let mut со_строками = ResultSet::new(vec!["c".into()]);
+        со_строками.budget.push(json!({ "c": 3 }), 1);
+        со_строками.affected = 1;
+
+        let ответ = answer(vec![пустой, со_строками]);
+        assert_eq!(ответ["shown"], 1, "показать надо набор со строками");
+        assert_eq!(ответ["columns"][0], "c");
+        assert_eq!(ответ["sets"].as_array().unwrap().len(), 2, "остальные наборы не выбрасываются");
+        assert_eq!(ответ["affected"], 4, "изменённые строки складываются по всем наборам");
+    }
 
     #[test]
     fn выборка_обрезается_по_строкам_объёму_и_ячейке() {

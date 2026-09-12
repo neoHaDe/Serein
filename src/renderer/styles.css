@@ -4867,6 +4867,16 @@ button.secondary:hover {
   flex-direction: column;
   border-top: 1px solid var(--border);
 }
+/* Переключатель наборов результатов: он появляется только когда наборов больше одного,
+   поэтому места в обычном случае не занимает. */
+.db-sets {
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
 .db-summary {
   padding: 6px 12px;
   font-size: 11px;

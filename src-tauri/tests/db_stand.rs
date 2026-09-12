@@ -402,3 +402,36 @@ fn открытую_базу_можно_найти_по_сессии() {
         assert!(db::for_session("сессия-с-окном").is_none());
     });
 }
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn несколько_выборок_в_одном_запросе_не_смешиваются() {
+    // Здесь раньше был не просто неверный показ, а падение: колонки запоминались от первой
+    // строки и применялись ко второй выборке, у которой их меньше, а закреплённая
+    // библиотека на обращении к отсутствующей колонке паникует.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let id = open(&s, params(Kind::Postgres, &s.pg_host, "probe", Some("probe"))).await;
+        let out = db::query(&id, "SELECT 1 AS a, 2 AS b; SELECT 3 AS c")
+            .await
+            .expect("запрос из двух выборок");
+
+        let sets = out["sets"].as_array().expect("наборы");
+        assert_eq!(sets.len(), 2, "две выборки - два набора: {out}");
+        let first: Vec<&str> = sets[0]["columns"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
+        let second: Vec<&str> = sets[1]["columns"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
+        assert_eq!(first, vec!["a", "b"]);
+        assert_eq!(second, vec!["c"], "у второй выборки свои колонки");
+        assert_eq!(sets[1]["rows"][0]["c"], "3");
+
+        // Одинаковые имена колонок не съедают друг друга: строка - словарь, и второе
+        // значение затирало первое.
+        let dup = db::query(&id, "SELECT 1 AS a, 2 AS a").await.expect("одинаковые имена");
+        let cols: Vec<&str> = dup["columns"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
+        assert_eq!(cols, vec!["a", "a#2"]);
+        assert_eq!(dup["rows"][0]["a"], "1");
+        assert_eq!(dup["rows"][0]["a#2"], "2");
+
+        db::close(&id);
+    });
+}
