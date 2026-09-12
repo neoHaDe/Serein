@@ -11,12 +11,22 @@ export interface QueryResult {
   rows: Record<string, unknown>[]
   affected: number
   ms: number
+  /**
+   * Показано не всё: сработал предел на строки, объём или размер ячейки.
+   *
+   * Молчать об этом нельзя ни в каком виде: человек смотрит на таблицу и делает по ней
+   * выводы, а «первые пять тысяч строк» и «все строки» - это разные выводы.
+   */
+  truncated?: boolean
 }
 
 /** Человеческий итог: сколько строк и за сколько. Показывается под таблицей. */
 export function summarize(r: QueryResult): string {
   const time = `${r.ms} мс`
-  if (r.rows.length > 0) return `${r.rows.length} ${plural(r.rows.length, 'строка', 'строки', 'строк')} · ${time}`
+  const cut = r.truncated ? ' · показано не всё, предел выборки' : ''
+  if (r.rows.length > 0) {
+    return `${r.rows.length} ${plural(r.rows.length, 'строка', 'строки', 'строк')} · ${time}${cut}`
+  }
   if (r.affected > 0) {
     return `изменено ${r.affected} ${plural(r.affected, 'строка', 'строки', 'строк')} · ${time}`
   }

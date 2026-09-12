@@ -320,6 +320,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
 
     /// Читает один логический пакет, склеивая продолжения.
     async fn read_packet(&mut self) -> Result<Vec<u8>, String> {
+        // Предел на склейку продолжений. Пакет MySQL длиннее 16 МиБ приходит частями, и
+        // склеивать их можно бесконечно: сервер (или что-то, выдающее себя за сервер)
+        // диктует, сколько нам выделить памяти. Настоящие ответы такого размера в панель
+        // всё равно не показать.
+        const MAX_TOTAL: usize = 64 * 1024 * 1024;
         let mut out = Vec::new();
         loop {
             let mut head = [0u8; 4];
@@ -329,6 +334,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
                 .map_err(|e| format!("Соединение с базой оборвалось: {e}"))?;
             let len = u32::from_le_bytes([head[0], head[1], head[2], 0]) as usize;
             self.seq = head[3].wrapping_add(1);
+            if out.len().saturating_add(len) > MAX_TOTAL {
+                return Err(format!(
+                    "ответ базы больше {} МиБ - читать его дальше не будем",
+                    MAX_TOTAL / 1024 / 1024
+                ));
+            }
             let start = out.len();
             out.resize(start + len, 0);
             self.stream

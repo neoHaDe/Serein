@@ -213,6 +213,63 @@ pub async fn open(
     Ok(info)
 }
 
+/// Пределы одного запроса.
+///
+/// Они не про вкус к аккуратности. `SELECT * FROM logs` на живой базе - это миллионы
+/// строк: они целиком приезжают в память приложения, оттуда в JSON, оттуда в таблицу
+/// интерфейса, и приложение встаёт намертво на машине, где база отвечала мгновенно.
+/// Поэтому берём столько, сколько имеет смысл показывать человеку, и честно говорим, что
+/// показано не всё.
+const MAX_ROWS: usize = 5_000;
+/// Грубая мера объёма ответа: сумма длин значений. Пять тысяч строк по мегабайту - тоже
+/// способ убить приложение.
+const MAX_BYTES: usize = 16 * 1024 * 1024;
+/// Одна ячейка. Столбец с картинкой или документом показывать целиком незачем.
+const MAX_CELL: usize = 64 * 1024;
+/// Сколько ждём ответа. Дальше соединение закрывается: продолжать по нему нельзя.
+const QUERY_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Складывает строки, пока они укладываются в пределы.
+///
+/// Общая для всех трёх баз: пределы обязаны быть одинаковыми, иначе «много строк» в одной
+/// панели значит одно, а в соседней другое.
+struct Budget {
+    rows: Vec<Value>,
+    bytes: usize,
+    truncated: bool,
+}
+
+impl Budget {
+    fn new() -> Self {
+        Self { rows: Vec::new(), bytes: 0, truncated: false }
+    }
+
+    /// Обрезает слишком длинное значение, сообщая об этом в самом значении.
+    fn cell(&mut self, v: &str) -> Value {
+        if v.len() <= MAX_CELL {
+            return json!(v);
+        }
+        self.truncated = true;
+        let mut cut = MAX_CELL;
+        // Режем по границе символа: иначе в таблицу уедет битый UTF-8.
+        while cut > 0 && !v.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        json!(format!("{}… (обрезано, всего {} Б)", &v[..cut], v.len()))
+    }
+
+    /// `false` - место кончилось, дальше складывать нечего.
+    fn push(&mut self, row: Value, size: usize) -> bool {
+        if self.rows.len() >= MAX_ROWS || self.bytes.saturating_add(size) > MAX_BYTES {
+            self.truncated = true;
+            return false;
+        }
+        self.bytes += size;
+        self.rows.push(row);
+        true
+    }
+}
+
 /// Выполняет запрос и возвращает таблицу: колонки, строки и сколько это заняло.
 pub async fn query(id: &str, text: &str) -> Result<Value, String> {
     let live = with_sessions(|m| match m.get(id).map(|o| &o.live) {
@@ -224,10 +281,26 @@ pub async fn query(id: &str, text: &str) -> Result<Value, String> {
     .ok_or("Соединение с базой закрыто")?;
 
     let started = std::time::Instant::now();
-    let mut out = match live {
-        Live::Postgres(c) => pg_query(&c, text).await?,
-        Live::Mysql(c) => mysql_query(&c, text).await?,
-        Live::Redis(c) => redis_query(&c, text).await?,
+    let work = async {
+        match live {
+            Live::Postgres(c) => pg_query(&c, text).await,
+            Live::Mysql(c) => mysql_query(&c, text).await,
+            Live::Redis(c) => redis_query(&c, text).await,
+        }
+    };
+    // Срок на запрос, и по его истечении соединение закрывается. Это не перестраховка:
+    // брошенный на середине запрос оставляет протокол в неизвестном состоянии, и
+    // следующий запрос по тому же соединению прочтёт хвост предыдущего - выглядеть это
+    // будет как «база вернула ерунду».
+    let mut out = match tokio::time::timeout(QUERY_LIMIT, work).await {
+        Ok(r) => r?,
+        Err(_) => {
+            close(id);
+            return Err(format!(
+                "запрос не ответил за {} с - соединение закрыто, откройте его заново",
+                QUERY_LIMIT.as_secs()
+            ));
+        }
     };
     if let Some(o) = out.as_object_mut() {
         o.insert("ms".into(), json!(started.elapsed().as_millis() as u64));
@@ -241,7 +314,7 @@ async fn pg_query(client: &tokio_postgres::Client, sql: &str) -> Result<Value, S
     let msgs = client.simple_query(sql).await.map_err(|e| pg_err(&e))?;
 
     let mut columns: Vec<String> = Vec::new();
-    let mut rows: Vec<Value> = Vec::new();
+    let mut budget = Budget::new();
     let mut affected: u64 = 0;
 
     for m in msgs {
@@ -251,17 +324,32 @@ async fn pg_query(client: &tokio_postgres::Client, sql: &str) -> Result<Value, S
                     columns = r.columns().iter().map(|c| c.name().to_string()).collect();
                 }
                 let mut obj = Map::new();
+                let mut size = 0usize;
                 for (i, name) in columns.iter().enumerate() {
                     // NULL и пустая строка - разные вещи, и в таблице их надо различать.
-                    obj.insert(name.clone(), r.get(i).map(|v| json!(v)).unwrap_or(Value::Null));
+                    let cell = match r.get(i) {
+                        Some(v) => {
+                            size += v.len();
+                            budget.cell(v)
+                        }
+                        None => Value::Null,
+                    };
+                    obj.insert(name.clone(), cell);
                 }
-                rows.push(Value::Object(obj));
+                if !budget.push(Value::Object(obj), size) {
+                    break;
+                }
             }
             tokio_postgres::SimpleQueryMessage::CommandComplete(n) => affected += n,
             _ => {}
         }
     }
-    Ok(json!({ "columns": columns, "rows": rows, "affected": affected }))
+    Ok(json!({
+        "columns": columns,
+        "rows": budget.rows,
+        "affected": affected,
+        "truncated": budget.truncated,
+    }))
 }
 
 async fn mysql_query(conn: &AsyncMutex<MysqlConn>, sql: &str) -> Result<Value, String> {
@@ -269,19 +357,31 @@ async fn mysql_query(conn: &AsyncMutex<MysqlConn>, sql: &str) -> Result<Value, S
         let mut g = conn.lock().await;
         g.query(sql).await?
     };
-    let rows: Vec<Value> = out
-        .rows
-        .into_iter()
-        .map(|r| {
-            let mut obj = Map::new();
-            for (name, cell) in out.columns.iter().zip(r) {
-                // NULL и пустая строка - разные вещи, как и у PostgreSQL.
-                obj.insert(name.clone(), cell.map(Value::String).unwrap_or(Value::Null));
-            }
-            Value::Object(obj)
-        })
-        .collect();
-    Ok(json!({ "columns": out.columns, "rows": rows, "affected": out.affected }))
+    let mut budget = Budget::new();
+    for r in out.rows {
+        let mut obj = Map::new();
+        let mut size = 0usize;
+        for (name, cell) in out.columns.iter().zip(r) {
+            // NULL и пустая строка - разные вещи, как и у PostgreSQL.
+            let value = match cell {
+                Some(v) => {
+                    size += v.len();
+                    budget.cell(&v)
+                }
+                None => Value::Null,
+            };
+            obj.insert(name.clone(), value);
+        }
+        if !budget.push(Value::Object(obj), size) {
+            break;
+        }
+    }
+    Ok(json!({
+        "columns": out.columns,
+        "rows": budget.rows,
+        "affected": out.affected,
+        "truncated": budget.truncated,
+    }))
 }
 
 async fn redis_query(
@@ -300,7 +400,21 @@ async fn redis_query(
         let mut g = conn.lock().await;
         cmd.query_async(&mut *g).await.map_err(|e| redis_err(&e))?
     };
-    Ok(json!({ "columns": ["значение"], "rows": redis_rows(value), "affected": 0 }))
+    let mut budget = Budget::new();
+    for row in redis_rows(value) {
+        let text = row["значение"].as_str().unwrap_or("").to_owned();
+        let size = text.len();
+        let cell = if text.is_empty() { row["значение"].clone() } else { budget.cell(&text) };
+        if !budget.push(json!({ "значение": cell }), size) {
+            break;
+        }
+    }
+    Ok(json!({
+        "columns": ["значение"],
+        "rows": budget.rows,
+        "affected": 0,
+        "truncated": budget.truncated,
+    }))
 }
 
 /// Ответ Redis - дерево, а таблица плоская. Разворачиваем список в строки, всё остальное
@@ -419,6 +533,37 @@ fn redis_err(e: &redis::RedisError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn выборка_обрезается_по_строкам_объёму_и_ячейке() {
+        // Без этих пределов `SELECT * FROM logs` на живой базе приезжает целиком: в память,
+        // в JSON, в таблицу - и приложение встаёт на машине, где база отвечала мгновенно.
+        let mut по_строкам = Budget::new();
+        for i in 0..MAX_ROWS {
+            assert!(по_строкам.push(json!({ "i": i }), 1), "строка {i} должна поместиться");
+        }
+        assert!(!по_строкам.push(json!({ "i": "лишняя" }), 1), "предел строк обязан сработать");
+        assert!(по_строкам.truncated, "об обрезке надо сказать");
+
+        let mut по_объёму = Budget::new();
+        assert!(!по_объёму.push(json!({ "a": 1 }), MAX_BYTES + 1), "предел объёма обязан сработать");
+        assert!(по_объёму.truncated);
+
+        let mut по_ячейке = Budget::new();
+        // Кириллица - два байта на символ: длинная строка режется по границе символа, иначе
+        // в таблицу уедет битый UTF-8.
+        let длинная = "я".repeat(MAX_CELL);
+        let обрезанная = по_ячейке.cell(&длинная);
+        let текст = обрезанная.as_str().expect("значение - строка");
+        assert!(текст.contains("обрезано"), "обрезка обязана быть видна: {текст:.40}");
+        assert!(текст.len() < длинная.len());
+        assert!(по_ячейке.truncated);
+
+        // Короткое значение проходит как есть, без пометок.
+        let mut целое = Budget::new();
+        assert_eq!(целое.cell("значение"), json!("значение"));
+        assert!(!целое.truncated);
+    }
 
     #[test]
     fn порт_берётся_по_виду_базы_если_не_задан() {

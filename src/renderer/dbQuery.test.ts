@@ -11,6 +11,9 @@ const result = (rows: number, affected = 0, ms = 12): Parameters<typeof summariz
 describe('итог запроса', () => {
   it('склоняет слово «строка» по-русски', () => {
     expect(summarize(result(1))).toBe('1 строка · 12 мс')
+    // Обрезанная выборка обязана называть себя обрезанной: по таблице делают выводы, и
+    // «первые пять тысяч строк» - это не «все строки».
+    expect(summarize({ ...result(5000), truncated: true })).toContain('показано не всё')
     expect(summarize(result(3))).toBe('3 строки · 12 мс')
     expect(summarize(result(5))).toBe('5 строк · 12 мс')
     expect(summarize(result(21))).toBe('21 строка · 12 мс')

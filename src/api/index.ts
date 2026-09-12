@@ -550,8 +550,14 @@ export const api = {
     query: (
       id: string,
       text: string
-    ): Promise<{ columns: string[]; rows: Record<string, unknown>[]; affected: number; ms: number }> =>
-      invoke('db_query', { id, text }),
+    ): Promise<{
+      columns: string[]
+      rows: Record<string, unknown>[]
+      affected: number
+      ms: number
+      /** Показано не всё: сработал предел на строки, объём ответа или размер ячейки. */
+      truncated?: boolean
+    }> => invoke('db_query', { id, text }),
     close: (id: string): Promise<void> => invoke('db_close', { id }),
     /**
      * Уже открытая база этой сессии, если она есть.
