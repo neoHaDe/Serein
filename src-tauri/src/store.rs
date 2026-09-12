@@ -162,6 +162,19 @@ mod perm_tests {
     }
 }
 
+/// Та же надёжная запись для соседних модулей профиля.
+///
+/// Отдельная обёртка, а не публичный `write_value`: снаружи виден только способ записи,
+/// а не устройство каталога.
+pub(crate) fn write_json(name: &str, v: &Value) -> Result<(), String> {
+    write_value(name, v)
+}
+
+/// И то же чтение с различением «нет файла» и «не прочитать».
+pub(crate) fn read_json(name: &str) -> Result<Option<Value>, String> {
+    read_checked(name)
+}
+
 #[cfg(test)]
 mod store_tests {
     use super::*;

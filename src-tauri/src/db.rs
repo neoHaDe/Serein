@@ -126,13 +126,7 @@ async fn channel(
     host: &str,
     port: u16,
 ) -> Result<russh::ChannelStream<russh::client::Msg>, String> {
-    let ch = {
-        let g = handle.lock().await;
-        // «127.0.0.1» здесь - петля сервера, а не наша: канал открывает удалённая сторона.
-        g.channel_open_direct_tcpip(host, port as u32, "127.0.0.1", 0)
-            .await
-            .map_err(|e| format!("Канал до {host}:{port} не открылся: {e}"))?
-    };
+    let ch = crate::ssh::open_forward_channel(handle, host, port).await?;
     Ok(ch.into_stream())
 }
 

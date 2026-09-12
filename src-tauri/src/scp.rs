@@ -25,10 +25,7 @@ struct ScpIo {
 
 impl ScpIo {
     async fn open(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, cmd: &str) -> Result<Self, String> {
-        let channel = {
-            let h = handle.lock().await;
-            h.channel_open_session().await.map_err(|e| e.to_string())?
-        };
+        let channel = crate::ssh::open_session_channel(handle).await?;
         channel.exec(true, cmd).await.map_err(|e| e.to_string())?;
         Ok(Self { channel, buf: Vec::new() })
     }

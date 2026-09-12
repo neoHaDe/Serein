@@ -319,10 +319,7 @@ fn sftp_config() -> SftpConfig {
 async fn open_stream(
     handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
 ) -> Result<russh::ChannelStream<russh::client::Msg>, String> {
-    let mut channel = {
-        let h = handle.lock().await;
-        h.channel_open_session().await.map_err(|e| e.to_string())?
-    };
+    let mut channel = crate::ssh::open_session_channel(handle).await?;
     channel
         .request_subsystem(true, "sftp")
         .await

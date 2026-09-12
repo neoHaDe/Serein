@@ -164,20 +164,13 @@ pub async fn open(
         } => {
             // Порт открывается со стороны сервера, поэтому «127.0.0.1» здесь - это его
             // собственный loopback, а не наш. Ради этого всё и затевалось.
-            let ch = {
-                let g = handle.lock().await;
-                g.channel_open_direct_tcpip(host.as_str(), port as u32, "127.0.0.1", 0)
-                    .await
-            };
-            let ch = match ch {
+            let ch = match crate::ssh::open_forward_channel(&handle, &host, port).await {
                 Ok(ch) => ch,
                 Err(e) => {
                     if let Some(link) = link {
                         link.close().await;
                     }
-                    return Err(OpenError::from(format!(
-                        "SSH-канал до {host}:{port} не открылся: {e}"
-                    )));
+                    return Err(OpenError::from(e));
                 }
             };
             spawn_loop(id.clone(), ch.into_stream(), password, rx, alive.clone(), out.clone(), link)

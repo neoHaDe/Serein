@@ -5,7 +5,6 @@ use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
 use base64::Engine;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
 use std::sync::Mutex;
 
 /// Сериализует изменение файла отпечатков.
@@ -20,21 +19,25 @@ fn lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn path() -> PathBuf {
-    crate::store::config_dir().join("known_hosts.json")
+const FILE: &str = "known_hosts.json";
+
+/// Читает хранилище отпечатков.
+///
+/// Ошибка здесь - именно ошибка, а не «хостов нет». Прежнее чтение на любую беду отвечало
+/// пустым списком: повреждённый файл превращал все известные серверы в незнакомые, и
+/// подмена ключа выглядела как первое подключение. Ровно то, от чего это хранилище и
+/// защищает.
+fn read_result() -> Result<Value, String> {
+    Ok(crate::store::read_json(FILE)?.unwrap_or_else(|| json!({})))
 }
 
+/// Чтение для показа списков: там пустой список - нормальный ответ.
 fn read() -> Value {
-    std::fs::read_to_string(path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_else(|| json!({}))
+    read_result().unwrap_or_else(|_| json!({}))
 }
 
-fn write(v: &Value) {
-    if let Ok(txt) = serde_json::to_string_pretty(v) {
-        let _ = std::fs::write(path(), txt);
-    }
+fn write(v: &Value) -> Result<(), String> {
+    crate::store::write_json(FILE, v)
 }
 
 /// Отпечаток в формате OpenSSH: "SHA256:<base64 без паддинга>" из base64-блоба ключа.
@@ -57,27 +60,39 @@ pub enum HostKeyStatus {
     New,
     /// Отпечаток не совпал с запомненным - либо сервер переустановили, либо это чужой сервер.
     Changed { previous: String },
+    /// Хранилище отпечатков не прочитать. Решать по нему нельзя вообще ничего.
+    Unreadable { why: String },
 }
 
 pub fn status(host_id: &str, fp: &str) -> HostKeyStatus {
-    match read().get(host_id).and_then(|v| v.as_str()) {
+    let data = match read_result() {
+        Ok(d) => d,
+        Err(why) => return HostKeyStatus::Unreadable { why },
+    };
+    classify(data.get(host_id).and_then(|v| v.as_str()), fp)
+}
+
+/// Само решение, без диска: что значит запомненная запись для этого отпечатка.
+fn classify(known: Option<&str>, fp: &str) -> HostKeyStatus {
+    match known {
         None => HostKeyStatus::New,
-        Some(known) if known == fp => HostKeyStatus::Trusted,
-        Some(known) => HostKeyStatus::Changed {
-            previous: known.to_string(),
-        },
+        Some(k) if k == fp => HostKeyStatus::Trusted,
+        Some(k) => HostKeyStatus::Changed { previous: k.to_string() },
     }
 }
 
 /// Запоминает отпечаток (перезаписывая прежний, если пользователь подтвердил смену).
-pub fn remember(host_id: &str, fp: &str) {
+///
+/// Отказ записи возвращается наверх: молча не запомненный ключ значит, что в следующий раз
+/// про этот сервер спросят снова - и человек привыкает нажимать «доверяю», не вчитываясь.
+pub fn remember(host_id: &str, fp: &str) -> Result<(), String> {
     // Читаем и пишем под замком: см. `lock()`.
     let _guard = lock().lock().unwrap_or_else(|e| e.into_inner());
-    let mut data = read();
+    let mut data = read_result()?;
     if let Some(o) = data.as_object_mut() {
         o.insert(host_id.to_string(), json!(fp));
     }
-    write(&data);
+    write(&data)
 }
 
 /// Список известных хостов для интерфейса: `[{ host, fingerprint }]`, отсортирован по имени.
@@ -102,13 +117,15 @@ pub fn list() -> Vec<Value> {
 
 pub fn forget(host_id: &str) -> bool {
     let _guard = lock().lock().unwrap_or_else(|e| e.into_inner());
-    let mut data = read();
+    let Ok(mut data) = read_result() else {
+        return false;
+    };
     let removed = data
         .as_object_mut()
         .map(|o| o.remove(host_id).is_some())
         .unwrap_or(false);
-    if removed {
-        write(&data);
+    if removed && write(&data).is_err() {
+        return false;
     }
     removed
 }
@@ -158,7 +175,7 @@ pub fn import_openssh() -> Result<usize, String> {
         .map_err(|e| format!("Не удалось прочитать {}: {e}", path.display()))?;
 
     let _guard = lock().lock().unwrap_or_else(|e| e.into_inner());
-    let mut data = read();
+    let mut data = read_result()?;
     let mut added = 0usize;
     if let Some(o) = data.as_object_mut() {
         for line in text.lines() {
@@ -172,7 +189,7 @@ pub fn import_openssh() -> Result<usize, String> {
         }
     }
     if added > 0 {
-        write(&data);
+        write(&data)?;
     }
     Ok(added)
 }
@@ -214,14 +231,26 @@ mod tests {
     #[test]
     fn status_distinguishes_new_trusted_and_changed() {
         // Чистая проверка сравнения, без файла на диске.
-        let known = "SHA256:aaa";
+        assert_eq!(classify(Some("SHA256:aaa"), "SHA256:aaa"), HostKeyStatus::Trusted);
+        assert_eq!(classify(None, "SHA256:aaa"), HostKeyStatus::New);
         assert_eq!(
-            match Some(known) {
-                None => HostKeyStatus::New,
-                Some(k) if k == "SHA256:aaa" => HostKeyStatus::Trusted,
-                Some(k) => HostKeyStatus::Changed { previous: k.into() },
-            },
-            HostKeyStatus::Trusted
+            classify(Some("SHA256:bbb"), "SHA256:aaa"),
+            HostKeyStatus::Changed { previous: "SHA256:bbb".into() },
+            "несовпадение - это смена ключа, а не новый хост"
         );
+    }
+
+    #[test]
+    fn нечитаемое_хранилище_отличается_от_пустого() {
+        // Разница тут не косметическая: пустое хранилище значит «хост новый, спроси
+        // человека», а нечитаемое - «решать не по чему, отказывайся». Прежний код на любую
+        // беду с файлом отвечал первым вариантом, и подмена ключа выглядела как первое
+        // подключение к незнакомому серверу.
+        //
+        // Само чтение и его отказы проверены в `store` (там же, где повреждённый JSON);
+        // здесь важно, что у состояния есть отдельный вариант и он не равен `New`.
+        let unreadable = HostKeyStatus::Unreadable { why: "файл повреждён".into() };
+        assert_ne!(unreadable, HostKeyStatus::New);
+        assert_ne!(unreadable, HostKeyStatus::Trusted);
     }
 }

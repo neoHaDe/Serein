@@ -275,14 +275,9 @@ pub async fn open(
             } => {
                 // Порт открывается со стороны сервера, поэтому «127.0.0.1» здесь - его
                 // собственная петля, а не наша. Ради этого всё и затевалось.
-                let ch = {
-                    let g = handle.lock().await;
-                    g.channel_open_direct_tcpip(host.as_str(), port as u32, "127.0.0.1", 0)
-                        .await
-                };
-                match ch {
+                match crate::ssh::open_forward_channel(&handle, &host, port).await {
                     Ok(ch) => pump(sock, ch.into_stream(), bridge_rx.clone()).await,
-                    Err(e) => log(&format!("канал до {host}:{port} не открылся: {e}")),
+                    Err(e) => log(&e),
                 }
                 if let Some(link) = link {
                     link.close().await;

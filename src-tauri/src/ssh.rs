@@ -56,6 +56,40 @@ impl HostKeyAsk {
     }
 }
 
+/// Как относиться к ключу сервера, который не совпал с подтверждённым.
+///
+/// Раньше это была `Option<HostKeyAsk>`, и `None` означало «незнакомый ключ принять
+/// молча». Так подключались Fleet, восстановление туннелей и служебные каналы - то есть
+/// целый класс подключений доверял первому встречному, хотя `SECURITY.md` обещает
+/// обратное. Теперь варианты названы словами, и молчаливого доверия среди них нет.
+#[derive(Clone)]
+pub enum Trust {
+    /// Спросить человека: незнакомый ключ и смена ключа выносятся в окно сессии.
+    Ask(HostKeyAsk),
+    /// Только уже подтверждённый ключ. Фоновые подключения, где спросить некого: Fleet,
+    /// восстановление туннелей, второе соединение рабочего стола.
+    KnownOnly,
+    /// Принять незнакомый ключ и запомнить. Включается только переменной окружения для
+    /// стенда - в обычной работе этот вариант не выбирается нигде.
+    AcceptNewForTests,
+}
+
+impl Trust {
+    /// Политика для фоновых подключений.
+    ///
+    /// Обычно - строго по подтверждённым. Исключение одно и оно объявляется явно:
+    /// переменная `SEREIN_TRUST_NEW_HOSTS` для стенда, где серверы поднимаются заново на
+    /// каждый прогон и подтверждать их вручную некому. Без такой отдельной политики
+    /// «удобно для тестов» пришлось бы оставить в самом приложении.
+    pub fn background() -> Self {
+        if std::env::var_os("SEREIN_TRUST_NEW_HOSTS").is_some() {
+            Trust::AcceptNewForTests
+        } else {
+            Trust::KnownOnly
+        }
+    }
+}
+
 /// true = сессию гасим: туннельные copy и SFTP выходят из select/цикла.
 pub type CancelRx = watch::Receiver<bool>;
 
@@ -87,6 +121,51 @@ pub enum SshCmd {
     Write(Vec<u8>),
     Resize(u32, u32),
     Close,
+}
+
+/// Сколько ждём открытия канала.
+///
+/// Срок нужен потому, что замок сессии общий: пока он занят, встают и терминал, и файлы,
+/// и замер отклика. Сервер, который принял соединение и замолчал на открытии канала,
+/// держал этот замок сколько угодно - вся рабочая область выглядела зависшей, и понять,
+/// что именно висит, было нельзя. Пятнадцать секунд и внятный отказ лучше.
+pub const CHANNEL_OPEN_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Ждёт открытия канала не дольше отведённого срока.
+async fn within_limit<T>(
+    what: &str,
+    fut: impl std::future::Future<Output = Result<T, russh::Error>>,
+) -> Result<T, String> {
+    match tokio::time::timeout(CHANNEL_OPEN_LIMIT, fut).await {
+        Ok(r) => r.map_err(|e| format!("{what} не открылся: {e}")),
+        Err(_) => Err(format!(
+            "{what} не открылся за {} с - сервер не ответил",
+            CHANNEL_OPEN_LIMIT.as_secs()
+        )),
+    }
+}
+
+/// Канал сессии (exec, shell, SFTP, SCP) под общим замком, но с ограничением по времени.
+pub async fn open_session_channel(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+) -> Result<Channel<Msg>, String> {
+    let g = handle.lock().await;
+    within_limit("канал сессии", g.channel_open_session()).await
+}
+
+/// Канал `direct-tcpip` до `host:port` со стороны сервера - тем же способом.
+pub async fn open_forward_channel(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    host: &str,
+    port: u16,
+) -> Result<Channel<Msg>, String> {
+    let g = handle.lock().await;
+    // «127.0.0.1» здесь - петля сервера, а не наша: канал открывает удалённая сторона.
+    within_limit(
+        &format!("канал до {host}:{port}"),
+        g.channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1", 0),
+    )
+    .await
 }
 
 /// Целевой Handle за Mutex: &self-операции (открытие каналов) лочат его кратко,
@@ -139,12 +218,8 @@ impl SshSession {
 
 pub struct ClientHandler {
     host_id: String,
-    /// Куда спрашивать про незнакомый/сменившийся ключ. None - молча доверять (jump-хопы
-    /// при восстановлении туннелей, где спросить некого).
-    host_key_ask: Option<HostKeyAsk>,
-    /// Принимать только уже подтверждённый ключ. Для второго соединения к серверу, с
-    /// которым уже открыта сессия: незнакомый ключ там может значить только подмену.
-    known_only: bool,
+    /// Что делать с ключом, которого нет среди подтверждённых.
+    trust: Trust,
     remote_forwards: RemoteForwards,
     cancel: CancelRx,
     agent_lock: Arc<tokio::sync::Mutex<()>>,
@@ -175,29 +250,45 @@ impl Handler for ClientHandler {
         if status == knownhosts::HostKeyStatus::Trusted {
             return Ok(true);
         }
-        if self.known_only {
+        // Хранилище отпечатков не прочитать - отказываемся подключаться вообще. Считать в
+        // этот момент сервер незнакомым нельзя: именно так подмена ключа и выглядела бы.
+        if let knownhosts::HostKeyStatus::Unreadable { why } = &status {
+            crate::rdp::log(&format!(
+                "хранилище отпечатков не прочитать ({why}) - подключение к {} отклонено",
+                self.host_id
+            ));
             return Ok(false);
         }
 
-        let Some(ask) = self.host_key_ask.clone() else {
-            // Спросить некого (например, переподключение туннеля): ведём себя как раньше -
-            // новый ключ принимаем, смену отвергаем.
-            if matches!(status, knownhosts::HostKeyStatus::New) {
-                knownhosts::remember(&self.host_id, &fp);
-                return Ok(true);
+        let ask = match &self.trust {
+            Trust::Ask(ask) => ask.clone(),
+            // Незнакомый ключ в фоновом подключении - причина отказаться, а не доверять.
+            Trust::KnownOnly => return Ok(false),
+            Trust::AcceptNewForTests => {
+                if matches!(status, knownhosts::HostKeyStatus::New) {
+                    let _ = knownhosts::remember(&self.host_id, &fp);
+                    return Ok(true);
+                }
+                // Смена ключа не принимается даже на стенде: этот случай тесты и проверяют.
+                return Ok(false);
             }
-            return Ok(false);
         };
 
         let (kind, previous) = match &status {
             knownhosts::HostKeyStatus::New => ("new", String::new()),
             knownhosts::HostKeyStatus::Changed { previous } => ("changed", previous.clone()),
-            knownhosts::HostKeyStatus::Trusted => unreachable!("обработано выше"),
+            knownhosts::HostKeyStatus::Trusted | knownhosts::HostKeyStatus::Unreadable { .. } => {
+                unreachable!("обработано выше")
+            }
         };
 
         let accepted = ask.confirm(&self.host_id, &fp, kind, &previous).await;
         if accepted {
-            knownhosts::remember(&self.host_id, &fp);
+            // Не запомнили - об этом надо знать: иначе в следующий раз спросят снова, и
+            // человек привыкает нажимать «доверяю», не вчитываясь.
+            if let Err(why) = knownhosts::remember(&self.host_id, &fp) {
+                crate::rdp::log(&format!("отпечаток {} не сохранён: {why}", self.host_id));
+            }
         }
         Ok(accepted)
     }
@@ -419,8 +510,7 @@ pub async fn connect_desktop(
         desktop_client_config(far, window, compress),
         remote_forwards.clone(),
         cancel_rx.clone(),
-        None,
-        true,
+        Trust::KnownOnly,
     )
     .await?;
     if !authenticate(&mut cur, far, None, &dummy_ki, None).await? {
@@ -440,8 +530,7 @@ pub async fn connect_desktop(
         jumps.push(cur);
         let handler = ClientHandler {
             host_id: knownhosts::host_id(nhost, port_of(next)),
-            host_key_ask: None,
-            known_only: true,
+            trust: Trust::KnownOnly,
             remote_forwards: remote_forwards.clone(),
             cancel: cancel_rx.clone(),
             agent_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -570,16 +659,14 @@ async fn connect_one(
     config: Arc<client::Config>,
     rf: RemoteForwards,
     cancel: CancelRx,
-    ask: Option<HostKeyAsk>,
-    known_only: bool,
+    trust: Trust,
 ) -> crate::error::Result<client::Handle<ClientHandler>> {
     let host = field(server, "host")
         .ok_or_else(|| crate::error::SereinError::Config("Не задан host".into()))?;
     let label = host_label(server);
     let handler = ClientHandler {
         host_id: knownhosts::host_id(host, port_of(server)),
-        host_key_ask: ask.clone(),
-        known_only,
+        trust,
         remote_forwards: rf,
         cancel,
         agent_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -636,7 +723,7 @@ pub async fn connect_chain(
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let alive = Arc::new(AtomicBool::new(true));
     // Вопросы про ключ хоста задаём в UI этой сессии - и для цели, и для каждого jump-хопа.
-    let ask = Some(HostKeyAsk {
+    let ask = Trust::Ask(HostKeyAsk {
         app: app.clone(),
         bridge: host_keys.clone(),
         session_id: id.clone(),
@@ -650,7 +737,6 @@ pub async fn connect_chain(
         remote_forwards.clone(),
         cancel_rx.clone(),
         ask.clone(),
-        false,
     )
     .await?;
     let far_is_target = chain.len() == 1;
@@ -683,8 +769,7 @@ pub async fn connect_chain(
         let config = ssh_client_config(next);
         let handler = ClientHandler {
             host_id: knownhosts::host_id(nhost, port_of(next)),
-            host_key_ask: ask.clone(),
-            known_only: false,
+            trust: ask.clone(),
             remote_forwards: remote_forwards.clone(),
             cancel: cancel_rx.clone(),
                 agent_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -716,10 +801,9 @@ pub async fn connect_chain(
         detail,
         phase: crate::error::SessionPhase::Shell,
     };
-    let mut channel = cur
-        .channel_open_session()
+    let mut channel = within_limit("канал терминала", cur.channel_open_session())
         .await
-        .map_err(|e| shell_err(e.to_string()))?;
+        .map_err(shell_err)?;
     channel
         .request_pty(false, "xterm-256color", cols, rows, 0, 0, &[])
         .await
@@ -807,8 +891,7 @@ pub async fn connect_client(chain: Vec<Value>) -> crate::error::Result<SharedHan
         ssh_client_config(far),
         remote_forwards.clone(),
         cancel_rx.clone(),
-        None,
-        false,
+        Trust::background(),
     )
     .await?;
     if !authenticate(&mut handle, far, None, &dummy_ki, None).await? {
@@ -829,8 +912,7 @@ pub async fn connect_client(chain: Vec<Value>) -> crate::error::Result<SharedHan
         let config = ssh_client_config(next);
         let handler = ClientHandler {
             host_id: knownhosts::host_id(nhost, port_of(next)),
-            host_key_ask: None,
-            known_only: false,
+            trust: Trust::background(),
             remote_forwards: remote_forwards.clone(),
             cancel: cancel_rx.clone(),
                 agent_lock: Arc::new(tokio::sync::Mutex::new(())),
