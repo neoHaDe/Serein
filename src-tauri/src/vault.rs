@@ -119,7 +119,12 @@ pub fn enable(password: &str) -> Value {
         return json!({ "ok": false, "error": why });
     }
     // Вынимаем секреты при текущем (пустом) ключе, затем перешифровываем с мастер-слоем.
-    let plain = crate::store::export_all_secrets();
+    // Недоступный секрет - отказ: перешифровать то, что не удалось прочитать, значит
+    // потерять его.
+    let plain = match crate::store::export_all_secrets() {
+        Ok(p) => p,
+        Err(e) => return json!({ "ok": false, "error": e }),
+    };
     let salt = {
         use rand::RngCore;
         let mut s = [0u8; 16];
@@ -131,10 +136,6 @@ pub fn enable(password: &str) -> Value {
         Ok(k) => k,
         Err(e) => return json!({ "ok": false, "error": e }),
     };
-    vaultkey::set(Some(key));
-    if let Err(e) = crate::store::import_all_secrets(&plain) {
-        return json!({ "ok": false, "error": e });
-    }
     let verifier = match crypto::aes_encrypt(VERIFY_TOKEN, &key) {
         Ok(v) => v,
         Err(e) => return json!({ "ok": false, "error": e }),
@@ -147,8 +148,22 @@ pub fn enable(password: &str) -> Value {
         // можно будет только сломав все существующие хранилища.
         "kdf": { "logN": kdf.log_n, "r": kdf.r, "p": kdf.p },
     });
+    // Соль и проверочное слово записываем ДО перешифровки секретов, и это не
+    // придирка к порядку строк. Прежде было наоборот: секреты уже лежали под новым
+    // ключом, а если запись этого файла не удавалась - полный диск, отказ прав, - вывести
+    // ключ заново было больше не из чего, и секреты не открывались уже никогда.
     if let Err(e) = std::fs::write(vault_path(), serde_json::to_string_pretty(&cfg).unwrap()) {
         return json!({ "ok": false, "error": e.to_string() });
+    }
+    crate::store::restrict_file(&vault_path());
+    vaultkey::set(Some(key));
+    if let Err(e) = crate::store::import_all_secrets(&plain) {
+        // Откат: секреты остались под прежним слоем, значит и мастер-пароль включать
+        // нельзя - иначе при следующем запуске приложение будет ждать пароль, которым
+        // ничего не открывается.
+        vaultkey::set(None);
+        let _ = std::fs::remove_file(vault_path());
+        return json!({ "ok": false, "error": e });
     }
     json!({ "ok": true })
 }
@@ -165,10 +180,16 @@ pub fn disable(password: &str) -> Value {
     if crypto::aes_decrypt(verifier, &key).ok().as_deref() != Some(VERIFY_TOKEN) {
         return json!({ "ok": false, "error": "Неверный пароль" });
     }
-    vaultkey::set(Some(key));
-    let plain = crate::store::export_all_secrets();
+    vaultkey::set(Some(key.clone()));
+    let plain = match crate::store::export_all_secrets() {
+        Ok(p) => p,
+        Err(e) => return json!({ "ok": false, "error": e }),
+    };
     vaultkey::set(None);
     if let Err(e) = crate::store::import_all_secrets(&plain) {
+        // Ключ возвращаем на место: часть секретов ещё под мастер-слоем, и без ключа они
+        // не открылись бы до повторного ввода пароля.
+        vaultkey::set(Some(key));
         return json!({ "ok": false, "error": e });
     }
     let _ = std::fs::remove_file(vault_path());

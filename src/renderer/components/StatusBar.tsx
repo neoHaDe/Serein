@@ -28,30 +28,59 @@ const statusColor: Record<string, string> = {
   error: '#f7768e'
 }
 
+/** Пауза между замерами отклика: обычная и после неудачи. */
+const PING_EVERY = 5000
+const PING_AFTER_FAIL = 15000
+
 export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }: Props): JSX.Element {
   const [latency, setLatency] = useState<number | null>(null)
   const sessionId = leaf?.kind === 'ssh' && leaf.status === 'connected' ? leaf.sessionId : undefined
-  const timerRef = useRef<ReturnType<typeof setInterval>>()
+  const timerRef = useRef<ReturnType<typeof setTimeout>>()
 
+  // Замер за замером, а не по таймеру. Прежний `setInterval` не ждал предыдущего ответа:
+  // на медленном сервере, где круг занимает больше пяти секунд, запросы накапливались, и
+  // каждый держал канал. Пока окно скрыто, не спрашиваем вовсе - показывать всё равно
+  // нечего, а сессию это дёргает.
   useEffect(() => {
     setLatency(null)
     if (!sessionId) return
     let alive = true
+
+    const schedule = (delay: number): void => {
+      clearTimeout(timerRef.current)
+      timerRef.current = setTimeout(() => void measure(), delay)
+    }
+
     const measure = async (): Promise<void> => {
+      if (!alive) return
+      if (document.hidden) {
+        schedule(PING_EVERY)
+        return
+      }
       try {
         const ms = await window.api.session.ping(sessionId)
-        if (alive) setLatency(ms)
+        if (!alive) return
+        setLatency(ms)
+        // `null` от бэкенда - сервер не ответил. Частить в такой момент бессмысленно.
+        schedule(ms == null ? PING_AFTER_FAIL : PING_EVERY)
       } catch {
-        // Сессия могла отвалиться между тиками. Прочерк вместо числа честнее, чем
+        // Сессия могла отвалиться между замерами. Прочерк вместо числа честнее, чем
         // застывшая старая задержка, которая выглядит как живое соединение.
-        if (alive) setLatency(null)
+        if (!alive) return
+        setLatency(null)
+        schedule(PING_AFTER_FAIL)
       }
     }
-    measure()
-    timerRef.current = setInterval(measure, 5000)
+
+    void measure()
+    const onVisible = (): void => {
+      if (!document.hidden) schedule(0)
+    }
+    document.addEventListener('visibilitychange', onVisible)
     return () => {
       alive = false
-      clearInterval(timerRef.current)
+      clearTimeout(timerRef.current)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [sessionId])
 
@@ -178,8 +207,12 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
         </span>
       )}
       {sessionId && (
-        <span className="sb-item" style={{ color: latColor }} title="Задержка соединения (round-trip)">
-          <Icon name="bolt" size={12} /> {latency == null ? '…' : `${latency} мс`}
+        <span
+          className="sb-item"
+          style={{ color: latColor }}
+          title="Отклик SSH: полный круг до сервера и обратно с запуском команды. Это не сетевой ping."
+        >
+          <Icon name="bolt" size={12} /> {latency == null ? 'нет ответа' : `${latency} мс`}
         </span>
       )}
     </div>

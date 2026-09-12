@@ -86,14 +86,57 @@ fn dir() -> PathBuf {
 }
 
 fn read_value(name: &str) -> Option<Value> {
-    let txt = fs::read_to_string(dir().join(name)).ok()?;
-    serde_json::from_str(&txt).ok()
+    read_checked(name).ok().flatten()
 }
 
+/// Читает файл профиля, различая «его нет» и «его не прочитать».
+///
+/// Разница здесь стоит профиля целиком. Прежнее чтение на любую беду отвечало «ничего
+/// нет»: повреждённый `servers.json` превращался в пустой список серверов, а первое же
+/// сохранение записывало этот пустой список на место испорченного, но ещё поправимого
+/// файла. Поэтому все записи теперь идут через эту проверку и при `Err` не пишут ничего.
+fn read_checked(name: &str) -> Result<Option<Value>, String> {
+    let path = dir().join(name);
+    let txt = match fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("файл {name} не читается: {e}")),
+    };
+    serde_json::from_str(&txt).map(Some).map_err(|e| {
+        format!("файл {name} повреждён ({e}) - он не перезаписан, разберитесь с ним сначала")
+    })
+}
+
+/// Пишет файл профиля целиком или не пишет вовсе.
+///
+/// Прежняя запись шла прямо в целевой файл: прерванная на середине - полный диск,
+/// выключение, снятие процесса - оставляла обрубок на месте профиля, и терялось всё.
+/// Теперь содержимое сначала попадает в соседний временный файл, сбрасывается на диск, и
+/// только потом одним переименованием занимает место прежнего. Переименование внутри
+/// одного каталога заменяет файл целиком - и на Windows тоже.
 fn write_value(name: &str, v: &Value) -> Result<(), String> {
+    use std::io::Write as _;
     let txt = serde_json::to_string_pretty(v).map_err(|e| e.to_string())?;
     let path = dir().join(name);
-    fs::write(&path, txt).map_err(|e| e.to_string())?;
+    let tmp = dir().join(format!(".{name}.tmp-{}", Uuid::new_v4().simple()));
+    let mut f = fs::File::create(&tmp).map_err(|e| format!("не создать временный файл: {e}"))?;
+    // Права закрываем до записи содержимого: иначе секреты успевают полежать доступными.
+    restrict_file(&tmp);
+    let written = f
+        .write_all(txt.as_bytes())
+        .and_then(|_| f.flush())
+        // Без этого переименование может обогнать сами данные: имя уже новое, а внутри
+        // после выключения питания - пусто.
+        .and_then(|_| f.sync_all());
+    drop(f);
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("не записать {name}: {e}"));
+    }
+    if let Err(e) = fs::rename(&tmp, &path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("не заменить {name}: {e}"));
+    }
     restrict_file(&path);
     Ok(())
 }
@@ -116,6 +159,62 @@ mod perm_tests {
         let fmode = fs::metadata(&f).unwrap().permissions().mode() & 0o777;
         let _ = fs::remove_file(&f);
         assert_eq!(fmode, 0o600, "файл профиля открыт: {fmode:o}");
+    }
+}
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+
+    /// Своё имя файла на каждый тест: профиль здесь настоящий, соседей трогать нельзя.
+    fn имя(tag: &str) -> String {
+        format!("тест-{tag}-{}.json", Uuid::new_v4().simple())
+    }
+
+    #[test]
+    fn повреждённый_файл_не_перезаписывается() {
+        // Раньше нечитаемый файл выглядел как пустой список, и первое же сохранение
+        // записывало этот пустой список на его место. Потерять профиль можно было одной
+        // прерванной записью.
+        let name = имя("битый");
+        let path = dir().join(&name);
+        fs::write(&path, "{ это не json").unwrap();
+
+        let err = list_items_strict(&name).expect_err("битый файл обязан быть отказом");
+        assert!(err.contains("повреждён"), "объяснение должно называть причину: {err}");
+        assert!(
+            upsert_item(&name, json!({ "id": "1" })).is_err(),
+            "поверх нечитаемого файла не пишем"
+        );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "{ это не json",
+            "файл обязан остаться как был"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn запись_не_оставляет_после_себя_временных_файлов() {
+        let name = имя("целый");
+        write_value(&name, &json!({ "a": 1 })).unwrap();
+        assert_eq!(read_checked(&name).unwrap().unwrap()["a"], 1);
+
+        let хвосты: Vec<String> = fs::read_dir(dir())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with(&format!(".{name}.tmp-")))
+            .collect();
+        assert!(хвосты.is_empty(), "остались временные файлы: {хвосты:?}");
+        let _ = fs::remove_file(dir().join(&name));
+    }
+
+    #[test]
+    fn нет_файла_и_нечитаемый_файл_различаются() {
+        // На этом различии держится вся защита: «нет» - это начать с чистого листа,
+        // «не прочитать» - это остановиться и не трогать.
+        assert!(read_checked(&имя("отсутствует")).unwrap().is_none());
     }
 }
 
@@ -184,6 +283,13 @@ fn list_items(name: &str) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// То же, но для записи: непрочитанный файл - причина отказаться, а не начать с нуля.
+fn list_items_strict(name: &str) -> Result<Vec<Value>, String> {
+    Ok(read_checked(name)?
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default())
+}
+
 fn upsert_item(name: &str, mut item: Value) -> Result<Value, String> {
     let id = item
         .get("id")
@@ -194,7 +300,7 @@ fn upsert_item(name: &str, mut item: Value) -> Result<Value, String> {
     if let Some(obj) = item.as_object_mut() {
         obj.insert("id".into(), Value::String(id.clone()));
     }
-    let mut items = list_items(name);
+    let mut items = list_items_strict(name)?;
     if let Some(pos) = items
         .iter()
         .position(|i| i.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
@@ -208,7 +314,7 @@ fn upsert_item(name: &str, mut item: Value) -> Result<Value, String> {
 }
 
 fn delete_item(name: &str, id: &str) -> Result<(), String> {
-    let items: Vec<Value> = list_items(name)
+    let items: Vec<Value> = list_items_strict(name)?
         .into_iter()
         .filter(|i| i.get("id").and_then(|v| v.as_str()) != Some(id))
         .collect();
@@ -223,16 +329,41 @@ fn os_protect(v: &str) -> Option<String> {
     os_secrets::protect(v)
 }
 
-fn encrypt_secret(value: &str) -> Option<String> {
+/// Шифрует секрет для хранения.
+///
+/// `Ok(None)` - секрета нет вовсе (пустая строка). Отказ - именно отказ: раньше на его
+/// месте был тот же `None`, и запертое хранилище системы или сбой шифрования выглядели
+/// как «пароля не было». Сохранение при этом сообщало об успехе, а пароль исчезал.
+fn encrypt_secret(value: &str) -> Result<Option<String>, String> {
     if value.is_empty() {
-        return None;
+        return Ok(None);
     }
     // Доп. слой мастер-пароля поверх OS-хранилища, если задан и разблокирован.
     let v = match vaultkey::get() {
-        Some(mk) => format!("mk:{}", crypto::aes_encrypt(value, &mk).ok()?),
+        Some(mk) => format!(
+            "mk:{}",
+            crypto::aes_encrypt(value, &mk).map_err(|e| format!("не зашифровать секрет: {e}"))?
+        ),
         None => value.to_string(),
     };
-    os_protect(&v)
+    os_protect(&v).map(Some).ok_or_else(|| {
+        "хранилище секретов системы не приняло пароль - он не сохранён".to_owned()
+    })
+}
+
+/// Расшифровывает секрет, различая «его нет» и «он недоступен».
+///
+/// Недоступен - это закрытая связка ключей или невведённый мастер-пароль. Считать это
+/// отсутствием секрета нельзя: перешифровка и бэкап в таком случае молча теряли пароли.
+fn read_secret_field(holder: &Value, field: &str) -> Result<Option<String>, String> {
+    match holder.get(field).and_then(|v| v.as_str()) {
+        None => Ok(None),
+        Some(enc) => decrypt_secret(enc).map(Some).ok_or_else(|| {
+            format!(
+                "секрет «{field}» не расшифровывается: закрыто хранилище системы или не введён мастер-пароль"
+            )
+        }),
+    }
 }
 
 /// Отпустить прежний секрет в OS-хранилище перед перезаписью или удалением.
@@ -263,6 +394,12 @@ fn read_secrets() -> Value {
     read_value("secrets.json").unwrap_or_else(|| json!({}))
 }
 
+/// Секреты для записи. Непрочитанный файл здесь опаснее всего: запись поверх него
+/// стоила бы паролей ко всем остальным серверам сразу.
+fn read_secrets_strict() -> Result<Value, String> {
+    Ok(read_checked("secrets.json")?.unwrap_or_else(|| json!({})))
+}
+
 pub fn servers_list() -> Vec<Value> {
     list_items("servers.json")
 }
@@ -285,7 +422,7 @@ pub fn servers_list_safe() -> Vec<Value> {
 /// Отдельная операция, а не цикл `servers_save`: тот прогоняет запись через слой секретов,
 /// и перетаскивание мышью каждый раз перешифровывало бы пароли - лишний риск на ровном месте.
 pub fn servers_reorder(items: &[Value]) -> Result<(), String> {
-    let mut servers = list_items("servers.json");
+    let mut servers = list_items_strict("servers.json")?;
     for patch in items {
         let Some(id) = patch.get("id").and_then(|v| v.as_str()) else {
             continue;
@@ -324,41 +461,59 @@ pub fn servers_save(mut cfg: Value) -> Result<Value, String> {
         o.remove("password");
         o.remove("passphrase");
     }
-    let base = upsert_item("servers.json", cfg)?;
-    let id = base.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    // Номер выдаём до записи: секреты складываются под ним, а пишутся первыми.
+    let id = match cfg.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        Some(i) => i.to_owned(),
+        None => {
+            let i = Uuid::new_v4().to_string();
+            if let Some(o) = cfg.as_object_mut() {
+                o.insert("id".into(), Value::String(i.clone()));
+            }
+            i
+        }
+    };
 
-    // Секреты: заданное значение перезаписывает, отсутствие ключа - сохраняет прежнее.
-    let mut secrets = read_secrets();
+    // Порядок важен. Сначала шифруем - отказ на этом шаге не должен ничего менять.
+    // Затем пишем секреты, и только потом сам сервер: осиротевший секрет безвреден, а
+    // сервер без пароля выглядит как исправный и молча не подключается.
+    let mut secrets = read_secrets_strict()?;
     let prev = secrets.get(&id).cloned().unwrap_or_else(|| json!({}));
     let mut next = Map::new();
     let pw = if had_password {
-        release_secret(&prev, "password");
-        password.as_deref().and_then(encrypt_secret).map(Value::String)
+        password.as_deref().map(encrypt_secret).transpose()?.flatten().map(Value::String)
     } else {
         prev.get("password").cloned()
     };
     let pp = if had_passphrase {
-        release_secret(&prev, "passphrase");
-        passphrase.as_deref().and_then(encrypt_secret).map(Value::String)
+        passphrase.as_deref().map(encrypt_secret).transpose()?.flatten().map(Value::String)
     } else {
         prev.get("passphrase").cloned()
     };
-    if let Some(v) = pw {
+    if let Some(v) = pw.clone() {
         next.insert("password".into(), v);
     }
-    if let Some(v) = pp {
+    if let Some(v) = pp.clone() {
         next.insert("passphrase".into(), v);
     }
     if let Some(o) = secrets.as_object_mut() {
         o.insert(id.clone(), Value::Object(next));
     }
     write_value("secrets.json", &secrets)?;
-    Ok(base)
+    // Прежнюю запись в хранилище системы отпускаем только теперь: до этого она была
+    // единственной копией пароля, и отпустить её раньше значило остаться без него,
+    // если что-то не запишется.
+    if had_password && pw.is_some() {
+        release_secret(&prev, "password");
+    }
+    if had_passphrase && pp.is_some() {
+        release_secret(&prev, "passphrase");
+    }
+    upsert_item("servers.json", cfg)
 }
 
 pub fn servers_delete(id: &str) -> Result<(), String> {
     delete_item("servers.json", id)?;
-    let mut secrets = read_secrets();
+    let mut secrets = read_secrets_strict()?;
     if let Some(sec) = secrets.get(id) {
         release_secret(sec, "password");
         release_secret(sec, "passphrase");
@@ -377,14 +532,10 @@ pub fn server_with_secrets(id: &str) -> Option<Value> {
     let secrets = read_secrets();
     if let Some(sec) = secrets.get(id) {
         if let Some(o) = base.as_object_mut() {
-            if let Some(enc) = sec.get("password").and_then(|v| v.as_str()) {
-                if let Some(p) = decrypt_secret(enc) {
-                    o.insert("password".into(), Value::String(p));
-                }
-            }
-            if let Some(enc) = sec.get("passphrase").and_then(|v| v.as_str()) {
-                if let Some(p) = decrypt_secret(enc) {
-                    o.insert("passphrase".into(), Value::String(p));
+            // Недоступный секрет здесь не ошибка: подключение просто спросит пароль само.
+            for field in ["password", "passphrase"] {
+                if let Ok(Some(p)) = read_secret_field(sec, field) {
+                    o.insert(field.to_owned(), Value::String(p));
                 }
             }
         }
@@ -402,32 +553,44 @@ pub fn list_servers_with_secrets() -> Vec<Value> {
 }
 
 /// Расшифровать все секреты (для re-wrap мастер-ключом).
-pub fn export_all_secrets() -> Map<String, Value> {
-    let secrets = read_secrets();
+///
+/// Недоступный секрет - отказ на всю операцию. Иначе перешифровка записала бы вместо
+/// него пустоту, и пароль исчезал бы в тот самый момент, когда человек меняет
+/// мастер-пароль - то есть когда доверяет нам больше всего.
+pub fn export_all_secrets() -> Result<Map<String, Value>, String> {
+    let secrets = read_checked("secrets.json")?.unwrap_or_else(|| json!({}));
     let mut out = Map::new();
     if let Some(obj) = secrets.as_object() {
         for (id, sec) in obj {
-            let pw = sec.get("password").and_then(|v| v.as_str()).and_then(decrypt_secret);
-            let pp = sec.get("passphrase").and_then(|v| v.as_str()).and_then(decrypt_secret);
+            let pw = read_secret_field(sec, "password")?;
+            let pp = read_secret_field(sec, "passphrase")?;
             out.insert(id.clone(), json!({ "password": pw, "passphrase": pp }));
         }
     }
-    out
+    Ok(out)
 }
 
 /// Перешифровать секреты при ТЕКУЩЕМ состоянии ключа и записать.
 pub fn import_all_secrets(map: &Map<String, Value>) -> Result<(), String> {
-    let mut secrets = read_secrets();
+    let mut secrets = read_secrets_strict()?;
+    // Сначала шифруем всё, и только потом пишем: отказ на середине не должен оставить
+    // половину секретов под новым ключом, а половину под прежним.
+    let mut ready: Vec<(String, Map<String, Value>)> = Vec::new();
+    for (id, pair) in map {
+        let mut next = Map::new();
+        for field in ["password", "passphrase"] {
+            let Some(plain) = pair.get(field).and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if let Some(enc) = encrypt_secret(plain)? {
+                next.insert(field.to_owned(), Value::String(enc));
+            }
+        }
+        ready.push((id.clone(), next));
+    }
     if let Some(obj) = secrets.as_object_mut() {
-        for (id, pair) in map {
-            let mut next = Map::new();
-            if let Some(pw) = pair.get("password").and_then(|v| v.as_str()).and_then(encrypt_secret) {
-                next.insert("password".into(), Value::String(pw));
-            }
-            if let Some(pp) = pair.get("passphrase").and_then(|v| v.as_str()).and_then(encrypt_secret) {
-                next.insert("passphrase".into(), Value::String(pp));
-            }
-            obj.insert(id.clone(), Value::Object(next));
+        for (id, next) in ready {
+            obj.insert(id, Value::Object(next));
         }
     }
     write_value("secrets.json", &secrets)

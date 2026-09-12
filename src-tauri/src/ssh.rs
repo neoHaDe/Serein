@@ -1001,17 +1001,24 @@ pub async fn exec_timed(
     }
 }
 
-/// Round-trip exec "true" в миллисекундах.
+/// Отклик SSH-сессии в миллисекундах: полный круг «запусти ничего и ответь».
+///
+/// Это не ICMP ping и не сетевой RTT: в число входит и работа sshd, и запуск команды на
+/// сервере. Называть его пингом в интерфейсе нельзя - человек сравнит с `ping` в консоли
+/// и не поймёт разницы.
+///
+/// `None` - ответа не было: истёк срок, сессия мертва, канал не открылся. Раньше здесь
+/// возвращалось время в любом случае, поэтому выключенный сервер показывал бодрые 5000 мс
+/// как признак живого соединения.
+///
+/// Команда `cd .` выбрана нарочно: она есть и в `sh`, и в `cmd.exe`, а нам нужен только
+/// круг по сети. Код возврата не важен - важно, что сервер ответил хоть что-то.
 pub async fn ping(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>) -> Option<u32> {
     let t = std::time::Instant::now();
-    let _ = exec_timed(
-        handle,
-        "true",
-        None,
-        std::time::Duration::from_secs(5),
-    )
-    .await;
-    Some(t.elapsed().as_millis() as u32)
+    match exec_timed(handle, "cd .", None, std::time::Duration::from_secs(5)).await {
+        Ok(_) => Some(t.elapsed().as_millis() as u32),
+        Err(_) => None,
+    }
 }
 
 #[derive(Default)]
