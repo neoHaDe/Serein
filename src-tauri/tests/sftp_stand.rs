@@ -345,3 +345,32 @@ fn сохранение_сохраняет_права_и_не_теряет_ор�
         sftp::remove(&h, &dir, true).await.expect("уборка");
     });
 }
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn время_правки_файла_читается_с_сервера() {
+    // На этом времени держится защита от затирания чужой правки во внешнем редакторе:
+    // не узнали время - не имеем права считать, что файл никто не менял.
+    let s = Stand::from_env();
+    let dir = scratch("время правки");
+    rt().block_on(async {
+        let h = connect(&s).await;
+        let _ = sftp::remove(&h, &dir, true).await;
+        sftp::mkdir(&h, &dir).await.expect("каталог");
+        let file = format!("{dir}/файл.txt");
+        sftp::write_file(&h, &file, "раз", 0o644, 0, "lf").await.expect("запись");
+
+        let было = sftp::remote_mtime(&h, &file).await.expect("запрос времени");
+        let было = было.expect("сервер обязан сообщить время правки файла");
+        // Секунда - шаг времени в SFTP: чтобы вторая правка отличалась, надо переждать его.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        sftp::write_file(&h, &file, "два", 0o644, 0, "lf").await.expect("вторая запись");
+        let стало = sftp::remote_mtime(&h, &file)
+            .await
+            .expect("запрос времени")
+            .expect("время после второй правки");
+        assert!(стало > было, "время правки обязано вырасти: было {было}, стало {стало}");
+
+        sftp::remove(&h, &dir, true).await.expect("уборка");
+    });
+}

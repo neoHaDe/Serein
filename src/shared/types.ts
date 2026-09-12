@@ -322,7 +322,11 @@ export interface LocalListResult {
 export interface RemoteEditStatus {
   sessionId: string
   remotePath: string
-  state: 'opened' | 'uploading' | 'synced' | 'error' | 'stopped'
+  /**
+   * `conflict` - файл на сервере изменился после того, как мы его скачали. Правка не
+   * залита намеренно: затирать чужое молча нельзя.
+   */
+  state: 'opened' | 'uploading' | 'synced' | 'error' | 'conflict' | 'stopped'
   error?: string
 }
 

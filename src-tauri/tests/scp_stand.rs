@@ -121,3 +121,27 @@ fn sftp_server_still_uses_sftp() {
         assert_eq!(listed.get("backend").and_then(|v| v.as_str()), Some("sftp"));
     });
 }
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn время_правки_читается_и_без_подсистемы_sftp() {
+    // Здесь это не метаданные протокола, а разбор вывода `stat` через оболочку - ровно то
+    // место, где легко получить пустую строку и молча счесть, что файл не менялся.
+    let s = Stand::from_env();
+    let dir = scratch("время правки");
+    rt().block_on(async {
+        let (h, fs) = connect(&s).await;
+        let _ = remote_fs::remove(&fs, &h, &dir, true).await;
+        remote_fs::mkdir(&fs, &h, &dir).await.expect("каталог");
+        let file = format!("{dir}/файл.txt");
+        remote_fs::write_file(&fs, &h, &file, "раз", 0o644, 0, "lf").await.expect("запись");
+
+        let t = remote_fs::remote_mtime(&fs, &h, &file)
+            .await
+            .expect("запрос времени")
+            .expect("сервер обязан сообщить время правки");
+        assert!(t > 1_600_000_000_000, "время похоже на миллисекунды эпохи: {t}");
+
+        remote_fs::remove(&fs, &h, &dir, true).await.expect("уборка");
+    });
+}

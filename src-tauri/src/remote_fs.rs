@@ -116,6 +116,18 @@ pub async fn preview(fs: &Arc<Mutex<SessionFs>>, handle: &SharedHandle, remote: 
     }
 }
 
+/// Когда файл на сервере правили последний раз. `None` - не узнать этим способом.
+pub async fn remote_mtime(
+    fs: &Arc<Mutex<SessionFs>>,
+    handle: &SharedHandle,
+    remote: &str,
+) -> Result<Option<u64>, String> {
+    match backend(fs, handle).await {
+        Backend::Sftp => sftp::remote_mtime(handle, remote).await,
+        Backend::Scp => scp::remote_mtime(handle, remote).await,
+    }
+}
+
 pub async fn read_file(fs: &Arc<Mutex<SessionFs>>, handle: &SharedHandle, remote: &str) -> Result<Value, String> {
     match backend(fs, handle).await {
         Backend::Sftp => sftp::read_file(handle, remote).await,

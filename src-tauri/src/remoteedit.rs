@@ -32,6 +32,32 @@ fn mtime_of(p: &Path) -> Option<SystemTime> {
     std::fs::metadata(p).ok().and_then(|m| m.modified().ok())
 }
 
+/// Как часто смотрим, не сохранил ли человек файл.
+const WATCH_TICK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Пауза после неудачной заливки. Правку при этом не забываем: следующий круг повторит её.
+const RETRY_AFTER_FAIL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Запас при сравнении времени файла на сервере.
+///
+/// Секунда, потому что SFTP сообщает время с точностью до секунды: сравнивать точнее
+/// нечем, и разница внутри секунды ничего не доказывает.
+const MTIME_SLACK_MS: u64 = 1000;
+
+/// Закрывает временный каталог от других пользователей машины.
+///
+/// На Linux `/tmp` общий, и файл конфигурации сервера, скачанный для правки, по умолчанию
+/// доступен на чтение всем. На Windows своя папка пользователя и так закрыта списком
+/// доступа, поэтому там ничего не требуется.
+#[cfg(unix)]
+fn close_dir(p: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o700));
+}
+
+#[cfg(not(unix))]
+fn close_dir(_p: &Path) {}
+
 /// Редакторы, которыми открываем файл, если в настройках ничего не выбрано.
 ///
 /// Для Linux - список: единого «блокнота» там нет, а ставить зависимость от рабочего стола
@@ -117,13 +143,24 @@ impl EditManager {
         // Имя пришло с сервера, а из него собирается путь на своей машине.
         crate::localname::safe_component(&base)
             .map_err(|why| format!("не могу сохранить для правки: {why}"))?;
-        let dir = std::env::temp_dir()
-            .join("terminal-edit")
-            .join(uuid::Uuid::new_v4().to_string());
+        let root = std::env::temp_dir().join("serein-edit");
+        let dir = root.join(uuid::Uuid::new_v4().to_string());
+        // Каталоги создаём сами и сразу закрываем: скачанный сюда файл может быть
+        // конфигурацией с паролями, а `/tmp` - общий.
+        std::fs::create_dir_all(&dir).map_err(|e| format!("не создать временный каталог: {e}"))?;
+        close_dir(&root);
+        close_dir(&dir);
         let local = dir.join(&base);
         let local_str = local.to_string_lossy().to_string();
 
         remote_fs::download_file(&remote_fs, &handle, &remote, &local_str).await?;
+        crate::store::restrict_file(&local);
+        // Время правки на сервере запоминаем до начала слежки: с ним мы потом сверяемся,
+        // чтобы не затереть чужую правку своей.
+        let mut remote_seen = remote_fs::remote_mtime(&remote_fs, &handle, &remote)
+            .await
+            .ok()
+            .flatten();
         let (program, args) = editor_command(&local)?;
         std::process::Command::new(&program)
             .args(&args)
@@ -132,25 +169,73 @@ impl EditManager {
         emit(&app, &session_id, &remote, "opened", None);
 
         let running = Arc::new(AtomicBool::new(true));
-        crate::sync::lock(&self.watchers).insert(key(&session_id, &remote), running.clone());
+        // Один наблюдатель на документ. Прежняя запись просто затиралась, и старая задача
+        // продолжала жить: два наблюдателя за одним файлом заливали его по очереди,
+        // каждый по своему представлению о том, что изменилось.
+        if let Some(prev) = crate::sync::lock(&self.watchers)
+            .insert(key(&session_id, &remote), running.clone())
+        {
+            prev.store(false, Ordering::Relaxed);
+        }
 
         let mut last = mtime_of(&local);
         let remote_fs_w = remote_fs.clone();
         tokio::spawn(async move {
+            // Правка, которую ещё не удалось залить. Держим её отдельно от «последнего
+            // увиденного»: прежний код сдвигал отметку до отправки, поэтому сбой сети
+            // означал, что правку не повторят никогда - она просто пропадала.
+            let mut pending: Option<SystemTime> = None;
             loop {
-                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                tokio::time::sleep(if pending.is_some() { RETRY_AFTER_FAIL } else { WATCH_TICK }).await;
                 if !running.load(Ordering::Relaxed) {
                     break;
                 }
                 let cur = mtime_of(&local);
-                if cur != last && cur.is_some() {
+                if let (Some(now), true) = (cur, cur != last) {
+                    pending = Some(now);
                     last = cur;
-                    emit(&app, &session_id, &remote, "uploading", None);
-                    match remote_fs::put_file(&remote_fs_w, &handle, &local_str, &remote).await {
-                        Ok(_) => emit(&app, &session_id, &remote, "synced", None),
-                        Err(e) => emit(&app, &session_id, &remote, "error", Some(&e)),
+                }
+                let Some(_) = pending else { continue };
+
+                // Не затираем чужое. Если файл на сервере поменялся после того, как мы его
+                // скачали, заливка уничтожила бы правку, которой мы даже не видели.
+                let now_remote = remote_fs::remote_mtime(&remote_fs_w, &handle, &remote)
+                    .await
+                    .ok()
+                    .flatten();
+                if let (Some(theirs), Some(ours)) = (now_remote, remote_seen) {
+                    if theirs > ours + MTIME_SLACK_MS {
+                        emit(
+                            &app,
+                            &session_id,
+                            &remote,
+                            "conflict",
+                            Some("файл на сервере изменился - ваша правка не залита, чтобы не затереть чужую"),
+                        );
+                        // Ждём решения человека: сами не заливаем и не забываем правку.
+                        pending = None;
+                        continue;
                     }
                 }
+
+                emit(&app, &session_id, &remote, "uploading", None);
+                match remote_fs::put_file(&remote_fs_w, &handle, &local_str, &remote).await {
+                    Ok(_) => {
+                        pending = None;
+                        remote_seen = remote_fs::remote_mtime(&remote_fs_w, &handle, &remote)
+                            .await
+                            .ok()
+                            .flatten();
+                        emit(&app, &session_id, &remote, "synced", None);
+                    }
+                    // Правку оставляем в `pending`: следующий круг повторит её сам.
+                    Err(e) => emit(&app, &session_id, &remote, "error", Some(&e)),
+                }
+            }
+            // Уходя, забираем за собой временный каталог - но только если всё залито.
+            // Несохранённую работу человека удалять нельзя ни при каких обстоятельствах.
+            if pending.is_none() {
+                let _ = std::fs::remove_dir_all(&dir);
             }
         });
         Ok(())

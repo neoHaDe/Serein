@@ -1244,7 +1244,13 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
           {editList.map((ed) => (
             <div key={ed.remotePath} className="sftp-edit-row">
               <span className="edit-state" title={ed.error}>
-                {ed.state === 'uploading' ? '⬆' : ed.state === 'synced' ? '✓' : ed.state === 'error' ? '⚠' : '✎'}
+                {ed.state === 'uploading'
+                  ? '⬆'
+                  : ed.state === 'synced'
+                    ? '✓'
+                    : ed.state === 'error' || ed.state === 'conflict'
+                      ? '⚠'
+                      : '✎'}
               </span>
               <span className="sftp-name">{ed.remotePath.split('/').pop()}</span>
               <span className="edit-label">
@@ -1254,7 +1260,9 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
                     ? 'сохранено'
                     : ed.state === 'error'
                       ? 'ошибка'
-                      : 'редактируется'}
+                      : ed.state === 'conflict'
+                        ? 'изменён на сервере'
+                        : 'редактируется'}
               </span>
               <button
                 className="mini"

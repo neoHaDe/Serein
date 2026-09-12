@@ -604,6 +604,23 @@ async fn collect_remote_list(
     Ok(())
 }
 
+/// Когда файл правили последний раз, в миллисекундах.
+///
+/// `None` - узнать не удалось: на сервере без `stat` (встраиваемые системы, BusyBox старых
+/// сборок) такой команды может не быть вовсе. Молчаливо считать это «файл не менялся»
+/// нельзя, поэтому наверх уходит именно «не знаю», а решение принимает вызывающий.
+pub async fn remote_mtime(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    remote: &str,
+) -> Result<Option<u64>, String> {
+    check_remote_path(remote)?;
+    let q = shell_quote(remote);
+    // Сначала GNU, потом BSD: ключи у них разные, а вывод одинаковый - секунды эпохи.
+    let cmd = format!("stat -c %Y -- {q} 2>/dev/null || stat -f %m {q} 2>/dev/null || true");
+    let (_, out, _) = crate::ssh::exec(handle, &cmd, None).await?;
+    Ok(out.trim().parse::<u64>().ok().map(|s| s * 1000))
+}
+
 async fn remote_is_dir(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str) -> Result<bool, String> {
     let cmd = format!(
         "if [ -d {} ]; then echo dir; elif [ -f {} ]; then echo file; else echo no; fi",

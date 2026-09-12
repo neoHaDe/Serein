@@ -582,6 +582,20 @@ pub async fn preview(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
     }))
 }
 
+/// Когда файл на сервере правили последний раз, в миллисекундах. `None` - не узнать.
+///
+/// Нужно перед заливкой из внешнего редактора: если файл на сервере успели поменять, наша
+/// копия его затрёт молча, и чужая правка исчезнет без следа.
+pub async fn remote_mtime(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    remote: &str,
+) -> Result<Option<u64>, String> {
+    check_remote_path(remote)?;
+    let sftp = open(handle).await?;
+    let meta = sftp.metadata(remote).await.map_err(|e| e.to_string())?;
+    Ok(meta.mtime.map(|t| t as u64 * 1000))
+}
+
 pub async fn read_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str) -> Result<Value, String> {
     check_remote_path(remote)?;
     let sftp = open(handle).await?;
