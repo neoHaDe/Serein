@@ -1,8 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
-import type { ServerHardware, ServerMetrics, WorkspaceTool } from '../../shared/types'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type {
+  HealthThresholds,
+  MetricsPoint,
+  ServerHardware,
+  ServerMetrics,
+  Threshold,
+  WorkspaceTool
+} from '../../shared/types'
 import { Icon } from './Icon'
 import { errText } from '../errText'
 import { useVisible } from '../hooks/useVisible'
+import { useSettings } from '../SettingsContext'
+import { DEFAULT_THRESHOLDS, evaluateHealth, levelOf, mergeThresholds, type Health } from '../serverHealth'
+import { Sparkline, type SparkPoint } from './Sparkline'
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -35,17 +45,13 @@ function fmtUptime(sec: number): string {
   return `${m}м`
 }
 
-function tone(pct: number): 'ok' | 'warn' | 'bad' {
-  if (pct < 60) return 'ok'
-  if (pct < 85) return 'warn'
-  return 'bad'
+/** Цвет по порогу. Пороги те же, что у оценки здоровья: цвет и слова не расходятся. */
+function tone(pct: number, t: Threshold = DEFAULT_THRESHOLDS.cpu): 'ok' | 'warn' | 'bad' {
+  return levelOf(pct, t)
 }
 
-function loadTone(load: number, cores: number): 'ok' | 'warn' | 'bad' {
-  const ratio = cores > 0 ? load / cores : load
-  if (ratio < 0.7) return 'ok'
-  if (ratio < 1.0) return 'warn'
-  return 'bad'
+function loadTone(load: number, cores: number, t: Threshold = DEFAULT_THRESHOLDS.load): 'ok' | 'warn' | 'bad' {
+  return levelOf(cores > 0 ? load / cores : load, t)
 }
 
 function loadLabel(load: number, cores: number): string {
@@ -56,9 +62,19 @@ function loadLabel(load: number, cores: number): string {
   return 'перегруз'
 }
 
-function Gauge({ pct, label, detail }: { pct: number; label: string; detail: string }): JSX.Element {
+function Gauge({
+  pct,
+  label,
+  detail,
+  th
+}: {
+  pct: number
+  label: string
+  detail: string
+  th?: Threshold
+}): JSX.Element {
   const clamped = Math.min(100, Math.max(0, pct))
-  const t = tone(clamped)
+  const t = tone(clamped, th)
   return (
     <div className={'srv-gauge-card tone-' + t}>
       <div
@@ -87,14 +103,16 @@ function Gauge({ pct, label, detail }: { pct: number; label: string; detail: str
 function LoadRow({
   label,
   load,
-  cores
+  cores,
+  th
 }: {
   label: string
   load: number
   cores: number
+  th?: Threshold
 }): JSX.Element {
   const cap = cores > 0 ? (load / cores) * 100 : 0
-  const t = loadTone(load, cores)
+  const t = loadTone(load, cores, th)
   return (
     <div className="srv-load-row">
       <span className="srv-load-label">{label}</span>
@@ -110,7 +128,7 @@ function LoadRow({
   )
 }
 
-function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
+function MetricsDashboard({ m, th }: { m: ServerMetrics; th: HealthThresholds }): JSX.Element {
   const memPct = m.memTotalKb > 0 ? (m.memUsedKb / m.memTotalKb) * 100 : 0
   const memFreeKb = m.memTotalKb > m.memUsedKb ? m.memTotalKb - m.memUsedKb : 0
   // Средней загрузки в Windows нет как понятия - не «ноль», а нечего показывать.
@@ -129,13 +147,14 @@ function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
   return (
     <div className="srv-dash">
       <div className="srv-dash-gauges">
-        <Gauge label="CPU" pct={m.cpuPct} detail={`${m.cpuPct}% · ${m.cores} яд.`} />
+        <Gauge label="CPU" pct={m.cpuPct} detail={`${m.cpuPct}% · ${m.cores} яд.`} th={th.cpu} />
         <Gauge
           label="RAM"
           pct={memPct}
           detail={`${fmtKb(m.memUsedKb)} / ${fmtKb(m.memTotalKb)}`}
+          th={th.mem}
         />
-        <Gauge label={diskLabel} pct={m.diskPct} detail={diskDetail} />
+        <Gauge label={diskLabel} pct={m.diskPct} detail={diskDetail} th={th.disk} />
         <div className="srv-dash-summary">
           <div className="srv-dash-summary-row">
             <span className="srv-dash-summary-k">Свободно RAM</span>
@@ -144,7 +163,7 @@ function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
           {hasLoad && (
             <div className="srv-dash-summary-row">
               <span className="srv-dash-summary-k">Занято ядер</span>
-              <span className={'srv-dash-summary-v mono tone-' + loadTone(m.load[0], m.cores)}>
+              <span className={'srv-dash-summary-v mono tone-' + loadTone(m.load[0], m.cores, th.load)}>
                 {m.load[0].toFixed(1)} из {m.cores}
               </span>
             </div>
@@ -165,14 +184,14 @@ function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
           </div>
           <div className="srv-load-summary">
             Прямо сейчас занято <b>{m.load[0].toFixed(1)}</b> из {m.cores} -{' '}
-            <span className={'tone-' + loadTone(m.load[0], m.cores)}>
+            <span className={'tone-' + loadTone(m.load[0], m.cores, th.load)}>
               {loadLabel(m.load[0], m.cores)}
             </span>
             . Ниже - как было в среднем за минуту, пять и пятнадцать.
           </div>
-          <LoadRow label="1 мин" load={m.load[0]} cores={m.cores} />
-          <LoadRow label="5 мин" load={m.load[1]} cores={m.cores} />
-          <LoadRow label="15 мин" load={m.load[2]} cores={m.cores} />
+          <LoadRow label="1 мин" load={m.load[0]} cores={m.cores} th={th.load} />
+          <LoadRow label="5 мин" load={m.load[1]} cores={m.cores} th={th.load} />
+          <LoadRow label="15 мин" load={m.load[2]} cores={m.cores} th={th.load} />
         </div>
       )}
       {extraVolumes.length > 0 && (
@@ -186,7 +205,7 @@ function MetricsDashboard({ m }: { m: ServerMetrics }): JSX.Element {
               <span className="srv-load-label mono">{v.mount}</span>
               <div className="srv-load-track" title={`${fmtKb(v.usedKb)} из ${fmtKb(v.sizeKb)}`}>
                 <div
-                  className={'srv-load-fill tone-' + (v.usePct >= 90 ? 'bad' : v.usePct >= 75 ? 'warn' : 'ok')}
+                  className={'srv-load-fill tone-' + levelOf(v.usePct, th.disk)}
                   style={{ width: `${Math.min(100, v.usePct)}%` }}
                 />
               </div>
@@ -395,6 +414,138 @@ function MetricsCompact({ m }: { m: ServerMetrics }): JSX.Element {
   )
 }
 
+/**
+ * Оценка здоровья словами и причины. Цвет рамки - только подсказка: читается слово.
+ */
+function HealthBlock({
+  health,
+  onGoTool
+}: {
+  health: Health
+  onGoTool?: (tool: WorkspaceTool) => void
+}): JSX.Element {
+  const toneClass = health.level === 'unknown' ? 'muted' : health.level
+  return (
+    <div className={'srv-health tone-' + toneClass}>
+      <span className="srv-health-label">{health.label}</span>
+      {health.level === 'ok' && <span className="srv-health-note">по порогам всё в порядке</span>}
+      {health.reasons.length > 0 && (
+        <ul className="srv-health-reasons">
+          {health.reasons.map((r) => (
+            <li key={r.text} className={'tone-' + r.level}>
+              {r.text}
+              {r.tool && onGoTool && (
+                <button type="button" className="srv-overview-link" onClick={() => onGoTool(r.tool!)}>
+                  открыть
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/** Скорость по соседним точкам. Сброс счётчика (перезагрузка интерфейса) пропускаем. */
+function rates(history: MetricsPoint[], key: 'rx' | 'tx'): SparkPoint[] {
+  const out: SparkPoint[] = []
+  for (let i = 1; i < history.length; i++) {
+    const a = history[i - 1]
+    const b = history[i]
+    const va = a[key]
+    const vb = b[key]
+    const dt = (b.t - a.t) / 1000
+    if (va === undefined || vb === undefined || dt <= 0 || vb < va) continue
+    out.push({ t: b.t, v: (vb - va) / dt })
+  }
+  return out
+}
+
+const HOUR_MS = 60 * 60 * 1000
+
+function HistoryCharts({
+  history,
+  m,
+  th
+}: {
+  history: MetricsPoint[]
+  m: ServerMetrics
+  th: HealthThresholds
+}): JSX.Element {
+  const now = Date.now()
+  const memPct = m.memTotalKb > 0 ? (m.memUsedKb / m.memTotalKb) * 100 : 0
+  const rx = rates(history, 'rx')
+  const tx = rates(history, 'tx')
+  const lastRx = rx[rx.length - 1]?.v
+  const lastTx = tx[tx.length - 1]?.v
+  return (
+    <div className="srv-charts">
+      <Sparkline
+        title="Процессор"
+        value={`${m.cpuPct}%`}
+        points={history.map((p) => ({ t: p.t, v: p.cpu }))}
+        max={100}
+        warn={th.cpu.warn}
+        bad={th.cpu.bad}
+        spanMs={HOUR_MS}
+        now={now}
+      />
+      <Sparkline
+        title="Память"
+        value={`${Math.round(memPct)}%`}
+        points={history.map((p) => ({ t: p.t, v: p.mem }))}
+        max={100}
+        warn={th.mem.warn}
+        bad={th.mem.bad}
+        spanMs={HOUR_MS}
+        now={now}
+      />
+      <Sparkline
+        title={'Диск ' + (m.diskLabel ?? '/')}
+        value={`${m.diskPct}%`}
+        points={history.map((p) => ({ t: p.t, v: p.disk }))}
+        max={100}
+        warn={th.disk.warn}
+        bad={th.disk.bad}
+        spanMs={HOUR_MS}
+        now={now}
+      />
+      {m.platform !== 'windows' && (
+        <Sparkline
+          title="Загрузка на ядро"
+          value={m.cores > 0 ? (m.load[0] / m.cores).toFixed(2) : '—'}
+          points={history
+            .filter((p) => p.load !== undefined)
+            .map((p) => ({ t: p.t, v: (p.load ?? 0) / Math.max(1, p.cores) }))}
+          warn={th.load.warn}
+          bad={th.load.bad}
+          spanMs={HOUR_MS}
+          now={now}
+        />
+      )}
+      {rx.length > 0 && (
+        <Sparkline
+          title="Сеть, приём"
+          value={lastRx !== undefined ? fmtRate(lastRx) : '—'}
+          points={rx}
+          spanMs={HOUR_MS}
+          now={now}
+        />
+      )}
+      {tx.length > 0 && (
+        <Sparkline
+          title="Сеть, отдача"
+          value={lastTx !== undefined ? fmtRate(lastTx) : '—'}
+          points={tx}
+          spanMs={HOUR_MS}
+          now={now}
+        />
+      )}
+    </div>
+  )
+}
+
 export function MonitorMetrics({
   sessionId,
   compact,
@@ -409,9 +560,11 @@ export function MonitorMetrics({
   showOverviewCards?: boolean
   onGoTool?: (tool: WorkspaceTool) => void
 }): JSX.Element {
-  // Пока панель не на экране, ходить на сервер незачем: вкладки прячутся через
-  // display: none и остаются смонтированными, а свёрнутое окно тем более никто не
-  // читает. Раньше пять открытых серверов на обзоре давали сто SSH-команд в минуту.
+  const isDashboard = variant === 'dashboard'
+  const isCompact = variant === 'compact'
+  // Пока панель не на экране, ходить за данными незачем: вкладки прячутся через
+  // display: none и остаются смонтированными, а свёрнутое окно тем более никто не читает.
+  // На сервер панель теперь не ходит вовсе - замеры делает сборщик сессии в бэкенде.
   const [rootRef, visible] = useVisible<HTMLDivElement>()
   const [m, setM] = useState<ServerMetrics | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -423,6 +576,9 @@ export function MonitorMetrics({
   // гонять канал. Ошибку не показываем: сведения о железе приятны, но не обязательны,
   // и падать из-за них панели незачем.
   const [hw, setHw] = useState<ServerHardware | null>(null)
+  const [history, setHistory] = useState<MetricsPoint[]>([])
+  const [serverTh, setServerTh] = useState<Partial<HealthThresholds> | undefined>(undefined)
+  const { settings } = useSettings()
   const aliveRef = useRef(true)
   const prevNetRef = useRef<{ rx?: number; tx?: number; at: number } | null>(null)
 
@@ -436,6 +592,16 @@ export function MonitorMetrics({
       .catch(() => {
         /* железо не узнали - панель работает и без него */
       })
+    // Свои пороги сервера лежат в его профиле. Спрашиваем по сессии, а не берём из
+    // свойств: откреплённое окно знает только номер сессии.
+    void window.api.session
+      .healthThresholds(sessionId)
+      .then((v) => {
+        if (!ушли) setServerTh(v ?? undefined)
+      })
+      .catch(() => {
+        /* своих порогов нет - действуют общие */
+      })
     return () => {
       ушли = true
     }
@@ -446,6 +612,9 @@ export function MonitorMetrics({
     prevNetRef.current = null
     setNetRxRate(null)
     setNetTxRate(null)
+    // Скрытую панель не опрашиваем вовсе - ни по таймеру, ни разово.
+    if (!visible) return
+    let timer: number | undefined
     const tick = async (): Promise<void> => {
       try {
         const data = await window.api.session.monitor(sessionId)
@@ -472,25 +641,51 @@ export function MonitorMetrics({
         } else setErr(data.error || 'Не удалось получить метрики')
       } catch (e) {
         if (aliveRef.current) setErr(errText(e))
+      } finally {
+        // Следующий запрос - только после ответа на этот. Прежний `setInterval` не ждал,
+        // и на медленном сервере запросы копились один поверх другого.
+        if (aliveRef.current) timer = window.setTimeout(() => void tick(), 3000)
       }
     }
-    // Скрытую панель не опрашиваем вовсе - ни по таймеру, ни разово. Порядок здесь
-    // важен: если дёрнуть tick() до этой проверки, каждое скрытие вкладки будет
-    // стоить лишнего похода на сервер, то есть ровно того, от чего уходим.
-    if (!visible) return
     void tick()
-    const id = window.setInterval(tick, 3000)
     return () => {
       // Сторож нужен и здесь: эффект перезапускается при смене видимости, и следующий
       // проход снова поставит true. Без него ответ, вылетевший перед размонтированием,
       // сядет писать в состояние, которого уже нет.
       aliveRef.current = false
-      window.clearInterval(id)
+      window.clearTimeout(timer)
     }
   }, [sessionId, visible])
 
-  const isDashboard = variant === 'dashboard'
-  const isCompact = variant === 'compact'
+  // История для графиков. Читается из памяти бэкенда, на сервер не ходит, поэтому обычный
+  // таймер здесь безопасен.
+  useEffect(() => {
+    if (!visible || !isDashboard) return
+    let alive = true
+    const load = (): void => {
+      void window.api.session
+        .metricsHistory(sessionId)
+        .then((h) => {
+          if (alive) setHistory(h)
+        })
+        .catch(() => {
+          /* истории нет - графики подождут */
+        })
+    }
+    load()
+    const id = window.setInterval(load, 15_000)
+    return () => {
+      alive = false
+      window.clearInterval(id)
+    }
+  }, [sessionId, visible, isDashboard])
+
+  const th = useMemo(
+    () => mergeThresholds(settings.healthThresholds, serverTh),
+    [settings.healthThresholds, serverTh]
+  )
+  const health = useMemo(() => evaluateHealth(m, history, th), [m, history, th])
+
 
   return (
     <div
@@ -526,7 +721,9 @@ export function MonitorMetrics({
       </div>
       {err && <div className="hint ws-metrics-err">{err}</div>}
       {!err && !m && <div className="hint ws-metrics-err">Сбор метрик…</div>}
-      {m && (isDashboard ? <MetricsDashboard m={m} /> : <MetricsCompact m={m} />)}
+      {m && isDashboard && <HealthBlock health={health} onGoTool={onGoTool} />}
+      {m && (isDashboard ? <MetricsDashboard m={m} th={th} /> : <MetricsCompact m={m} />)}
+      {m && isDashboard && <HistoryCharts history={history} m={m} th={th} />}
       {m && showOverviewCards && (
         <OverviewCards m={m} hw={hw} netRxRate={netRxRate} netTxRate={netTxRate} onGoTool={onGoTool} />
       )}

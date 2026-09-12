@@ -8,6 +8,8 @@ import { getVersion } from '@tauri-apps/api/app'
 import { errText } from '../errText'
 import { appPlatform } from '../platform'
 import type { BackupPreview } from '../../api'
+import { ThresholdsEditor } from './ThresholdsEditor'
+import { DEFAULT_THRESHOLDS } from '../serverHealth'
 
 const FONTS = [
   'Cascadia Code, Consolas, "Courier New", monospace',
@@ -389,6 +391,27 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           отдельным доводом, поэтому скачанный файл не запускается сам. Пусто -{' '}
           {platform === 'linux' ? 'первый найденный редактор системы' : 'Блокнот'}.
         </p>
+
+        <div className="settings-section">
+          <div className="settings-section-title">Пороги обзора сервера</div>
+          <div className="settings-row-desc" style={{ marginBottom: 10 }}>
+            С какого значения обзор говорит «внимание» и «плохо». Действуют на все серверы; в
+            карточке сервера можно задать свои.
+          </div>
+          <ThresholdsEditor
+            value={settings.healthThresholds}
+            base={DEFAULT_THRESHOLDS}
+            onChange={(v) => update({ healthThresholds: v })}
+          />
+          <button
+            type="button"
+            className="mini"
+            style={{ marginTop: 8 }}
+            onClick={() => update({ healthThresholds: {} })}
+          >
+            Вернуть умолчания
+          </button>
+        </div>
 
         {/* ---- Горячие клавиши ---- */}
         <div className="settings-section">

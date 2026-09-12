@@ -17,6 +17,7 @@ mod knownhosts;
 pub mod ldap;
 mod localfs;
 pub mod localname;
+pub mod metrics;
 pub mod monitor;
 mod multihost;
 pub mod mysql;
@@ -111,6 +112,7 @@ impl AppState {
         term_out::replay_forget(id);
         platform::forget(id);
         sysinfo_forget(id);
+        metrics::forget(id);
         db::close_session(id);
         self.owners.release(id);
         if let Some(tx) = crate::sync::lock(&self.ki).remove(id) {
@@ -543,6 +545,9 @@ async fn session_open_ssh(
                 .send(ssh::SshCmd::Write(format!("{cmd}\r").into_bytes()));
         }
     }
+    // Сборщик метрик заводится вместе с сессией, а не с панелью обзора: история за час
+    // должна быть и у сервера, на обзор которого ещё не смотрели.
+    metrics::spawn(id.clone(), sess.handle.clone(), sess.cancel.subscribe());
     crate::sync::lock(&state.sessions).insert(id.clone(), Session::Ssh(sess));
     // Владельцем становится окно, которое сессию открыло: закрыть её сможет только оно.
     state.owners.claim(&id, window.label());
@@ -734,23 +739,37 @@ fn sysinfo_forget(id: &str) {
 #[tauri::command]
 async fn session_monitor(state: State<'_, AppState>, id: String) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    // Снимок собирается одной командой, но команда у Windows своя: /proc там нет.
-    let (kind, _) = platform::of_session(&id, &s.handle).await;
-    if kind == platform::Kind::Windows {
-        let (_c, out, err) = ssh::exec(
-            &s.handle,
-            &platform::ps(platform::cmd::SAMPLE_WINDOWS),
-            Some(s.cancel.subscribe()),
-        )
-        .await?;
-        if out.trim().is_empty() && !err.trim().is_empty() {
-            return Ok(json!({ "ok": false, "error": err.trim() }));
-        }
-        return Ok(platform::win::parse_sample(&out));
+    // Замер делает сборщик сессии (`metrics`), панель только забирает готовое. Отметка
+    // «смотрят» переводит сборщик на частые замеры и будит его, если он спал.
+    metrics::watch(&id);
+    if let Some(v) = metrics::latest(&id) {
+        return Ok(v);
     }
-    let (_c, out, _e) =
-        ssh::exec(&s.handle, monitor::SAMPLE_CMD, Some(s.cancel.subscribe())).await?;
-    Ok(monitor::parse(&out))
+    // Сборщик ещё не успел сделать первый замер - делаем его сами, чтобы панель не ждала.
+    let v = metrics::sample(&id, &s.handle, Some(s.cancel.subscribe())).await?;
+    let _ = metrics::record(&id, v.clone(), metrics::now_ms());
+    Ok(v)
+}
+
+/// История замеров сессии за последний час - для графиков обзора.
+#[tauri::command]
+fn session_metrics_history(id: String) -> Vec<metrics::Point> {
+    metrics::history(&id)
+}
+
+/// Свои пороги здоровья сервера этой сессии - из его профиля. `null`, если своих нет.
+///
+/// По сессии, а не по номеру сервера из интерфейса: откреплённое окно знает только сессию.
+#[tauri::command]
+fn session_health_thresholds(state: State<'_, AppState>, id: String) -> Value {
+    let Some(s) = state.ssh(&id) else {
+        return Value::Null;
+    };
+    store::servers_list()
+        .into_iter()
+        .find(|srv| srv.get("id").and_then(|v| v.as_str()) == Some(s.server_id.as_str()))
+        .and_then(|srv| srv.get("healthThresholds").cloned())
+        .unwrap_or(Value::Null)
 }
 
 /// Подключается к базе данных рядом с сервером.
@@ -2624,6 +2643,8 @@ pub fn run() {
             session_resize,
             session_close,
             session_ping,
+            session_metrics_history,
+            session_health_thresholds,
             session_replay,
             session_claim,
             session_monitor,

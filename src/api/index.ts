@@ -147,6 +147,14 @@ export const api = {
       rows?: number
     }): Promise<string> => invoke('session_open_tcp', { p }),
     ping: (id: string): Promise<number | null> => invoke('session_ping', { id }),
+    /** История замеров за последний час: собирает её бэкенд, пока открыта сессия. */
+    metricsHistory: (id: string): Promise<import('../shared/types').MetricsPoint[]> =>
+      invoke('session_metrics_history', { id }),
+    /** Свои пороги здоровья сервера этой сессии из его профиля; `null`, если своих нет. */
+    healthThresholds: (
+      id: string
+    ): Promise<Partial<import('../shared/types').HealthThresholds> | null> =>
+      invoke('session_health_thresholds', { id }),
     /** Что сессия уже напечатала: новый терминал на живой сессии не должен быть пустым. */
     replay: (id: string): Promise<string> => invoke('session_replay', { id }),
     /** Передать владение сессией окну с указанной меткой. Закрыть её сможет только оно. */

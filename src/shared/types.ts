@@ -100,6 +100,11 @@ export interface ServerConfig {
   /** Сжимать трафик (zlib). Помогает на медленном канале, грузит процессор. */
   sshCompression?: boolean
   /**
+   * Свои пороги здоровья для этого сервера - поверх общих из настроек. Базе данных
+   * нормально держать память занятой на 90%, веб-серверу - нет.
+   */
+  healthThresholds?: Partial<HealthThresholds>
+  /**
    * Разрешить устаревшие алгоритмы (`diffie-hellman-group1-sha1`, CBC, `3des-cbc`, `ssh-rsa`).
    * Нужно для старых коммутаторов и прошивок; современный сервер это не ослабляет -
    * старые наборы идут последними в списке предпочтений.
@@ -409,6 +414,42 @@ export interface DockerComposePsResult {
 export type DockerComposeAction = 'up' | 'down' | 'start' | 'stop' | 'restart'
 
 /** Снимок ресурсов удалённого сервера (для виджета мониторинга). */
+/** Порог метрики: с какого значения «внимание» и с какого «плохо». */
+export interface Threshold {
+  warn: number
+  bad: number
+}
+
+/**
+ * Пороги оценки здоровья сервера.
+ *
+ * Процессор, память и диск - в процентах; загрузка - на одно ядро: 1.0 значит, что работы
+ * ровно столько, сколько ядер.
+ */
+export interface HealthThresholds {
+  cpu: Threshold
+  mem: Threshold
+  disk: Threshold
+  load: Threshold
+}
+
+/** Точка истории замеров за последний час. */
+export interface MetricsPoint {
+  /** Время замера, миллисекунды эпохи. */
+  t: number
+  cpu: number
+  /** Занятая память в процентах. */
+  mem: number
+  /** Заполненность главного тома в процентах. */
+  disk: number
+  /** Средняя загрузка за минуту. На Windows её нет. */
+  load?: number
+  cores: number
+  /** Счётчики байт интерфейса; скорость считается по соседним точкам. */
+  rx?: number
+  tx?: number
+}
+
 export interface ServerMetrics {
   ok: boolean
   cores: number
@@ -534,6 +575,8 @@ export interface AppSettings {
    * иначе скачанный `.exe` или `.bat` запускался бы вместо правки.
    */
   externalEditor?: string
+  /** Общие пороги здоровья серверов. Не заданы - действуют умолчания. */
+  healthThresholds?: Partial<HealthThresholds>
   /** Плотность интерфейса: 'comfortable' (по умолчанию) | 'compact'. */
   density?: 'comfortable' | 'compact'
   /** Отдельные кнопки на панели задач для откреплённых окон. По умолчанию одно приложение. */

@@ -11,6 +11,10 @@ import type {
 } from '../../shared/types'
 import { errText } from '../errText'
 import { ENVS, ENV_LABEL, normalizeTags } from '../serverFilter'
+import { ThresholdsEditor } from './ThresholdsEditor'
+import { mergeThresholds } from '../serverHealth'
+import { useSettings } from '../SettingsContext'
+import type { HealthThresholds } from '../../shared/types'
 
 interface Props {
   initial: ServerConfig | null // null = создание нового
@@ -160,6 +164,13 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
   const [comPorts, setComPorts] = useState<SerialPortInfo[]>([])
   const patchSerial = (patch: Partial<SerialConfig>): void => setSerial((s) => ({ ...s, ...patch }))
   const [agentForward, setAgentForward] = useState(initial?.agentForward ?? false)
+  // Свои пороги обзора. Пустые не сохраняем: сервер без своих порогов следует общим, и
+  // поменять общие должно быть достаточно, чтобы поменялось у всех.
+  const [ownThresholds, setOwnThresholds] = useState(!!initial?.healthThresholds)
+  const [thresholds, setThresholds] = useState<Partial<HealthThresholds>>(
+    initial?.healthThresholds ?? {}
+  )
+  const { settings: appSettings } = useSettings()
   const [agentKey, setAgentKey] = useState(initial?.agentKey ?? '')
   const [agentKeys, setAgentKeys] = useState<AgentIdentity[]>([])
   const [agentError, setAgentError] = useState('')
@@ -248,6 +259,10 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
       tunnels: tunnels.length ? tunnels : undefined,
       executeOnConnect: executeOnConnect.trim() || undefined,
       agentForward: agentForward || undefined,
+      healthThresholds:
+        connection === 'ssh' && ownThresholds && Object.keys(thresholds).length > 0
+          ? thresholds
+          : undefined,
       agentKey: authType === 'agent' && agentKey ? agentKey : undefined,
       privateKeyPath: authType === 'key' ? privateKeyPath || undefined : undefined,
       // Пустое поле секрета => undefined => существующее значение не трогаем.
@@ -651,6 +666,26 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
               />
               Пробрасывать SSH-агент на сервер (agent forwarding)
             </label>
+          </>
+        )}
+
+        {connection === 'ssh' && (
+          <>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={ownThresholds}
+                onChange={(e) => setOwnThresholds(e.target.checked)}
+              />
+              Свои пороги обзора для этого сервера
+            </label>
+            {ownThresholds && (
+              <ThresholdsEditor
+                value={thresholds}
+                base={mergeThresholds(appSettings.healthThresholds)}
+                onChange={setThresholds}
+              />
+            )}
           </>
         )}
 

@@ -166,7 +166,7 @@ jobs:
         run: bash scripts/build-rdp-helper.sh debug
 
       - name: Собрать тесты
-        run: cargo test --manifest-path src-tauri/Cargo.toml --test ssh_stand --test sftp_stand --test scp_stand --test vnc_stand --test db_stand --test platform_stand --test tools_stand --locked --no-run
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test ssh_stand --test sftp_stand --test scp_stand --test vnc_stand --test db_stand --test platform_stand --test tools_stand --test metrics_stand --locked --no-run
 
       - name: Поднять стенд
         run: bash ./scripts/ssh-stand/up.sh
@@ -208,6 +208,7 @@ jobs:
           cargo test --manifest-path src-tauri/Cargo.toml --test db_stand --locked -- --ignored --test-threads=1
           cargo test --manifest-path src-tauri/Cargo.toml --test platform_stand --locked -- --ignored --test-threads=1
           cargo test --manifest-path src-tauri/Cargo.toml --test tools_stand --locked -- --ignored --test-threads=1
+          cargo test --manifest-path src-tauri/Cargo.toml --test metrics_stand --locked -- --ignored --test-threads=1
 
       - name: Логи стенда при падении
         if: failure()
