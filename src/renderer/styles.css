@@ -4569,6 +4569,18 @@ button.secondary:hover {
   font-size: 13px;
   font-weight: 600;
 }
+/* Галочка про доступ из сети: в отличие от остальных полей блока, подпись идёт справа
+   от квадратика, а не сверху. */
+.desk-check {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.desk-check input {
+  width: auto;
+}
 .desk-block label {
   display: flex;
   flex-direction: column;

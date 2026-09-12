@@ -160,6 +160,25 @@ pub const ENABLE_CMD: &str = concat!(
     "' 2>&1"
 );
 
+/// Как найти правила межсетевого экрана для рабочего стола.
+///
+/// По устойчивому имени группы, а не по отображаемому. `DisplayGroup 'Remote Desktop'`
+/// существует только на английской Windows: на русской группа называется «Удалённый
+/// рабочий стол», правило не находится, и всё, что построено на этом поиске, молча ничего
+/// не делает - а мы при этом рапортуем об успехе. `@FirewallAPI.dll,-28752` - тот же набор
+/// правил под именем, которое не переводится. Отображаемое имя оставлено запасным путём:
+/// на сборках со вырезанными ресурсами устойчивое имя может не найтись.
+macro_rules! firewall_lookup {
+    () => {
+        concat!(
+            "$fw = Get-NetFirewallRule -Group '@FirewallAPI.dll,-28752' -ErrorAction SilentlyContinue | ",
+            "Where-Object { $_.Enabled -eq 'True' } | Select-Object -First 1; ",
+            "if (-not $fw) { $fw = Get-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue | ",
+            "Where-Object { $_.Enabled -eq 'True' } | Select-Object -First 1 }; "
+        )
+    };
+}
+
 /// Что с встроенным рабочим столом Windows.
 ///
 /// Сценарий PowerShell; кодировать и оборачивать его будет `platform::ps`. Спрашиваем
@@ -172,28 +191,57 @@ pub const DETECT_WINDOWS: &str = concat!(
     "\"svc`t$((Get-Service TermService -ErrorAction SilentlyContinue).Status)\"; ",
     "Get-NetTCPConnection -State Listen -LocalPort 3389 -ErrorAction SilentlyContinue | ",
     "ForEach-Object { \"port`t$($_.LocalAddress)\" }; ",
-    "$fw = Get-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue | ",
-    "Where-Object { $_.Enabled -eq 'True' } | Select-Object -First 1; ",
+    firewall_lookup!(),
     "\"fw`t$(if ($fw) { 'on' } else { 'off' })\"; ",
+    // Проверка подлинности на уровне сети. Спрашиваем, чтобы показать её состояние и
+    // никогда не трогать: выключить NLA - значит принимать пароль до входа в систему.
+    "$w = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp'; ",
+    "\"nla`t$((Get-ItemProperty $w -Name UserAuthentication -ErrorAction SilentlyContinue).UserAuthentication)\"; ",
     "$p = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent()); ",
     "\"admin`t$(if ($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { 'yes' } else { 'no' })\""
 );
 
-/// Включает встроенный рабочий стол и проверяет, что вышло.
+
+/// Включает встроенный рабочий стол Windows и проверяет, что вышло.
 ///
-/// Три действия сразу, потому что поодиночке они бесполезны: снять запрет в настройках,
-/// открыть межсетевой экран и поднять службу. В конце спрашиваем состояние - `Set-Service`
-/// возвращает успех, успев только отправить запрос.
-pub const ENABLE_WINDOWS: &str = concat!(
-    "$k = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server'; ",
-    "Set-ItemProperty -Path $k -Name fDenyTSConnections -Value 0 -ErrorAction SilentlyContinue; ",
-    "Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue; ",
-    "Set-Service -Name TermService -StartupType Automatic -ErrorAction SilentlyContinue; ",
-    "Start-Service -Name TermService -ErrorAction SilentlyContinue; ",
-    "Start-Sleep -Seconds 1; ",
-    "\"deny`t$((Get-ItemProperty $k -Name fDenyTSConnections -ErrorAction SilentlyContinue).fDenyTSConnections)\"; ",
-    "\"svc`t$((Get-Service TermService -ErrorAction SilentlyContinue).Status)\""
-);
+/// Межсетевой экран по умолчанию **не трогаем**, и это главное решение здесь. Serein ходит
+/// к рабочему столу каналом внутри SSH-сессии, то есть на петлю самого сервера: входящий
+/// доступ из сети для этого не нужен вовсе. Прежний вариант открывал группу правил всегда -
+/// то есть кнопка «включить рабочий стол» заодно и молча выставляла порт 3389 в сеть.
+/// Открыть его можно по отдельной просьбе: тогда `open_firewall` истинно, и человек видел
+/// перед нажатием, что именно произойдёт.
+///
+/// Состояние в конце спрашиваем заново: `Set-Service` возвращает успех, успев только
+/// отправить запрос, а служба может не подняться секундой позже.
+pub fn enable_windows(open_firewall: bool) -> String {
+    let firewall = if open_firewall {
+        // По устойчивому имени группы, с запасным отображаемым - см. `FIREWALL_LOOKUP`.
+        concat!(
+            "Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752' -ErrorAction SilentlyContinue; ",
+            "Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue; ",
+        )
+    } else {
+        ""
+    };
+    format!(
+        concat!(
+            "$k = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server'; ",
+            "Set-ItemProperty -Path $k -Name fDenyTSConnections -Value 0 -ErrorAction SilentlyContinue; ",
+            "{firewall}",
+            "Set-Service -Name TermService -StartupType Automatic -ErrorAction SilentlyContinue; ",
+            "Start-Service -Name TermService -ErrorAction SilentlyContinue; ",
+            "Start-Sleep -Seconds 1; ",
+            "\"deny`t$((Get-ItemProperty $k -Name fDenyTSConnections -ErrorAction SilentlyContinue).fDenyTSConnections)\"; ",
+            "\"svc`t$((Get-Service TermService -ErrorAction SilentlyContinue).Status)\"; ",
+            "Get-NetTCPConnection -State Listen -LocalPort 3389 -ErrorAction SilentlyContinue | ",
+            "ForEach-Object {{ \"port`t$($_.LocalAddress)\" }}; ",
+            "{lookup}",
+            "\"fw`t$(if ($fw) {{ 'on' }} else {{ 'off' }})\""
+        ),
+        firewall = firewall,
+        lookup = firewall_lookup!(),
+    )
+}
 
 /// Разбирает ответ разведки Windows.
 ///
@@ -203,6 +251,7 @@ pub const ENABLE_WINDOWS: &str = concat!(
 pub fn parse_detect_windows(stdout: &str) -> Value {
     let (mut deny, mut svc, mut fw, mut admin) =
         (String::new(), String::new(), String::new(), String::new());
+    let mut nla = String::new();
     let mut ports: Vec<String> = Vec::new();
     for line in stdout.lines() {
         let Some((tag, val)) = line.trim().split_once('\t') else {
@@ -213,6 +262,7 @@ pub fn parse_detect_windows(stdout: &str) -> Value {
             "deny" => deny = val.to_owned(),
             "svc" => svc = val.to_owned(),
             "fw" => fw = val.to_owned(),
+            "nla" => nla = val.to_owned(),
             "admin" => admin = val.to_owned(),
             "port" => {
                 // Адрес `::` - это «слушает везде» в записи IPv6; для человека понятнее
@@ -250,6 +300,9 @@ pub fn parse_detect_windows(stdout: &str) -> Value {
         "listening": ports,
         "service": svc,
         "firewall": fw,
+        // Проверка подлинности на уровне сети. Показываем как есть и не меняем: выключенная
+        // NLA означает, что сервер принимает пароль до входа в систему.
+        "nla": nla == "1",
         "admin": есть_права,
         "packageManager": "",
         "sudo": if есть_права { "администратор" } else { "обычный пользователь" },
@@ -266,19 +319,28 @@ pub fn parse_detect_windows(stdout: &str) -> Value {
 /// Разбирает ответ включения: смотрим не на код возврата, а на итоговое состояние.
 pub fn parse_enable_windows(stdout: &str) -> Value {
     let v = parse_detect_windows(stdout);
-    let выключено = v["service"]
+    let служба_идёт = v["service"]
         .as_str()
         .unwrap_or("")
         .eq_ignore_ascii_case("Running");
     let разрешено = !stdout.lines().any(|l| l.trim() == "deny\t1");
-    if выключено && разрешено {
-        json!({ "ok": true })
-    } else {
-        json!({
+    let слушает = !v["listening"].as_array().map(Vec::is_empty).unwrap_or(true);
+    if !(служба_идёт && разрешено) {
+        return json!({
             "ok": false,
             "error": "Не удалось включить: нужны права администратора на сервере",
-        })
+        });
     }
+    // Служба поднялась и запрет снят, но порт никто не слушает - это не успех. Раньше
+    // ответ смотрел только на два первых признака и рапортовал «готово» там, где
+    // подключиться было нельзя.
+    if !слушает {
+        return json!({
+            "ok": false,
+            "error": "Служба запущена, но порт 3389 никто не слушает - проверьте настройки сервера",
+        });
+    }
+    json!({ "ok": true, "firewall": v["firewall"].clone() })
 }
 
 #[cfg(test)]
@@ -317,10 +379,50 @@ mod tests {
 
     #[test]
     fn включение_проверяется_по_итогу_а_не_по_коду() {
-        assert_eq!(parse_enable_windows("deny\t0\nsvc\tRunning\n")["ok"], true);
+        // Успех - это когда порт слушают. Служба, поднявшаяся при снятом запрете, но без
+        // слушателя, раньше считалась успехом, а подключиться было нельзя.
+        let хорошо = parse_enable_windows("deny\t0\nsvc\tRunning\nport\t0.0.0.0\nfw\toff\n");
+        assert_eq!(хорошо["ok"], true);
+
+        let без_слушателя = parse_enable_windows("deny\t0\nsvc\tRunning\nfw\toff\n");
+        assert_eq!(без_слушателя["ok"], false);
+        assert!(без_слушателя["error"].as_str().unwrap().contains("3389"));
+
         let плохо = parse_enable_windows("deny\t1\nsvc\tStopped\n");
         assert_eq!(плохо["ok"], false);
         assert!(плохо["error"].as_str().unwrap().contains("администратора"));
+    }
+
+    #[test]
+    fn включение_не_открывает_межсетевой_экран_без_просьбы() {
+        // Кнопка «включить рабочий стол» не должна заодно выставлять порт 3389 в сеть:
+        // Serein ходит каналом внутри SSH, на петлю самого сервера.
+        let тихо = enable_windows(false);
+        assert!(
+            !тихо.contains("Enable-NetFirewallRule"),
+            "без просьбы экран не трогаем: {тихо}"
+        );
+        let по_просьбе = enable_windows(true);
+        assert!(по_просьбе.contains("Enable-NetFirewallRule"));
+        // Устойчивое имя группы обязательно: на русской Windows отображаемого «Remote
+        // Desktop» не существует, и правило молча не находится.
+        assert!(по_просьбе.contains("@FirewallAPI.dll,-28752"));
+        assert!(
+            тихо.contains("@FirewallAPI.dll,-28752"),
+            "состояние экрана всё равно читаем"
+        );
+    }
+
+    #[test]
+    fn состояние_nla_видно_в_разведке() {
+        // Выключенная NLA значит, что сервер принимает пароль до входа в систему. Мы её не
+        // меняем, но показать обязаны.
+        let v =
+            parse_detect_windows("deny\t0\nsvc\tRunning\nport\t::\nfw\ton\nnla\t1\nadmin\tyes\n");
+        assert_eq!(v["nla"], true);
+        let выкл =
+            parse_detect_windows("deny\t0\nsvc\tRunning\nport\t::\nfw\ton\nnla\t0\nadmin\tyes\n");
+        assert_eq!(выкл["nla"], false);
     }
 
     #[test]

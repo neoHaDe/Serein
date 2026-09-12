@@ -1103,15 +1103,21 @@ async fn desktop_rdp_start(
     state: State<'_, AppState>,
     session_id: String,
     sudo_password: String,
+    open_firewall: Option<bool>,
 ) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    // На Windows включать нечего ставить: снимаем запрет, открываем экран и поднимаем
-    // службу. Пароль sudo там не при чём - нужны права администратора самой сессии.
+    // На Windows ставить нечего: снимаем запрет и поднимаем службу. Пароль sudo там не при
+    // чём - нужны права администратора самой сессии.
+    //
+    // Межсетевой экран открывается только по отдельной просьбе. Serein ходит к рабочему
+    // столу каналом внутри SSH-сессии, на петлю самого сервера, и входящий доступ из сети
+    // для этого не нужен: открывать его «за компанию» значит выставить порт 3389 наружу
+    // молча.
     let (kind, _) = platform::of_session(&session_id, &s.handle).await;
     if kind == platform::Kind::Windows {
         let (_c, out, _e) = ssh::exec(
             &s.handle,
-            &platform::ps(rdpsetup::ENABLE_WINDOWS),
+            &platform::ps(&rdpsetup::enable_windows(open_firewall.unwrap_or(false))),
             Some(s.cancel.subscribe()),
         )
         .await?;

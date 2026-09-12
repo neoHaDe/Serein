@@ -515,6 +515,8 @@ export const api = {
       windows?: boolean
       /** Открыт ли межсетевой экран для рабочего стола. Только для Windows. */
       firewall?: string
+      /** Включена ли проверка подлинности на уровне сети (NLA). Только для Windows. */
+      nla?: boolean
     }> => invoke('desktop_rdp_detect', { sessionId }),
     rdpInstall: (
       sessionId: string,
@@ -522,12 +524,18 @@ export const api = {
       sudoPassword: string
     ): Promise<{ ok: boolean; error?: string }> =>
       invoke('desktop_rdp_install', { sessionId, packageManager, sudoPassword }),
-    /** Включает службу и проверяет, что она действительно поднялась. */
+    /**
+     * Включает службу и проверяет, что она действительно поднялась.
+     *
+     * `openFirewall` только для Windows и только по явной просьбе: Serein ходит к рабочему
+     * столу каналом внутри SSH-сессии, и входящий доступ из сети для этого не нужен.
+     */
     rdpStart: (
       sessionId: string,
-      sudoPassword: string
+      sudoPassword: string,
+      openFirewall = false
     ): Promise<{ ok: boolean; error?: string }> =>
-      invoke('desktop_rdp_start', { sessionId, sudoPassword })
+      invoke('desktop_rdp_start', { sessionId, sudoPassword, openFirewall })
   },
 
   /**

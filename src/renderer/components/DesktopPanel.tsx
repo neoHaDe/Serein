@@ -43,6 +43,8 @@ interface RdpDetected {
   /** Сервер на Windows: рабочий стол встроен в систему. */
   windows?: boolean
   firewall?: string
+  /** Проверка подлинности на уровне сети. Показываем как есть и не меняем. */
+  nla?: boolean
 }
 
 type Screen = 'choose' | 'vnc' | 'rdp' | 'setup' | 'rdp-setup'
@@ -397,6 +399,8 @@ function RdpSetup({
 
   // На Windows пароль sudo спрашивать не у кого: там права администратора у самой
   // сессии, и либо они есть, либо кнопки нет.
+  // Доступ из сети - отдельное решение, и по умолчанию его не открываем.
+  const [openFirewall, setOpenFirewall] = useState(false)
   const needSudo = !info?.windows && info?.sudo !== 'без пароля' && !sudo
 
   return (
@@ -480,16 +484,33 @@ function RdpSetup({
             </span>
             <p className="hint">
               {info.windows
-                ? 'Снимет запрет в настройках, откроет межсетевой экран и поднимет службу.'
+                ? 'Снимет запрет в настройках системы и поднимет службу.'
                 : 'Служба включится и будет подниматься при старте сервера.'}
             </p>
+            {info.windows && (
+              <>
+                <label className="desk-check">
+                  <input
+                    type="checkbox"
+                    checked={openFirewall}
+                    onChange={(e) => setOpenFirewall(e.target.checked)}
+                  />
+                  Открыть доступ к рабочему столу из сети
+                </label>
+                <p className="hint">
+                  Для Serein это не нужно: он подключается каналом внутри SSH-сессии, к петле
+                  самого сервера. Галочка открывает порт 3389 наружу - для других программ,
+                  вроде обычного mstsc.
+                </p>
+              </>
+            )}
             <button
               className="primary"
               disabled={busy !== '' || needSudo}
               onClick={() =>
                 void run(
                   'start',
-                  () => window.api.desktop.rdpStart(sessionId, sudo),
+                  () => window.api.desktop.rdpStart(sessionId, sudo, openFirewall),
                   'Служба запущена - можно подключаться.'
                 )
               }
@@ -500,7 +521,24 @@ function RdpSetup({
         )}
 
         {info?.windows && info.firewall === 'off' && (
-          <p className="hint">Межсетевой экран закрыт для рабочего стола.</p>
+          <p className="hint">
+            Межсетевой экран закрыт для рабочего стола - для Serein этого достаточно.
+          </p>
+        )}
+        {info?.windows && info.nla === false && (
+          <p className="hint">
+            Проверка подлинности на уровне сети (NLA) на сервере выключена: он принимает
+            пароль до входа в систему. Мы её не меняем, но знать об этом стоит.
+          </p>
+        )}
+        {/* Слушать все адреса - решение сервера, и менять его вслепую мы не станем. Но
+            сказать, что для Serein это не требуется, обязаны: человек вправе закрыть порт
+            и продолжать работать. */}
+        {info?.listening.some((a) => a.startsWith('0.0.0.0') || a.startsWith('[::]')) && (
+          <p className="hint">
+            Рабочий стол слушает все адреса. Serein для подключения этого не требует: он
+            ходит каналом внутри SSH-сессии.
+          </p>
         )}
         {info?.windows && !info.canStart && info.listening.length === 0 && (
           <p className="hint">Чтобы включить, нужны права администратора на сервере.</p>
