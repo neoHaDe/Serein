@@ -50,6 +50,8 @@ export type IconName =
   | 'win-min'
   | 'win-max'
   | 'win-restore'
+  | 'expand'
+  | 'collapse'
   | 'link'
   | 'eye'
   | 'eye-off'
@@ -254,6 +256,23 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M12 19V8M7 12l5-5 5 5" />
       <path d="M5 5h14" />
+    </>
+  ),
+  // Четыре угла врозь - «на весь экран», четыре угла внутрь - «вернуть как было».
+  expand: (
+    <>
+      <path d="M9 4H4v5" />
+      <path d="M15 4h5v5" />
+      <path d="M15 20h5v-5" />
+      <path d="M9 20H4v-5" />
+    </>
+  ),
+  collapse: (
+    <>
+      <path d="M4 9h5V4" />
+      <path d="M20 9h-5V4" />
+      <path d="M20 15h-5v5" />
+      <path d="M4 15h5v5" />
     </>
   ),
   'win-min': <path d="M5 19h14" />,

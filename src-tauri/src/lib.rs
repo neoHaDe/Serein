@@ -103,12 +103,7 @@ impl AppState {
     pub(crate) fn teardown(&self, app: &AppHandle, id: &str, user: bool) {
         // Рабочий стол ходит своим SSH-соединением и сам со смертью сессии не умрёт.
         // Открыт он был из неё и по её учётке - без неё жить не должен.
-        if let Some(desk) = deskout::active(id) {
-            match desk.kind {
-                deskout::Kind::Rdp => rdp::close(&desk.id),
-                deskout::Kind::Vnc => vnc::close(&desk.id),
-            }
-        }
+        close_desktop_of(id);
         self.tunnels.close_session(id, app);
         self.edit.stop_session(id);
         self.transfers.cancel_session(id);
@@ -898,6 +893,21 @@ const DESKTOP_WINDOW_LAN: u32 = 1024 * 1024;
 /// VNC сам запрашивает каждый кадр и лишнего не шлёт - окно чуть свободнее.
 const DESKTOP_WINDOW_VNC: u32 = 256 * 1024;
 
+/// Закрывает рабочий стол этой сессии, если он открыт.
+///
+/// Один стол на сессию - так устроена и панель. Но полагаться на панель здесь нельзя:
+/// второе открытие подряд перезаписывало запись о живом столе, и первый оставался в
+/// памяти со своим процессом и каналом, никому не известный. Закрыть его потом было
+/// нечем: ни панель, ни закрытие сессии его уже не находили.
+fn close_desktop_of(session_id: &str) {
+    if let Some(desk) = deskout::active(session_id) {
+        match desk.kind {
+            deskout::Kind::Rdp => rdp::close(&desk.id),
+            deskout::Kind::Vnc => vnc::close(&desk.id),
+        }
+    }
+}
+
 /// Своё SSH-соединение под рабочий стол, а если не вышло - общий канал сессии.
 ///
 /// «Не вышло» - не ошибка: второй фактор при входе, пароль, который не сохранён, быстрое
@@ -956,6 +966,7 @@ async fn vnc_open(
     let s = state
         .ssh(&session_id)
         .ok_or_else(|| vnc::OpenError::from("Сессия не подключена".to_string()))?;
+    close_desktop_of(&session_id);
     let id = format!("vnc-{}", uuid::Uuid::new_v4());
     // Tight и ZRLE уже сжаты zlib: второй раз сжимать их на уровне SSH - пустая работа.
     let link = desktop_link(&s.server_id, DESKTOP_WINDOW_VNC, false).await;
@@ -1180,6 +1191,8 @@ async fn rdp_open(
     on_frame: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
 ) -> Result<String, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    // Прежний стол этой сессии закрываем сами, а не надеемся на панель.
+    close_desktop_of(&session_id);
     let id = format!("rdp-{}", uuid::Uuid::new_v4());
     let network_profile = match network_profile.as_deref().unwrap_or("vpn") {
         "vpn" => rdp::NetworkProfile::Vpn,

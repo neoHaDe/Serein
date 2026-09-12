@@ -4420,6 +4420,14 @@ button.secondary:hover {
 .vnc-panel {
   min-height: 0;
 }
+/* На весь экран. Панель уже колонка из заголовка и холста, ей нужно только занять всё
+   окно целиком: своего фона у полноэкранного элемента нет, и без него по краям
+   просвечивал бы чёрный фон движка. */
+.vnc-panel:fullscreen {
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+}
 .vnc-status {
   font-family: var(--font-mono);
   font-size: 11px;

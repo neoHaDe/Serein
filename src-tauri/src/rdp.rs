@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -31,7 +31,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufRead
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
-use crate::ssh::SharedHandle;
+use crate::ssh::{wait_cancel, CancelRx, SharedHandle};
 
 /// Записывает строку в журнал рабочего стола.
 ///
@@ -70,6 +70,28 @@ struct Live {
     input: mpsc::UnboundedSender<String>,
     /// Приёмник кадров. Подменяемый: при откреплении окна сеанс не рвётся, а переезжает.
     out: Out,
+    /// Один признак остановки на весь сеанс: мост, ввод, чтение кадров и сам процесс
+    /// помощника. Раньше их было два - флаг и очередь команд, - и закрытие зависело от
+    /// того, кто первый заметит; неподвижный рабочий стол мог оставить процесс висеть.
+    stop: Arc<tokio::sync::watch::Sender<bool>>,
+}
+
+/// Сколько ждём помощника, прежде чем снять его силой.
+const STOP_GRACE: Duration = Duration::from_secs(2);
+
+/// Сколько ждём, пока помощник подключится к нашему сокету на петле.
+const HELPER_CONNECT_WAIT: Duration = Duration::from_secs(15);
+
+/// Пакет закрытия для интерфейса - тем же форматом, каким его шлёт помощник.
+///
+/// Нужен, когда помощник ушёл, не успев ничего сказать: упал, снят или оборвалась труба.
+/// Без этого пакета панель остаётся в состоянии «подключаюсь» или «работает» навсегда.
+fn closed_packet(reason: &str) -> Vec<u8> {
+    let mut v = Vec::with_capacity(9 + reason.len());
+    v.push(9u8);
+    v.extend_from_slice(&[0u8; 8]);
+    v.extend_from_slice(reason.as_bytes());
+    v
 }
 
 static SESSIONS: Mutex<Option<HashMap<String, Live>>> = Mutex::new(None);
@@ -215,14 +237,26 @@ pub async fn open(
         .map_err(|e| format!("не узнать порт локального сокета: {e}"))?
         .port();
 
-    let alive = Arc::new(AtomicBool::new(true));
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let stop = Arc::new(stop_tx);
     let (tx, rx) = mpsc::unbounded_channel::<String>();
     let out = Out::new(on_frame);
 
     // Мост: то, что помощник пишет в локальный сокет, уходит на сервер, и наоборот.
-    let bridge_alive = alive.clone();
+    let bridge_stop = stop.clone();
+    let bridge_rx = stop_rx.clone();
     tokio::spawn(async move {
-        let Ok((sock, _)) = listener.accept().await else {
+        // Ждать подключения помощника вечно нечего: он либо пришёл сразу, либо не
+        // запустился вовсе, а сокет всё это время открыт на петле.
+        let accepted = tokio::select! {
+            r = tokio::time::timeout(HELPER_CONNECT_WAIT, listener.accept()) => r,
+            _ = wait_cancel(bridge_rx.clone()) => {
+                return;
+            }
+        };
+        let Ok(Ok((sock, _))) = accepted else {
+            log("помощник не подключился к локальному сокету - сеанс не начался");
+            let _ = bridge_stop.send(true);
             return;
         };
         sock.set_nodelay(true).ok();
@@ -230,7 +264,7 @@ pub async fn open(
             Target::Tcp { host, port } => {
                 if let Ok(up) = tokio::net::TcpStream::connect((host.as_str(), port)).await {
                     up.set_nodelay(true).ok();
-                    pump(sock, up, bridge_alive).await;
+                    pump(sock, up, bridge_rx.clone()).await;
                 }
             }
             Target::Ssh {
@@ -247,7 +281,7 @@ pub async fn open(
                         .await
                 };
                 match ch {
-                    Ok(ch) => pump(sock, ch.into_stream(), bridge_alive).await,
+                    Ok(ch) => pump(sock, ch.into_stream(), bridge_rx.clone()).await,
                     Err(e) => log(&format!("канал до {host}:{port} не открылся: {e}")),
                 }
                 if let Some(link) = link {
@@ -255,6 +289,9 @@ pub async fn open(
                 }
             }
         }
+        // Мост кончился - кончился и сеанс: без этого чтение кадров и процесс помощника
+        // жили бы дальше, каждый по своим причинам.
+        let _ = bridge_stop.send(true);
     });
 
     let mut cmd = Command::new(&helper);
@@ -266,7 +303,7 @@ pub async fn open(
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    let mut child = cmd
+    let started = cmd
         .arg("--port")
         .arg(port.to_string())
         .arg("--user")
@@ -300,16 +337,29 @@ pub async fn open(
         // показывало пустой экран и не могло сказать почему. Теперь читаем.
         .stderr(Stdio::piped())
         .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| format!("не запустить помощника RDP: {e}"))?;
+        .spawn();
+    // Помощник не запустился - мост ждать некого, и сокет на петле надо закрыть сразу.
+    let mut child = match started {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = stop.send(true);
+            return Err(format!("не запустить помощника RDP: {e}"));
+        }
+    };
 
     // Пароль уходит первой строкой входа, а не доводом: строка запуска процесса видна
     // в системе всем, кто может смотреть список процессов.
-    let mut stdin = child.stdin.take().ok_or("у помощника нет входа")?;
-    stdin
-        .write_all(format!("{password}\n").as_bytes())
-        .await
-        .map_err(|e| format!("пароль не ушёл помощнику: {e}"))?;
+    let mut stdin = match child.stdin.take() {
+        Some(s) => s,
+        None => {
+            let _ = stop.send(true);
+            return Err("у помощника нет входа".into());
+        }
+    };
+    if let Err(e) = stdin.write_all(format!("{password}\n").as_bytes()).await {
+        let _ = stop.send(true);
+        return Err(format!("пароль не ушёл помощнику: {e}"));
+    }
     stdin.flush().await.ok();
 
     // Жалобы помощника уводим в журнал приложения. Своей строкой на сообщение, с
@@ -330,24 +380,31 @@ pub async fn open(
         size.0, size.1
     ));
 
-    let stdout = child.stdout.take().ok_or("у помощника нет вывода")?;
-    spawn_pipes(
-        id.clone(),
-        child,
-        stdin,
-        stdout,
-        rx,
-        alive.clone(),
-        out.clone(),
-    );
+    let stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => {
+            let _ = stop.send(true);
+            return Err("у помощника нет вывода".into());
+        }
+    };
+    spawn_pipes(id.clone(), child, stdin, stdout, rx, stop_rx, out.clone());
 
     crate::deskout::remember(&ssh_id, crate::deskout::Kind::Rdp, &id);
-    with_sessions(|m| m.insert(id, Live { input: tx, out }));
+    with_sessions(|m| {
+        m.insert(
+            id,
+            Live {
+                input: tx,
+                out,
+                stop,
+            },
+        )
+    });
     Ok(())
 }
 
 /// Гоняет байты между помощником и сервером, пока жив сеанс.
-async fn pump<A, B>(a: A, b: B, alive: Arc<AtomicBool>)
+async fn pump<A, B>(a: A, b: B, stop: CancelRx)
 where
     A: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     B: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -366,7 +423,7 @@ where
     };
     let up = async { tokio::io::copy(&mut ar, &mut bw).await };
     let down = async { tokio::io::copy(&mut br, &mut aw).await };
-    let stats_alive = alive.clone();
+    let stats_stop = stop.clone();
     let stats_up = up_bytes.clone();
     let stats_down = down_bytes.clone();
     let stats = tokio::spawn(async move {
@@ -374,8 +431,11 @@ where
         timer.tick().await;
         let mut previous_up = 0u64;
         let mut previous_down = 0u64;
-        while stats_alive.load(Ordering::Relaxed) {
-            timer.tick().await;
+        loop {
+            tokio::select! {
+                _ = timer.tick() => {}
+                _ = wait_cancel(stats_stop.clone()) => break,
+            }
             let current_up = stats_up.load(Ordering::Relaxed);
             let current_down = stats_down.load(Ordering::Relaxed);
             let up_mbps = (current_up - previous_up) as f64 * 8.0 / 5_000_000.0;
@@ -399,8 +459,10 @@ where
             Ok(n) => log(&format!("сервер закрыл соединение, получено {n} Б")),
             Err(e) => log(&format!("обрыв от сервера: {e}")),
         },
+        // Закрытие сеанса обрывает перекачку немедленно, а не «когда-нибудь потом»:
+        // неподвижный рабочий стол не шлёт ничего, и ждать конца потока можно вечно.
+        _ = wait_cancel(stop.clone()) => log("сеанс закрыт - мост остановлен"),
     }
-    alive.store(false, Ordering::Relaxed);
     stats.abort();
     log(&format!(
         "итог RDP-потока за {:.3} с: к серверу {} Б, от сервера {} Б (до SSH/VPN)",
@@ -417,16 +479,27 @@ fn spawn_pipes(
     mut stdin: tokio::process::ChildStdin,
     stdout: tokio::process::ChildStdout,
     mut rx: mpsc::UnboundedReceiver<String>,
-    alive: Arc<AtomicBool>,
+    stop: CancelRx,
     out: Out,
 ) {
-    // Ввод: строка на команду.
-    let in_alive = alive.clone();
+    // Ввод: строка на команду. Команду выхода пропускаем даже после остановки - именно
+    // она и просит помощника уйти по-хорошему.
+    let in_stop = stop.clone();
     tokio::spawn(async move {
-        while let Some(line) = rx.recv().await {
-            if !in_alive.load(Ordering::Relaxed) {
-                break;
-            }
+        loop {
+            let line = tokio::select! {
+                l = rx.recv() => match l {
+                    Some(l) => l,
+                    None => break,
+                },
+                _ = wait_cancel(in_stop.clone()) => {
+                    // Дочитываем то, что уже стоит в очереди: там лежит «q».
+                    match rx.try_recv() {
+                        Ok(l) => l,
+                        Err(_) => break,
+                    }
+                }
+            };
             if stdin.write_all(line.as_bytes()).await.is_err() {
                 break;
             }
@@ -442,6 +515,9 @@ fn spawn_pipes(
         let mut len = [0u8; 4];
         let mut frames = 0u64;
         let mut frame_bytes = 0u64;
+        // Сказал ли помощник сам, почему всё закончилось. Если нет - скажем за него:
+        // панель иначе останется в «подключаюсь» или «работает» навсегда.
+        let mut said_closed = false;
         let mut last_report = Instant::now();
         let mut last_report_frames = 0u64;
         let mut last_report_bytes = 0u64;
@@ -449,10 +525,11 @@ fn spawn_pipes(
         // выглядит на экране как чёрный прямоугольник, и отличить «сервер отключился»
         // от «мы сами сломались» по нему невозможно.
         let why = loop {
-            if !alive.load(Ordering::Relaxed) {
-                break "сеанс закрыт".to_owned();
-            }
-            if let Err(e) = r.read_exact(&mut len).await {
+            let head = tokio::select! {
+                r = r.read_exact(&mut len) => r,
+                _ = wait_cancel(stop.clone()) => break "сеанс закрыт".to_owned(),
+            };
+            if let Err(e) = head {
                 break format!("помощник больше не отвечает: {e}");
             }
             let n = u32::from_be_bytes(len) as usize;
@@ -476,8 +553,11 @@ fn spawn_pipes(
             // Причину закрытия помощник сообщает пакетом, а не в поток ошибок: её видит
             // интерфейс. В журнал её надо положить отдельно - иначе там остаётся только
             // «помощник больше не отвечает», а что именно сломалось, знает один экран.
-            if body.first() == Some(&9) && body.len() > 9 {
-                log(&format!("помощник закрыл сеанс: {}", String::from_utf8_lossy(&body[9..])));
+            if body.first() == Some(&9) {
+                said_closed = true;
+                if body.len() > 9 {
+                    log(&format!("помощник закрыл сеанс: {}", String::from_utf8_lossy(&body[9..])));
+                }
             }
             if out.send(InvokeResponseBody::Raw(body)).is_err() {
                 break "интерфейс больше не слушает".to_owned();
@@ -501,9 +581,17 @@ fn spawn_pipes(
         log(&format!(
             "поток кадров окончен: {why}; всего кадров {frames}, {frame_bytes} Б"
         ));
-        alive.store(false, Ordering::Relaxed);
-        // Помощник мог уже уйти сам; если нет - не оставляем его висеть.
-        let _ = child.kill().await;
+        // Причина закрытия обязана дойти до панели, даже если помощник не успел её назвать.
+        if !said_closed {
+            let _ = out.send(InvokeResponseBody::Raw(closed_packet(&why)));
+        }
+        // Помощник мог уйти сам, мог получить «q» и заканчивать, а мог и застрять. Даём
+        // ему короткий срок, потом снимаем: висящий процесс с открытым каналом внутри
+        // SSH-сессии - это не «почти закрыто», это утечка.
+        if tokio::time::timeout(STOP_GRACE, child.wait()).await.is_err() {
+            log("помощник не ушёл за 2 с - снимаем");
+            let _ = child.kill().await;
+        }
         crate::deskout::forget(&id);
         with_sessions(|m| m.remove(&id));
     });
@@ -568,10 +656,11 @@ pub fn close(id: &str) {
     crate::deskout::forget(id);
     with_sessions(|m| {
         if let Some(s) = m.remove(id) {
-            // Не гасим `alive` здесь: писатель проверяет его перед записью, и прежний
-            // порядок выбрасывал `q` прямо перед отправкой. Помощник получает команду,
-            // закрывает сокет, после чего обе задачи завершаются естественно.
+            // Сначала просьба уйти по-хорошему, потом признак остановки. Порядок важен:
+            // задача ввода пропускает «q» и после остановки, а вот наоборот помощник
+            // остался бы ждать кадров от неподвижного стола сколько угодно.
             let _ = s.input.send("q\n".to_owned());
+            let _ = s.stop.send(true);
         }
     });
 }
@@ -582,6 +671,7 @@ pub fn close_all() {
         for (id, s) in m.drain() {
             crate::deskout::forget(&id);
             let _ = s.input.send("q\n".to_owned());
+            let _ = s.stop.send(true);
         }
     });
 }
@@ -598,6 +688,16 @@ mod tests {
         assert_eq!(format!("k {} {}\n", 65, u8::from(true)), "k 65 1\n");
         assert_eq!(format!("k {} {}\n", 65, u8::from(false)), "k 65 0\n");
         assert_eq!(format!("w {} {}\n", u8::from(true), -120), "w 1 -120\n");
+    }
+
+    #[test]
+    fn пакет_закрытия_собирается_так_же_как_у_помощника() {
+        // Этим пакетом панель узнаёт, что всё кончилось, и выходит из «подключаюсь».
+        // Разбирает его тот же код, что и кадры VNC, поэтому заголовок обязан совпадать.
+        let p = closed_packet("сервер ушёл");
+        assert_eq!(p[0], 9, "вид пакета - закрытие");
+        assert_eq!(&p[1..9], &[0u8; 8], "координаты и размеры здесь ничего не значат");
+        assert_eq!(String::from_utf8_lossy(&p[9..]), "сервер ушёл");
     }
 
     #[test]

@@ -288,7 +288,34 @@ async fn main() {
     }
 }
 
+/// Сколько ждём, пока сервер доведёт подключение до рабочего стола.
+///
+/// Считаем целиком, а не по шагам: рукопожатие, TLS, проверку пароля и согласование
+/// возможностей сервер может растянуть в любом месте, а человеку важно одно - сколько он
+/// смотрит на пустой экран, прежде чем ему скажут, что не вышло.
+const CONNECT_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Сколько ждём пересогласования после смены размера. Дольше ждать нечего: до его конца
+/// сервер не пришлёт ни одного кадра, и картинка всё это время стоит.
+const REACTIVATE_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+
 async fn run(a: Args, password: String, out: &Presenter) -> Result<(), String> {
+    let (connection, upgraded_framed) = tokio::time::timeout(CONNECT_LIMIT, connect(&a, password))
+        .await
+        .map_err(|_| "сервер не довёл подключение до конца за 30 с".to_owned())??;
+
+    let frame_period = match a.network_profile {
+        NetworkProfile::Vpn => std::time::Duration::from_millis(33),
+        NetworkProfile::Lan => std::time::Duration::from_millis(16),
+    };
+    session(connection, upgraded_framed, out, frame_period).await
+}
+
+/// Доводит подключение до готового сеанса: рукопожатие, TLS, вход, возможности.
+async fn connect(
+    a: &Args,
+    password: String,
+) -> Result<(ConnectionResult, ironrdp_tokio::TokioFramed<Stream>), String> {
     // Приложение уже держит этот сокет: за ним канал внутри SSH-сессии.
     let sock = tokio::net::TcpStream::connect(("127.0.0.1", a.port))
         .await
@@ -301,7 +328,7 @@ async fn run(a: Args, password: String, out: &Presenter) -> Result<(), String> {
     let dvc = ironrdp::dvc::DrdynvcClient::new().with_dynamic_channel(
         ironrdp::displaycontrol::client::DisplayControlClient::new(|_| Ok(Vec::new())),
     );
-    let mut connector = ClientConnector::new(config(&a, password), ([127, 0, 0, 1], a.port).into())
+    let mut connector = ClientConnector::new(config(a, password), ([127, 0, 0, 1], a.port).into())
         .with_static_channel(dvc);
 
     let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector)
@@ -325,7 +352,7 @@ async fn run(a: Args, password: String, out: &Presenter) -> Result<(), String> {
         .to_owned();
 
     let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
-    let erased: Box<dyn AsyncReadWrite + Unpin + Send + Sync> = Box::new(tls_stream);
+    let erased: Stream = Box::new(tls_stream);
     let mut upgraded_framed = ironrdp_tokio::TokioFramed::new_with_leftover(erased, leftover);
 
     let connection = ironrdp_tokio::connect_finalize(
@@ -340,17 +367,13 @@ async fn run(a: Args, password: String, out: &Presenter) -> Result<(), String> {
     .await
     .map_err(|e| format!("соединение не установилось: {e}"))?;
 
-    let frame_period = match a.network_profile {
-        NetworkProfile::Vpn => std::time::Duration::from_millis(33),
-        NetworkProfile::Lan => std::time::Duration::from_millis(16),
-    };
-    session(connection, upgraded_framed, out, frame_period).await
+    Ok((connection, upgraded_framed))
 }
 
 /// Основной цикл: кадры наружу, команды внутрь.
 async fn session(
     connection: ConnectionResult,
-    framed: ironrdp_tokio::TokioFramed<Box<dyn AsyncReadWrite + Unpin + Send + Sync>>,
+    framed: ironrdp_tokio::TokioFramed<Stream>,
     out: &Presenter,
     frame_period: std::time::Duration,
 ) -> Result<(), String> {
@@ -524,14 +547,20 @@ async fn session(
                 // последовательность не пройдена, обычных кадров не будет вовсе.
                 ActiveStageOutput::DeactivateAll => {
                     dirty.clear();
-                    let (nw, nh) = reactivate(
-                        &activation_factory,
-                        &mut framed,
-                        &mut writer,
-                        &mut stage,
-                        &mut image,
+                    let (nw, nh) = tokio::time::timeout(
+                        REACTIVATE_LIMIT,
+                        reactivate(
+                            &activation_factory,
+                            &mut framed,
+                            &mut writer,
+                            &mut stage,
+                            &mut image,
+                        ),
                     )
-                    .await?;
+                    .await
+                    .map_err(|_| {
+                        "сервер не закончил пересогласование после смены размера за 15 с".to_owned()
+                    })??;
                     image = ironrdp::session::image::DecodedImage::new(
                         ironrdp::graphics::image_processing::PixelFormat::RgbA32,
                         nw,

@@ -7,6 +7,7 @@ import { errText } from '../errText'
 import { parseFrame } from '../vncFrames'
 import { buttonMask, keysymFor, wheelMask } from '../vncKeys'
 import { isModifier } from '../rdpKeys'
+import { useFullscreen } from '../useFullscreen'
 
 /**
  * Рабочий стол VNC внутри вкладки сервера.
@@ -65,6 +66,7 @@ export function VncPanel({
   // потому что совет противоположный: вводить что-либо сейчас бесполезно.
   const [blocked, setBlocked] = useState(false)
   const [scaled, setScaled] = useState(true)
+  const { full, toggle: toggleFull } = useFullscreen(rootRef)
 
   /** Переносит внутренний холст на видимый, вписывая или показывая один к одному. */
   const present = useCallback(() => {
@@ -367,6 +369,17 @@ export function VncPanel({
             onClick={() => idRef.current && void window.api.vnc.refresh(idRef.current, true)}
           >
             <Icon name="refresh" size={14} />
+          </button>
+          <button
+            className={'mini' + (full ? ' on' : '')}
+            title={full ? 'Выйти из полного экрана (Esc)' : 'На весь экран'}
+            onClick={() => {
+              toggleFull()
+              // Фокус холсту: иначе клавиши уйдут кнопке, а не рабочему столу.
+              viewRef.current?.focus()
+            }}
+          >
+            <Icon name={full ? 'collapse' : 'expand'} size={14} />
           </button>
         </div>
       </div>

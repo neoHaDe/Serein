@@ -8,6 +8,7 @@ import { parseFrame } from '../vncFrames'
 import { buttonMask, isModifier, isRdpShortcut, scancodeFor, wheelRotation } from '../rdpKeys'
 import { RdpUiMetrics } from '../rdpMetrics'
 import { useSettings } from '../SettingsContext'
+import { useFullscreen } from '../useFullscreen'
 
 /**
  * Рабочий стол по RDP.
@@ -481,6 +482,8 @@ export function RdpPanel({
     heldRef.current.clear()
   }, [])
 
+  const { full, toggle: toggleFull } = useFullscreen(rootRef)
+
   // При Alt+Tab окно теряет фокус целиком, а не обязательно через blur самого canvas.
   // Отпускаем модификаторы и здесь, чтобы Alt/Ctrl не оставались зажатыми на сервере.
   useEffect(() => {
@@ -546,6 +549,19 @@ export function RdpPanel({
               onClick={() => setScaled((v) => !v)}
             >
               <Icon name={scaled ? 'win-restore' : 'win-max'} size={14} />
+            </button>
+          )}
+          {status === 'live' && (
+            <button
+              className={'mini' + (full ? ' on' : '')}
+              title={full ? 'Выйти из полного экрана (Esc)' : 'На весь экран'}
+              onClick={() => {
+                toggleFull()
+                // Фокус холсту: иначе клавиши уйдут кнопке, а не рабочему столу.
+                viewRef.current?.focus()
+              }}
+            >
+              <Icon name={full ? 'collapse' : 'expand'} size={14} />
             </button>
           )}
         </div>
