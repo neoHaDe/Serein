@@ -374,3 +374,50 @@ fn время_правки_файла_читается_с_сервера() {
         sftp::remove(&h, &dir, true).await.expect("уборка");
     });
 }
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn ссылки_не_закручивают_обход_дерева() {
+    // Петля из ссылок - не выдумка: `/proc` и `/sys` полны ссылок на самих себя, и обход
+    // по ним не заканчивается никогда. При этом ссылка на файл (`latest.log`) - обычное
+    // дело, и терять её было бы неожиданно. Проверяем оба случая сразу.
+    let s = Stand::from_env();
+    let dir = scratch("ссылки");
+    rt().block_on(async {
+        let h = connect(&s).await;
+        let _ = sftp::remove(&h, &dir, true).await;
+        sftp::mkdir(&h, &dir).await.expect("каталог");
+        sftp::write_file(&h, &format!("{dir}/файл.txt"), "содержимое", 0o644, 0, "lf")
+            .await
+            .expect("файл");
+        // Ссылка на сам каталог - петля; ссылка на файл - обычная полезная ссылка.
+        let (code, _, err) = ssh::exec(
+            &h,
+            &format!("ln -s {dir} {dir}/петля && ln -s {dir}/файл.txt {dir}/на-файл"),
+            None,
+        )
+        .await
+        .expect("создание ссылок");
+        assert_eq!(code, 0, "ссылки не создались: {err}");
+
+        let местная = std::env::temp_dir().join("serein-ссылки-стенд");
+        let план = sftp::plan_download(&h, &dir, &местная.to_string_lossy())
+            .await
+            .expect("план скачивания не должен зависнуть");
+
+        let пути: Vec<&str> = план.jobs.iter().map(|(lp, ..)| lp.as_str()).collect();
+        assert!(пути.iter().any(|p| p.ends_with("файл.txt")), "обычный файл: {пути:?}");
+        assert!(пути.iter().any(|p| p.ends_with("на-файл")), "ссылка на файл забирается: {пути:?}");
+        assert!(
+            !пути.iter().any(|p| p.contains("петля")),
+            "в ссылку на каталог заходить нельзя: {пути:?}"
+        );
+        assert!(
+            план.refused.iter().any(|(rel, _)| rel.ends_with("петля")),
+            "про пропущенную ссылку надо сказать: {:?}",
+            план.refused
+        );
+
+        sftp::remove(&h, &dir, true).await.expect("уборка");
+    });
+}

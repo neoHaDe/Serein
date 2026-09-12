@@ -560,6 +560,39 @@ pub async fn chmod(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, p
 
 const MAX_PREVIEW: u64 = 8 * 1024 * 1024;
 
+/// Пределы обхода дерева.
+///
+/// Их отсутствие - не теория: `/proc` и `/sys` полны ссылок на самих себя, а каталог с
+/// сотней тысяч файлов приложение просто съедал, собирая весь список в память до первой
+/// переданной строки. Глубина и число - две разные ловушки, поэтому предела два.
+const MAX_WALK_DEPTH: usize = 64;
+const MAX_WALK_ENTRIES: usize = 50_000;
+
+/// Читает не больше `limit` байт, сколько бы сервер ни отдавал.
+///
+/// Возвращает прочитанное и признак «влезло не всё». Проверять только размер из `stat`
+/// нельзя: он может врать (сервер не обязан говорить правду), а у растущего файла или
+/// файла из `/proc` размер вообще ничего не значит - там ноль, а читается бесконечно.
+async fn read_capped(
+    file: &mut russh_sftp::client::fs::File,
+    limit: u64,
+) -> Result<(Vec<u8>, bool), String> {
+    let cap = usize::try_from(limit).unwrap_or(usize::MAX);
+    let mut buf = Vec::new();
+    let mut chunk = vec![0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut chunk).await.map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Ok((buf, false));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.len() > cap {
+            buf.truncate(cap);
+            return Ok((buf, true));
+        }
+    }
+}
+
 pub async fn preview(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str) -> Result<Value, String> {
     check_remote_path(remote)?;
     let sftp = open(handle).await?;
@@ -569,9 +602,13 @@ pub async fn preview(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
         return Ok(json!({ "kind": "tooLarge", "size": size }));
     }
     let mut file = sftp.open(remote).await.map_err(|e| e.to_string())?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).await.map_err(|e| e.to_string())?;
+    let (buf, обрезано) = read_capped(&mut file, MAX_PREVIEW).await?;
     file.shutdown().await.ok();
+    if обрезано {
+        // Размер в `stat` обещал меньше, а файл отдал больше: показывать такое как
+        // «просмотр файла» нельзя - это уже не тот файл, о котором нас спрашивали.
+        return Ok(json!({ "kind": "tooLarge", "size": buf.len() }));
+    }
     Ok(json!({
         "kind": "bytes",
         "size": size,
@@ -604,9 +641,11 @@ pub async fn read_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>
         return Ok(json!({ "content": "", "eol": "lf", "mode": mode, "mtime": mtime, "tooLarge": true }));
     }
     let mut file = sftp.open(remote).await.map_err(|e| e.to_string())?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).await.map_err(|e| e.to_string())?;
+    let (buf, обрезано) = read_capped(&mut file, MAX_EDIT_SIZE).await?;
     file.shutdown().await.ok();
+    if обрезано {
+        return Ok(json!({ "content": "", "eol": "lf", "mode": mode, "mtime": mtime, "tooLarge": true }));
+    }
     if buf.iter().take(8192).any(|b| *b == 0) {
         return Ok(json!({ "content": "", "eol": "lf", "mode": mode, "mtime": mtime, "binary": true }));
     }
@@ -1332,8 +1371,37 @@ fn collect_local<'a>(
     rel: &'a str,
     out: &'a mut Vec<(String, String, String, u64)>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
+    collect_local_at(local, remote, rel, out, 0)
+}
+
+fn collect_local_at<'a>(
+    local: &'a str,
+    remote: &'a str,
+    rel: &'a str,
+    out: &'a mut Vec<(String, String, String, u64)>,
+    depth: usize,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
     Box::pin(async move {
-        let meta = tokio::fs::metadata(local).await.map_err(|e| e.to_string())?;
+        if depth > MAX_WALK_DEPTH || out.len() >= MAX_WALK_ENTRIES {
+            return Err(format!(
+                "дерево слишком большое: глубже {MAX_WALK_DEPTH} или больше {MAX_WALK_ENTRIES} файлов - выберите папку поменьше"
+            ));
+        }
+        // Политика ссылок: на файл - забираем содержимое, на каталог - не ходим вовсе.
+        // Ссылка на каталог уводит обход туда, куда человек не показывал, а ссылка на
+        // родителя закручивает его навсегда; ссылка же на файл (`latest.log`) - обычное
+        // дело, и терять её было бы неожиданно.
+        let meta = tokio::fs::symlink_metadata(local).await.map_err(|e| e.to_string())?;
+        let meta = if meta.file_type().is_symlink() {
+            match tokio::fs::metadata(local).await {
+                Ok(target) if target.is_dir() => return Ok(()),
+                // Битая ссылка: передавать нечего, но и падать из-за неё нельзя.
+                Err(_) => return Ok(()),
+                Ok(target) => target,
+            }
+        } else {
+            meta
+        };
         if meta.is_dir() {
             let mut rd = tokio::fs::read_dir(local).await.map_err(|e| e.to_string())?;
             while let Some(ent) = rd.next_entry().await.map_err(|e| e.to_string())? {
@@ -1341,7 +1409,7 @@ fn collect_local<'a>(
                 let lp = format!("{local}/{name}");
                 let rp = format!("{remote}/{name}");
                 let r = format!("{rel}/{name}");
-                collect_local(&lp, &rp, &r, out).await?;
+                collect_local_at(&lp, &rp, &r, out, depth + 1).await?;
             }
         } else {
             out.push((local.to_string(), remote.to_string(), rel.to_string(), meta.len()));
@@ -1362,8 +1430,47 @@ fn collect_remote<'a>(
     out: &'a mut Vec<(String, String, String, u64)>,
     refused: &'a mut Vec<(String, String)>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
+    collect_remote_at(sftp, remote, local, rel, out, refused, 0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_remote_at<'a>(
+    sftp: &'a SftpSession,
+    remote: &'a str,
+    local: &'a str,
+    rel: &'a str,
+    out: &'a mut Vec<(String, String, String, u64)>,
+    refused: &'a mut Vec<(String, String)>,
+    depth: usize,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
     Box::pin(async move {
-        let meta = sftp.metadata(remote).await.map_err(|e| e.to_string())?;
+        if depth > MAX_WALK_DEPTH || out.len() >= MAX_WALK_ENTRIES {
+            return Err(format!(
+                "дерево слишком большое: глубже {MAX_WALK_DEPTH} или больше {MAX_WALK_ENTRIES} файлов - выберите папку поменьше"
+            ));
+        }
+        // Политика ссылок: ссылку на файл забираем как файл, в ссылку на каталог не
+        // заходим. На сервере `/proc` и `/sys` полны ссылок на самих себя, и обход по ним
+        // не заканчивается никогда; ссылка же на файл - обычное дело, терять её незачем.
+        let meta = sftp.symlink_metadata(remote).await.map_err(|e| e.to_string())?;
+        let meta = if meta.file_type().is_symlink() {
+            match sftp.metadata(remote).await {
+                Ok(target) if target.file_type().is_dir() => {
+                    refused.push((
+                        rel.to_owned(),
+                        "это ссылка на каталог - внутрь не заходим".to_owned(),
+                    ));
+                    return Ok(());
+                }
+                Err(e) => {
+                    refused.push((rel.to_owned(), format!("ссылка никуда не ведёт: {e}")));
+                    return Ok(());
+                }
+                Ok(target) => target,
+            }
+        } else {
+            meta
+        };
         if meta.file_type().is_dir() {
             let rd = sftp.read_dir(remote).await.map_err(|e| e.to_string())?;
             for entry in rd {
@@ -1378,7 +1485,7 @@ fn collect_remote<'a>(
                 let rp = format!("{remote}/{name}");
                 let lp = format!("{local}/{name}");
                 let r = format!("{rel}/{name}");
-                collect_remote(sftp, &rp, &lp, &r, out, refused).await?;
+                collect_remote_at(sftp, &rp, &lp, &r, out, refused, depth + 1).await?;
             }
         } else {
             out.push((local.to_string(), remote.to_string(), rel.to_string(), meta.size.unwrap_or(0)));
