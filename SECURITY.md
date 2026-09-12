@@ -45,17 +45,32 @@ Being honest about this is part of the model, not a disclaimer:
 
 ## What Serein sends over the network, and where
 
-**Only to the servers you configure — plus one exception, which you can turn off.**
+**On its own, Serein makes exactly one kind of request: the update check. Everything else
+goes where you point it.**
 
-The exception is the update check: a GET to `nehade.xyz/updates/terminal/latest.json`, which
-returns a version number, release notes and signed download URLs. It carries no identifier of
-you or your machine beyond what any HTTP request carries. Settings → **«Закрытый контур: не
-обращаться в интернет»** disables it, including the check on startup, and the app then makes no
-outbound requests at all.
+What you point it at: the SSH servers you configure and whatever you reach through them, and
+the network tools you run from your own machine — port check, DNS lookup, HTTP request, TLS
+certificate, traceroute, LDAP. Those connect to the host you typed, when you press the button.
+
+The update check, in order:
+
+1. A GET to `github.com/neoHaDe/Serein/releases/latest/download/latest.json`.
+2. Only if GitHub does not answer: the same manifest from our own mirror,
+   `nehade.xyz/updates/terminal/latest.json`.
+
+A manifest holds a version number, release notes and download URLs — GitHub's in the first,
+the mirror's in the second. Nothing is downloaded unless you accept the update, and the download
+is verified against a minisign signature compiled into the app before anything is installed.
+The request carries no identifier of you or your machine beyond what any HTTP request carries.
+
+Settings → **«Закрытый контур: не обращаться в интернет»** turns the update check off — both
+the check on startup and the button. The switch is a network policy for the app's *own*
+requests, not a sandbox: connections you start yourself still go out. If the settings file
+cannot be read, the switch is treated as **on**; failing closed is the safer mistake here.
 
 There is no telemetry, no analytics, no crash reporting, and no account. Nothing to opt out of,
-because nothing is collected. This is verifiable: the code is open, and there is exactly one
-call to an external host in it.
+because nothing is collected. This is verifiable: the code is open, and the update check is the
+only request the app makes without you asking for it.
 
 ## Releases
 

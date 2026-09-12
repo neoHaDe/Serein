@@ -224,6 +224,24 @@ mod store_tests {
     }
 
     #[test]
+    fn повреждённые_настройки_не_выключают_закрытый_контур() {
+        // Приложение, которому велели не ходить в интернет, не должно начать ходить из-за
+        // одного испорченного байта в файле настроек.
+        let битые = settings_from(Err("файл settings.json повреждён".into()));
+        assert_eq!(битые["offline"], true, "при нечитаемом файле контур закрыт");
+        assert_eq!(битые["theme"], default_settings()["theme"], "остальное - по умолчанию");
+
+        // Файла нет вовсе - это первый запуск, а не беда: берём умолчания как есть, и
+        // закрытый контур сам собой не включается.
+        assert_ne!(settings_from(Ok(None))["offline"], true);
+
+        // Обычный случай: сохранённое перекрывает умолчания.
+        let свои = settings_from(Ok(Some(json!({ "offline": true, "fontSize": 18 }))));
+        assert_eq!(свои["offline"], true);
+        assert_eq!(свои["fontSize"], 18);
+    }
+
+    #[test]
     fn нет_файла_и_нечитаемый_файл_различаются() {
         // На этом различии держится вся защита: «нет» - это начать с чистого листа,
         // «не прочитать» - это остановиться и не трогать.
@@ -263,12 +281,32 @@ fn default_settings() -> Value {
 }
 
 pub fn settings_get() -> Value {
+    settings_from(read_checked("settings.json"))
+}
+
+/// Настройки из прочитанного файла - отдельно от диска, чтобы решение можно было проверить.
+///
+/// Нечитаемый файл даёт умолчания для всего, кроме закрытого контура: его считаем
+/// включённым. Прежнее чтение на повреждённом файле возвращало умолчания целиком, то есть
+/// `offline: false`, и приложение, которому велели не ходить в интернет, начинало ходить -
+/// молча, из-за одного испорченного байта. Интерфейс пытался перестраховаться, но его
+/// перехват ошибки не срабатывал: ошибки до него просто не доходило.
+fn settings_from(stored: Result<Option<Value>, String>) -> Value {
     let mut base = default_settings();
-    if let (Some(b), Some(stored)) = (base.as_object_mut(), read_value("settings.json")) {
-        if let Some(s) = stored.as_object() {
-            for (k, v) in s {
-                b.insert(k.clone(), v.clone());
+    let Some(b) = base.as_object_mut() else {
+        return base;
+    };
+    match stored {
+        Ok(Some(v)) => {
+            if let Some(s) = v.as_object() {
+                for (k, val) in s {
+                    b.insert(k.clone(), val.clone());
+                }
             }
+        }
+        Ok(None) => {}
+        Err(_) => {
+            b.insert("offline".into(), json!(true));
         }
     }
     base

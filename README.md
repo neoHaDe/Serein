@@ -183,7 +183,7 @@ figures are public measurements normalised to the same metric; size is the 1.3.1
 
 ## Quick start
 
-1. Install the setup exe or grab the portable `Serein_1.3.1_x64-portable.exe` from [Releases](../../releases/latest).
+1. Install the setup exe from [Releases](../../releases/latest) (or the portable build - see [Install](#install)).
 2. Import `~/.ssh/config` or add a host by hand.
 3. Connect. The local terminal works with no SSH at all.
 
@@ -195,10 +195,10 @@ Target: install → first session in under two minutes.
 
 | Need | Answer |
 | --- | --- |
-| OS | Windows 10 x64 **22H2+** or Windows 11 x64; Linux x64 (`.deb` / AppImage). No macOS yet |
+| OS | Windows 10 x64 **22H2+** or Windows 11 x64; Linux x64 (`.deb`, `.rpm`, AppImage). No macOS yet |
 | Web runtime | WebView2 on Windows (already there); `webkit2gtk-4.1` on Linux (pulled in by the `.deb`) |
 | Privileges | admin is not required for daily use |
-| Build from source | Node **18.18+** (tested on 24.16), Rust **stable** (`x86_64-pc-windows-msvc` / `x86_64-unknown-linux-gnu`), Tauri CLI **2.11.x**. Linux also needs `libudev-dev` - see [LINUX_MIGRATION.md](docs/LINUX_MIGRATION.md) |
+| Build from source | Node **20.19+** or **22.12+** (tested on 24.16; Vite 8 does not start on older ones), Rust **stable** (`x86_64-pc-windows-msvc` / `x86_64-unknown-linux-gnu`), Tauri CLI **2.11.x**. Linux also needs `libudev-dev` - see [LINUX_MIGRATION.md](docs/LINUX_MIGRATION.md) |
 | SSH agent | password, key file, **SSH agent**, or keyboard-interactive |
 
 Matrix and smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
@@ -210,9 +210,9 @@ Matrix and smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
 From [Releases](../../releases/latest):
 
 - **`Serein_1.3.1_x64-setup.exe`** - Windows installer (Start menu, uninstall).
-- **`Serein_1.3.1_x64-portable.exe`** - Windows single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`.
+- **`Serein_1.3.1_x64-portable.exe`** - Windows single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`. In 1.3.1 this file has **no RDP**: remote desktop over RDP needs the helper `serein-rdp.exe` next to it, and the single-file build does not carry it. From the next release the portable build is a ZIP with both files.
 - **`Serein_1.3.1_amd64.deb`** - Debian/Ubuntu/**Astra** package (`/usr/bin/serein`).
-- **`Serein-1.3.1-1.x86_64.rpm`** - **Fedora** and relatives (RedOS, Alt) package.
+- **`Serein-1.3.1-1.x86_64.rpm`** - **Fedora** package. Installs and runs on a clean Fedora; on RedOS and Alt it has not been checked yet.
 - **`Serein_1.3.1_amd64.AppImage`** - portable Linux binary, one file for both families.
 
 Every release publishes SHA-256 sums and a **CycloneDX SBOM** for both the Rust and the npm
@@ -222,8 +222,10 @@ complain (*More info → Run anyway*).
 Release notes: [RELEASE_NOTES_v1.3.1.md](docs/RELEASE_NOTES_v1.3.1.md).
 Security policy and threat model: [SECURITY.md](SECURITY.md).
 
-Auto-update is live (`nehade.xyz/updates/terminal/`), signed with minisign; the signing key
-never enters CI. It can be switched off entirely - see offline mode below.
+Auto-update checks GitHub Releases first and falls back to our own mirror
+(`nehade.xyz/updates/terminal/`) when GitHub does not answer. Both manifests carry the same
+minisign signatures; the signing key never enters CI. The check can be switched off entirely -
+see offline mode below, and [SECURITY.md](SECURITY.md) for exactly what goes out.
 
 ---
 
@@ -344,6 +346,11 @@ stripped; there is no application-wide log file yet - for that, use `npm run tau
 - No external penetration test or independent review of the crypto layer yet.
 - `rsa` carries RUSTSEC-2023-0071 with no upstream fix; it stays for plain `id_rsa` keys.
 - Telnet has not been run against real network hardware, only an emulator.
+- The `.rpm` is built in a Fedora container and checked on Fedora only. RedOS and Alt are close
+  relatives, not the same system: older libraries there can stop a Fedora-built binary.
+- The 1.3.1 portable single-file `.exe` has no RDP - the helper is a separate program and the
+  single file does not carry it. Use the installer, or the portable ZIP from the next release.
+- RDP over a slow VPN is usable but heavier than `mstsc`: plain bitmaps, no RemoteFX/H.264 yet.
 - Not planned: cloud sync, mobile, plugins, a generic LLM chat pane.
 
 Product plan. 1.2.7 was about security; 1.3 closed three parity items at once: **VNC**,

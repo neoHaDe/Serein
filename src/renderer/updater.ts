@@ -71,7 +71,8 @@ async function isOffline(): Promise<boolean> {
 }
 
 /**
- * Проверка обновлений через endpoint из `tauri.conf` (nehade.xyz).
+ * Проверка обновлений по манифестам из `tauri.conf`: сначала GitHub, а если он не ответил -
+ * своё зеркало на nehade.xyz.
  *
  * `silent=true` - молчать, если обновлений нет или сеть недоступна.
  * `silent=false` - показывать результат всегда (кнопка в настройках).
