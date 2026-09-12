@@ -47,14 +47,20 @@ pub(crate) fn log(line: &str) {
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("rdp.log"))
-    {
+    let path = dir.join("rdp.log");
+    // Журнал не растёт без конца. Метрики пишутся каждые пять секунд всё время, пока открыт
+    // рабочий стол: за сутки это десятки мегабайт в профиле, и никто их не убирает.
+    // Предыдущий держим одним файлом - для разбора неполадки хватает, а место конечно.
+    if std::fs::metadata(&path).map(|m| m.len() > LOG_MAX_BYTES).unwrap_or(false) {
+        let _ = std::fs::rename(&path, dir.join("rdp.log.1"));
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(f, "{} {line}", crate::term_out::stamp_utc());
     }
 }
+
+/// Насколько отпускаем журнал рабочего стола, прежде чем отложить его в сторону.
+const LOG_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Строка от интерфейса в тот же журнал.
 ///

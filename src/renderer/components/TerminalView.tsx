@@ -7,6 +7,7 @@ import { useSettings } from '../SettingsContext'
 import { getTheme } from '../themes'
 import type { PaneKind, SessionFailurePhase } from '../../shared/types'
 import { errText } from '../errText'
+import { allowClipboardFromServer } from '../clipboardPolicy'
 
 interface Props {
   paneId: string
@@ -50,6 +51,19 @@ function copyText(text: string): void {
   void window.api.clipboard.write(text)
 }
 
+let lastClipboardFromServer = 0
+
+/** Буфер обмена от сервера. Само правило - в `clipboardPolicy`, там же и тесты. */
+function clipboardFromServer(host: HTMLDivElement, text: string): void {
+  const now = Date.now()
+  const focused = host.contains(document.activeElement) || host.matches(':focus-within')
+  if (!allowClipboardFromServer({ focused, length: text.length, sinceLastMs: now - lastClipboardFromServer })) {
+    return
+  }
+  lastClipboardFromServer = now
+  copyText(text)
+}
+
 function pasteInto(term: Terminal): void {
   void window.api.clipboard.read().then((t) => {
     if (t) term.paste(t)
@@ -83,7 +97,7 @@ function bindTermClipboard(term: Terminal, host: HTMLDivElement): void {
     try {
       const bin = atob(payload)
       const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0))
-      copyText(new TextDecoder().decode(bytes))
+      clipboardFromServer(host, new TextDecoder().decode(bytes))
     } catch {
       /* bad OSC 52 */
     }

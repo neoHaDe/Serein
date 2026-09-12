@@ -160,6 +160,9 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
         database
       })
       idRef.current = info.id
+      // Пароль ушёл на сервер и больше не нужен: держать его в состоянии панели до конца
+      // работы незачем. Сохранённая форма подключения его и так не содержит.
+      setPassword('')
       const shown = { kind: info.kind, host: info.host, port: info.port }
       setConnected(shown)
       remember(sessionId, {

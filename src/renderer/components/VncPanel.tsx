@@ -205,6 +205,9 @@ export function VncPanel({
       setError('')
       try {
         idRef.current = await window.api.vnc.open(sessionId, draw, { password: secret })
+        // Пароль дальше не нужен: он ушёл на сервер, а в состоянии панели остался бы
+        // висеть всё время сеанса - в памяти окна и в снимках состояния.
+        setPassword('')
       } catch (e) {
         setStatus('closed')
         setError(errText(e))
