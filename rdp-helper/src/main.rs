@@ -262,14 +262,20 @@ async fn main() {
         }
     };
 
-    // Пароль первой строкой входа. В доводы он не попадает: строка запуска процесса
-    // видна в системе всем, кто может смотреть список процессов.
-    let mut password = String::new();
-    if std::io::stdin().lock().read_line(&mut password).is_err() {
-        proto::send_closed(&mut out, "не удалось прочитать пароль со входа");
-        std::process::exit(2);
+    // Пароль первой строкой входа, пропуск к локальному сокету - второй. В доводы они не
+    // попадают: строка запуска процесса видна в системе всем, кто может смотреть список
+    // процессов.
+    let (mut password, mut pass) = (String::new(), String::new());
+    {
+        let stdin = std::io::stdin();
+        let mut lock = stdin.lock();
+        if lock.read_line(&mut password).is_err() || lock.read_line(&mut pass).is_err() {
+            proto::send_closed(&mut out, "не удалось прочитать пароль со входа");
+            std::process::exit(2);
+        }
     }
     let password = password.trim_end_matches(['\r', '\n']).to_owned();
+    let pass = pass.trim_end_matches(['\r', '\n']).to_owned();
 
     // Дальше в вывод пишет только поток выдачи: два писателя в одну трубу перемешали бы
     // байты кадров, и приложение потеряло бы границы пакетов.
@@ -278,7 +284,7 @@ async fn main() {
         NetworkProfile::Vpn => Some(72),
         NetworkProfile::Lan => None,
     });
-    let result = run(args, password, &out).await;
+    let result = run(args, password, pass, &out).await;
     if let Err(e) = &result {
         out.packet(proto::packet(proto::KIND_CLOSED, 0, 0, 0, 0, e.as_bytes()));
     }
@@ -286,6 +292,42 @@ async fn main() {
     if result.is_err() {
         std::process::exit(1);
     }
+}
+
+/// Отпечаток открытого ключа сервера - в том же виде, в каком отпечатки показывает SSH.
+fn fingerprint(key: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    use base64::Engine as _;
+    let digest = Sha256::digest(key);
+    format!(
+        "SHA256:{}",
+        base64::engine::general_purpose::STANDARD_NO_PAD.encode(digest)
+    )
+}
+
+/// Сколько точек экрана согласны держать в памяти.
+///
+/// Размер приходит от сервера - и при первом согласовании, и после каждой смены размера.
+/// Протокол допускает до 8192 на сторону, то есть 67 мегапикселей: кадр RGBA такого размера
+/// - четверть гигабайта, и выделяется он до всякой проверки. Сорок мегапикселей покрывают
+/// 8K с запасом, а на всё, что больше, отвечаем отказом, а не попыткой выделить память.
+const MAX_PIXELS: u64 = 40_000_000;
+
+/// Создаёт кадр, проверив объявленный сервером размер.
+fn framebuffer(
+    w: u16,
+    h: u16,
+) -> Result<ironrdp::session::image::DecodedImage, String> {
+    if u64::from(w) * u64::from(h) > MAX_PIXELS {
+        return Err(format!(
+            "сервер назвал размер экрана {w}x{h} - это больше, чем мы согласны держать в памяти"
+        ));
+    }
+    Ok(ironrdp::session::image::DecodedImage::new(
+        ironrdp::graphics::image_processing::PixelFormat::RgbA32,
+        w,
+        h,
+    ))
 }
 
 /// Сколько ждём, пока сервер доведёт подключение до рабочего стола.
@@ -299,10 +341,11 @@ const CONNECT_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
 /// сервер не пришлёт ни одного кадра, и картинка всё это время стоит.
 const REACTIVATE_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
 
-async fn run(a: Args, password: String, out: &Presenter) -> Result<(), String> {
-    let (connection, upgraded_framed) = tokio::time::timeout(CONNECT_LIMIT, connect(&a, password))
-        .await
-        .map_err(|_| "сервер не довёл подключение до конца за 30 с".to_owned())??;
+async fn run(a: Args, password: String, pass: String, out: &Presenter) -> Result<(), String> {
+    let (connection, upgraded_framed) =
+        tokio::time::timeout(CONNECT_LIMIT, connect(&a, password, &pass))
+            .await
+            .map_err(|_| "сервер не довёл подключение до конца за 30 с".to_owned())??;
 
     let frame_period = match a.network_profile {
         NetworkProfile::Vpn => std::time::Duration::from_millis(33),
@@ -315,12 +358,23 @@ async fn run(a: Args, password: String, out: &Presenter) -> Result<(), String> {
 async fn connect(
     a: &Args,
     password: String,
+    pass: &str,
 ) -> Result<(ConnectionResult, ironrdp_tokio::TokioFramed<Stream>), String> {
+    use tokio::io::AsyncWriteExt as _;
+
     // Приложение уже держит этот сокет: за ним канал внутри SSH-сессии.
-    let sock = tokio::net::TcpStream::connect(("127.0.0.1", a.port))
+    let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", a.port))
         .await
         .map_err(|e| format!("не подключиться к локальному сокету {}: {e}", a.port))?;
     sock.set_nodelay(true).ok();
+    // Первым делом - пропуск. Сокет слушает петлю, а на петлю может постучаться любой
+    // процесс этой машины: без пропуска чужая программа получала бы готовый канал к
+    // рабочему столу сервера, открытый нашими правами. Пропуск одноразовый, приходит от
+    // приложения на стандартный вход и в строке запуска не виден.
+    sock.write_all(pass.as_bytes())
+        .await
+        .map_err(|e| format!("пропуск не ушёл приложению: {e}"))?;
+    sock.flush().await.ok();
 
     let mut framed = ironrdp_tokio::TokioFramed::new(sock);
     // Канал управления экраном объявляем сразу: договориться о нём можно только при
@@ -350,6 +404,12 @@ async fn connect(
     let server_public_key = ironrdp_tls::extract_tls_server_public_key(&tls_cert)
         .ok_or("из сертификата сервера не достать открытый ключ")?
         .to_owned();
+
+    // Отпечаток открытого ключа - в журнал. Проверять его по списку доверенных мы не можем
+    // (RDP-серверы почти всегда самоподписанные, и требовать доверенный сертификат значило
+    // бы не пускать никуда), но смена ключа на том же сервере должна быть хотя бы видна:
+    // без записи в журнале об этом узнать нельзя вообще никак.
+    eprintln!("открытый ключ сервера: {}", fingerprint(&server_public_key));
 
     let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
     let erased: Stream = Box::new(tls_stream);
@@ -387,11 +447,7 @@ async fn session(
     let h = connection.desktop_size.height;
     out.packet(proto::packet(proto::KIND_RESIZE, 0, 0, w, h, &[]));
 
-    let mut image = ironrdp::session::image::DecodedImage::new(
-        ironrdp::graphics::image_processing::PixelFormat::RgbA32,
-        w,
-        h,
-    );
+    let mut image = framebuffer(w, h)?;
     let mut stage = ActiveStageBuilder {
         static_channels: connection.static_channels,
         user_channel_id: connection.user_channel_id,
@@ -561,11 +617,7 @@ async fn session(
                     .map_err(|_| {
                         "сервер не закончил пересогласование после смены размера за 15 с".to_owned()
                     })??;
-                    image = ironrdp::session::image::DecodedImage::new(
-                        ironrdp::graphics::image_processing::PixelFormat::RgbA32,
-                        nw,
-                        nh,
-                    );
+                    image = framebuffer(nw, nh)?;
                     out.packet(proto::packet(proto::KIND_RESIZE, 0, 0, nw, nh, &[]));
                 }
                 ActiveStageOutput::ResponseFrame(f) => {
@@ -969,6 +1021,31 @@ impl Presenter {
     fn finish(self) {
         drop(self.tx);
         let _ = self.thread.join();
+    }
+}
+
+#[cfg(test)]
+mod trust_tests {
+    use super::*;
+
+    #[test]
+    fn слишком_большой_экран_не_выделяется() {
+        // Размер приходит от сервера - и при подключении, и после каждой смены размера.
+        // Протокол допускает 8192 на сторону: кадр RGBA такого размера - четверть гигабайта,
+        // и выделялся он раньше без всякой проверки.
+        assert!(framebuffer(1920, 1080).is_ok());
+        let отказ = framebuffer(8192, 8192).expect_err("67 мегапикселей держать не согласны");
+        assert!(отказ.contains("8192x8192"), "в отказе должен быть сам размер: {отказ}");
+    }
+
+    #[test]
+    fn отпечаток_ключа_в_том_же_виде_что_у_ssh() {
+        // Тот же формат, что показывает SSH: человеку не приходится держать в голове два.
+        let fp = fingerprint("ключ".as_bytes());
+        assert!(fp.starts_with("SHA256:"), "{fp}");
+        assert!(!fp.ends_with('='), "паддинг в отпечатках SSH не пишется: {fp}");
+        assert_eq!(fp, fingerprint("ключ".as_bytes()), "один ключ - один отпечаток");
+        assert_ne!(fp, fingerprint("другой ключ".as_bytes()));
     }
 }
 

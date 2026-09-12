@@ -88,6 +88,35 @@ const STOP_GRACE: Duration = Duration::from_secs(2);
 /// Сколько ждём, пока помощник подключится к нашему сокету на петле.
 const HELPER_CONNECT_WAIT: Duration = Duration::from_secs(15);
 
+/// Длина пропуска к локальному сокету, в байтах шестнадцатеричной записи.
+const PASS_LEN: usize = 64;
+
+/// Одноразовый пропуск к локальному сокету.
+///
+/// Сокет слушает петлю, и постучаться в него может любой процесс этой машины - раньше
+/// первый подключившийся получал готовый канал к рабочему столу сервера, открытый нашими
+/// правами. Пропуск отдаётся помощнику на стандартный вход (в строке запуска он был бы
+/// виден всем) и проверяется здесь до того, как хоть один байт уйдёт на сервер.
+fn one_time_pass() -> String {
+    use rand::RngCore as _;
+    let mut bytes = [0u8; PASS_LEN / 2];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Читает пропуск и сверяет его. Не сошлось - соединение чужое.
+async fn check_pass(sock: &mut tokio::net::TcpStream, expected: &str) -> bool {
+    let mut buf = [0u8; PASS_LEN];
+    match tokio::time::timeout(Duration::from_secs(5), sock.read_exact(&mut buf)).await {
+        Ok(Ok(_)) => {
+            // Сравнение постоянного времени здесь не нужно: пропуск одноразовый, живёт
+            // секунды и сравнивается ровно один раз.
+            buf == expected.as_bytes()
+        }
+        _ => false,
+    }
+}
+
 /// Пакет закрытия для интерфейса - тем же форматом, каким его шлёт помощник.
 ///
 /// Нужен, когда помощник ушёл, не успев ничего сказать: упал, снят или оборвалась труба.
@@ -245,6 +274,8 @@ pub async fn open(
 
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     let stop = Arc::new(stop_tx);
+    let pass = one_time_pass();
+    let bridge_pass = pass.clone();
     let (tx, rx) = mpsc::unbounded_channel::<String>();
     let out = Out::new(on_frame);
 
@@ -260,12 +291,19 @@ pub async fn open(
                 return;
             }
         };
-        let Ok(Ok((sock, _))) = accepted else {
+        let Ok(Ok((mut sock, _))) = accepted else {
             log("помощник не подключился к локальному сокету - сеанс не начался");
             let _ = bridge_stop.send(true);
             return;
         };
         sock.set_nodelay(true).ok();
+        // Пропуск сверяем до того, как хоть один байт уйдёт на сервер: на петлю может
+        // постучаться любой процесс этой машины, а канал открыт нашими правами.
+        if !check_pass(&mut sock, &bridge_pass).await {
+            log("к локальному сокету постучался не наш помощник - соединение отклонено");
+            let _ = bridge_stop.send(true);
+            return;
+        }
         match target {
             Target::Tcp { host, port } => {
                 if let Ok(up) = tokio::net::TcpStream::connect((host.as_str(), port)).await {
@@ -357,7 +395,9 @@ pub async fn open(
             return Err("у помощника нет входа".into());
         }
     };
-    if let Err(e) = stdin.write_all(format!("{password}\n").as_bytes()).await {
+    // Пароль первой строкой, пропуск второй. Обе - на стандартный вход: строка запуска
+    // процесса видна в системе всем, кто может смотреть список процессов.
+    if let Err(e) = stdin.write_all(format!("{password}\n{pass}\n").as_bytes()).await {
         let _ = stop.send(true);
         return Err(format!("пароль не ушёл помощнику: {e}"));
     }
@@ -689,6 +729,44 @@ mod tests {
         assert_eq!(format!("k {} {}\n", 65, u8::from(true)), "k 65 1\n");
         assert_eq!(format!("k {} {}\n", 65, u8::from(false)), "k 65 0\n");
         assert_eq!(format!("w {} {}\n", u8::from(true), -120), "w 1 -120\n");
+    }
+
+    #[test]
+    fn чужое_соединение_к_локальному_сокету_отклоняется() {
+        // Сокет слушает петлю, и постучаться в него может любой процесс этой машины. Раньше
+        // первый подключившийся получал готовый канал к рабочему столу сервера, открытый
+        // нашими правами.
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let pass = one_time_pass();
+            assert_eq!(pass.len(), PASS_LEN, "пропуск нужной длины");
+            assert_ne!(pass, one_time_pass(), "каждый сеанс - свой пропуск");
+
+            let l = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let addr = l.local_addr().unwrap();
+
+            // Свой: присылает пропуск и проходит.
+            let ожидаемый = pass.clone();
+            let гость = tokio::spawn(async move {
+                let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+                s.write_all(ожидаемый.as_bytes()).await.unwrap();
+                // Держим сокет открытым, пока проверяют.
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            });
+            let (mut sock, _) = l.accept().await.unwrap();
+            assert!(check_pass(&mut sock, &pass).await, "свой помощник обязан пройти");
+            гость.await.unwrap();
+
+            // Чужой: пропуск не тот - не проходит.
+            let чужой = tokio::spawn(async move {
+                let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+                s.write_all(&[b'0'; PASS_LEN]).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            });
+            let (mut sock, _) = l.accept().await.unwrap();
+            assert!(!check_pass(&mut sock, &pass).await, "чужому здесь делать нечего");
+            чужой.await.unwrap();
+        });
     }
 
     #[test]
