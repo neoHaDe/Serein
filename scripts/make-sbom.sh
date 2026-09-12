@@ -38,7 +38,10 @@ cargo cyclonedx --manifest-path rdp-helper/Cargo.toml --format json --spec-versi
 find rdp-helper -maxdepth 1 -name '*.cdx.json' -exec mv {} "$out/serein-$version-rdp-helper.cdx.json" \;
 
 echo "npm…"
-npx --yes @cyclonedx/cyclonedx-npm@latest \
+# Версия закреплена, а не `@latest`: состав SBOM должен зависеть только от наших
+# зависимостей. С `@latest` один и тот же релиз, собранный дважды, давал бы разные
+# описания - а SBOM затем и нужен, чтобы его можно было сверить.
+npx --yes @cyclonedx/cyclonedx-npm@4.0.0 \
   --omit dev \
   --spec-version 1.5 \
   --output-format JSON \
