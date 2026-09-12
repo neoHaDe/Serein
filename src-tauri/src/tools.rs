@@ -455,9 +455,15 @@ async fn http_exchange(addr: &str, req: &str) -> Result<Vec<u8>, String> {
         .await
         .map_err(|e| format!("Не удалось отправить запрос: {e}"))?;
     let mut out = Vec::new();
-    sock.read_to_end(&mut out)
-        .await
-        .map_err(|e| format!("Ответ оборвался: {e}"))?;
+    // Закрытие сбросом сразу после ответа - обычное поведение, а не поломка: так делают
+    // серверы и балансировщики, а на Windows к тому же любые непрочитанные байты запроса
+    // в приёмном буфере превращают закрытие в сброс. Уже прочитанное при этом верно.
+    // Пустой ответ - другое дело: там сброс и есть весь результат.
+    if let Err(e) = sock.read_to_end(&mut out).await {
+        if out.is_empty() {
+            return Err(format!("Ответ оборвался: {e}"));
+        }
+    }
     Ok(out)
 }
 
@@ -1150,23 +1156,35 @@ A=2606:2800:220::1
             let port = l.local_addr().unwrap().port();
 
             tokio::spawn(async move {
-                for шаг in 0..2 {
-                    let Ok((mut sock, _)) = l.accept().await else { return };
-                    let mut buf = [0u8; 1024];
-                    let _ = sock.read(&mut buf).await;
-                    let ответ: &[u8] = if шаг == 0 {
-                        b"HTTP/1.1 301 Moved Permanently\r\nLocation: /final\r\nContent-Length: 0\r\n\r\n"
-                    } else {
-                        // Тело кусками: ровно тот случай, где без склейки в предпросмотре
-                        // видны служебные числа.
-                        b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nHello\r\n0\r\n\r\n"
-                    };
-                    let _ = sock.write_all(ответ).await;
-                    let _ = sock.shutdown().await;
-                    // Дочитываем до конца перед закрытием. Непрочитанные байты в приёмном
-                    // буфере Windows превращает в сброс соединения, и клиент получает
-                    // «соединение разорвано» вместо конца ответа.
-                    while matches!(sock.read(&mut buf).await, Ok(n) if n > 0) {}
+                // Принимаем, пока жив тест, а не ровно два раза: закрытый раньше времени
+                // слушающий сокет закрывает сбросом всё, что успело встать в очередь на
+                // приём, и клиент получает «соединение разорвано» вместо ответа.
+                let mut номер = 0usize;
+                while let Ok((mut sock, _)) = l.accept().await {
+                    let шаг = номер;
+                    номер += 1;
+                    // Каждое соединение - своей задачей, и приём следующего не ждёт, пока
+                    // закроется прошлое. Иначе клиент успевает постучаться вторым
+                    // соединением раньше, чем сервер до него дойдёт.
+                    tokio::spawn(async move {
+                        let mut buf = [0u8; 1024];
+                        let _ = sock.read(&mut buf).await;
+                        let ответ: &[u8] = if шаг == 0 {
+                            b"HTTP/1.1 301 Moved Permanently\r\nLocation: /final\r\nContent-Length: 0\r\n\r\n"
+                        } else {
+                            // Тело кусками: ровно тот случай, где без склейки в
+                            // предпросмотре видны служебные числа.
+                            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nHello\r\n0\r\n\r\n"
+                        };
+                        let _ = sock.write_all(ответ).await;
+                        // Свою сторону закрываем сразу: клиент читает ответ до конца потока
+                        // и без этого будет ждать вечно. И только потом дочитываем запрос -
+                        // непрочитанные байты в приёмном буфере Windows превращает в сброс
+                        // соединения, и клиент видит «соединение разорвано» вместо конца
+                        // ответа.
+                        let _ = sock.shutdown().await;
+                        while matches!(sock.read(&mut buf).await, Ok(n) if n > 0) {}
+                    });
                 }
             });
 
@@ -1201,16 +1219,20 @@ A=2606:2800:220::1
             let port = l.local_addr().unwrap().port();
             tokio::spawn(async move {
                 while let Ok((mut sock, _)) = l.accept().await {
-                    let mut buf = [0u8; 1024];
-                    let _ = sock.read(&mut buf).await;
-                    let _ = sock
-                        .write_all(b"HTTP/1.1 302 Found\r\nLocation: /\r\nContent-Length: 0\r\n\r\n")
-                        .await;
-                    let _ = sock.shutdown().await;
-                    // Дочитываем до конца перед закрытием. Непрочитанные байты в приёмном
-                    // буфере Windows превращает в сброс соединения, и клиент получает
-                    // «соединение разорвано» вместо конца ответа.
-                    while matches!(sock.read(&mut buf).await, Ok(n) if n > 0) {}
+                    // Своей задачей на соединение: переходов много, и приём следующего
+                    // не должен ждать закрытия прошлого.
+                    tokio::spawn(async move {
+                        let mut buf = [0u8; 1024];
+                        let _ = sock.read(&mut buf).await;
+                        let _ = sock
+                            .write_all(b"HTTP/1.1 302 Found\r\nLocation: /\r\nContent-Length: 0\r\n\r\n")
+                            .await;
+                        // Закрываем свою сторону сразу - клиент читает до конца потока, -
+                        // и только потом дочитываем запрос: непрочитанные байты Windows
+                        // превращает в сброс соединения.
+                        let _ = sock.shutdown().await;
+                        while matches!(sock.read(&mut buf).await, Ok(n) if n > 0) {}
+                    });
                 }
             });
 
