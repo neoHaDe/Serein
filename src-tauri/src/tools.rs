@@ -391,8 +391,45 @@ pub fn dechunk(body: &[u8]) -> Vec<u8> {
 /// Сколько байт тела оставлять для показа.
 const BODY_PREVIEW: usize = 2048;
 
+/// Сколько байт ответа вообще читаем.
+///
+/// В панель уходит первый килобайт с небольшим, а читали мы до конца - сколько бы сервер
+/// ни отдавал. Служба, которая отвечает бесконечным телом (поток событий, отдача большого
+/// файла), съедала память приложения целиком. Четверти мегабайта хватает и на заголовки, и
+/// на предпросмотр с запасом.
+const MAX_BODY_READ: usize = 256 * 1024;
+
+/// Сколько проверок идёт одновременно.
+///
+/// Каждая занимает поток из блокирующего пула (TLS у нас синхронный) и своё соединение.
+/// Без предела десяток нажатий подряд по «проверить» превращается в десяток висящих
+/// потоков, и приложение перестаёт отвечать само.
+fn probe_slots() -> &'static tokio::sync::Semaphore {
+    static SLOTS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    SLOTS.get_or_init(|| tokio::sync::Semaphore::new(8))
+}
+
+/// Читает из блокирующего потока не больше `MAX_BODY_READ` байт.
+fn read_capped_sync(r: &mut impl std::io::Read) -> Result<Vec<u8>, std::io::Error> {
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        let n = r.read(&mut chunk)?;
+        if n == 0 {
+            return Ok(out);
+        }
+        out.extend_from_slice(&chunk[..n]);
+        if out.len() >= MAX_BODY_READ {
+            out.truncate(MAX_BODY_READ);
+            return Ok(out);
+        }
+    }
+}
+
 /// Один запрос без переходов: соединиться, отправить, прочитать до закрытия.
 async fn http_once(u: &Url, method: &str, timeout: Duration) -> Result<(Value, Option<String>), String> {
+    // Место в очереди проверок: держим его на весь обмен, включая блокирующий TLS.
+    let _slot = probe_slots().acquire().await.map_err(|e| e.to_string())?;
     let started = std::time::Instant::now();
     let addr = format!("{}:{}", u.host, u.port);
     let raw = if u.secure {
@@ -455,13 +492,29 @@ async fn http_exchange(addr: &str, req: &str) -> Result<Vec<u8>, String> {
         .await
         .map_err(|e| format!("Не удалось отправить запрос: {e}"))?;
     let mut out = Vec::new();
+    let mut chunk = vec![0u8; 16 * 1024];
     // Закрытие сбросом сразу после ответа - обычное поведение, а не поломка: так делают
     // серверы и балансировщики, а на Windows к тому же любые непрочитанные байты запроса
     // в приёмном буфере превращают закрытие в сброс. Уже прочитанное при этом верно.
     // Пустой ответ - другое дело: там сброс и есть весь результат.
-    if let Err(e) = sock.read_to_end(&mut out).await {
-        if out.is_empty() {
-            return Err(format!("Ответ оборвался: {e}"));
+    //
+    // Читаем с пределом: служба с бесконечным телом иначе съедает память приложения.
+    loop {
+        match sock.read(&mut chunk).await {
+            Ok(0) => break,
+            Ok(n) => {
+                out.extend_from_slice(&chunk[..n]);
+                if out.len() >= MAX_BODY_READ {
+                    out.truncate(MAX_BODY_READ);
+                    break;
+                }
+            }
+            Err(e) => {
+                if out.is_empty() {
+                    return Err(format!("Ответ оборвался: {e}"));
+                }
+                break;
+            }
         }
     }
     Ok(out)
@@ -470,23 +523,33 @@ async fn http_exchange(addr: &str, req: &str) -> Result<Vec<u8>, String> {
 /// То же по TLS. Синхронно и в отдельном потоке: `native-tls` здесь уже используется для
 /// разбора сертификатов, и второй библиотеки ради этого заводить незачем.
 fn https_exchange(addr: &str, host: &str, req: &str) -> Result<Vec<u8>, String> {
-    use std::io::{Read, Write};
-    let sock = TcpStream::connect(addr).map_err(|e| format!("Не удалось соединиться: {e}"))?;
+    use std::io::Write;
+    // Сроки ставим на самом сокете, а не только снаружи через `timeout`. Внешний срок
+    // отпускает того, кто ждёт ответа, но сам блокирующий поток продолжает висеть на
+    // чтении: сервер, который принял соединение и молчит, забирал поток из пула навсегда.
+    let target = addr
+        .to_socket_addrs()
+        .map_err(|e| e.to_string())?
+        .next()
+        .ok_or_else(|| format!("Не удалось разрешить «{addr}»"))?;
+    let sock = TcpStream::connect_timeout(&target, Duration::from_secs(10))
+        .map_err(|e| format!("Не удалось соединиться: {e}"))?;
+    sock.set_read_timeout(Some(Duration::from_secs(10)))
+        .map_err(|e| e.to_string())?;
+    sock.set_write_timeout(Some(Duration::from_secs(10)))
+        .map_err(|e| e.to_string())?;
     let conn = TlsConnector::new().map_err(|e| format!("TLS: {e}"))?;
     let mut tls: TlsStream<TcpStream> = conn
         .connect(host, sock)
         .map_err(|e| format!("Рукопожатие TLS не состоялось: {e}"))?;
     tls.write_all(req.as_bytes())
         .map_err(|e| format!("Не удалось отправить запрос: {e}"))?;
-    let mut out = Vec::new();
     // Обрыв TLS без положенного прощания - обычное дело у серверов, закрывающих
     // соединение. Уже прочитанное при этом верно, и терять его из-за формальности нельзя.
-    if let Err(e) = tls.read_to_end(&mut out) {
-        if out.is_empty() {
-            return Err(format!("Ответ оборвался: {e}"));
-        }
+    match read_capped_sync(&mut tls) {
+        Ok(out) => Ok(out),
+        Err(e) => Err(format!("Ответ оборвался: {e}")),
     }
-    Ok(out)
 }
 
 /// Запрос со своей машины, с переходами по `Location`.
@@ -543,6 +606,7 @@ pub fn resolve_redirect(from: &Url, location: &str) -> Result<Url, String> {
 }
 
 pub async fn tls_cert(host: String, port: Option<u16>) -> Result<Value, String> {
+    let _slot = probe_slots().acquire().await.map_err(|e| e.to_string())?;
     let (host, port) = parse_host_port(&host, port.unwrap_or(443))?;
     tokio::task::spawn_blocking(move || tls_fetch_sync(host, port))
         .await
@@ -1203,6 +1267,43 @@ A=2606:2800:220::1
             // И тело собрано без служебных чисел.
             assert_eq!(steps[1]["bodyPreview"], "Hello");
             assert_eq!(steps[1]["bodyBytes"], 5);
+        });
+    }
+
+    #[test]
+    fn бесконечное_тело_не_читается_до_конца() {
+        // Служба, которая отдаёт тело без конца (поток событий, большой файл), раньше
+        // читалась до конца - то есть до конца памяти приложения.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = l.local_addr().unwrap().port();
+            tokio::spawn(async move {
+                while let Ok((mut sock, _)) = l.accept().await {
+                    tokio::spawn(async move {
+                        let mut buf = [0u8; 1024];
+                        let _ = sock.read(&mut buf).await;
+                        let _ = sock
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n")
+                            .await;
+                        // Льём, пока принимают: так ведёт себя поток событий.
+                        let кусок = vec![b'x'; 64 * 1024];
+                        while sock.write_all(&кусок).await.is_ok() {}
+                    });
+                }
+            });
+
+            let v = super::http_probe(format!("http://127.0.0.1:{port}/"), None, Some(1))
+                .await
+                .expect("запрос");
+            let шаг = &v["steps"][0];
+            let прочитано = шаг["bodyBytes"].as_u64().expect("байты тела");
+            assert!(
+                прочитано <= super::MAX_BODY_READ as u64,
+                "прочитали больше предела: {прочитано}"
+            );
+            assert_eq!(шаг["truncated"], true, "обрезку надо показать");
         });
     }
 
