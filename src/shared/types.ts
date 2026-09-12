@@ -522,6 +522,14 @@ export interface AppSettings {
   restoreTabsOnStart?: boolean
   /** Shell для локального терминала (Windows): 'auto' | 'pwsh' | 'powershell' | 'cmd' | 'wsl' | свой путь. */
   localShell?: string
+  /**
+   * Чем открывать удалённый файл по кнопке «Открыть в редакторе».
+   *
+   * Путь к программе. Пусто - Блокнот на Windows, первый найденный редактор на Linux.
+   * Файл отдаётся этой программе отдельным доводом: ассоциацией ОС мы его не открываем,
+   * иначе скачанный `.exe` или `.bat` запускался бы вместо правки.
+   */
+  externalEditor?: string
   /** Плотность интерфейса: 'comfortable' (по умолчанию) | 'compact'. */
   density?: 'comfortable' | 'compact'
   /** Отдельные кнопки на панели задач для откреплённых окон. По умолчанию одно приложение. */
@@ -657,6 +665,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   keybindings: {},
   restoreTabsOnStart: false,
   localShell: 'auto',
+  externalEditor: '',
   density: 'comfortable',
   auxInTaskbar: false,
   offline: false,

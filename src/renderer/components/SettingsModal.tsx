@@ -375,6 +375,21 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           </select>
         </label>
 
+        <label>
+          Внешний редактор
+          <input
+            type="text"
+            value={settings.externalEditor ?? ''}
+            placeholder={platform === 'linux' ? 'например /usr/bin/gedit' : 'например C:\Program Files\Notepad++\notepad++.exe'}
+            onChange={(e) => update({ externalEditor: e.target.value })}
+          />
+        </label>
+        <p className="hint">
+          Чем открывать файл по кнопке «Открыть в редакторе». Путь отдаётся программе
+          отдельным доводом, поэтому скачанный файл не запускается сам. Пусто -{' '}
+          {platform === 'linux' ? 'первый найденный редактор системы' : 'Блокнот'}.
+        </p>
+
         {/* ---- Горячие клавиши ---- */}
         <div className="settings-section">
           <div className="settings-section-title">Горячие клавиши</div>

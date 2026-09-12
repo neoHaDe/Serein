@@ -16,6 +16,7 @@ mod keygen;
 mod knownhosts;
 pub mod ldap;
 mod localfs;
+pub mod localname;
 pub mod monitor;
 mod multihost;
 pub mod mysql;
@@ -1859,6 +1860,10 @@ async fn sftp_drag_out(
             else {
                 continue;
             };
+            // Имя пришло с сервера: в `join` оно не должно уметь увести за каталог.
+            if localname::safe_component(&name).is_err() {
+                continue;
+            }
             let dest = dest_dir.join(&name);
             if !dest.exists() {
                 let _ = std::fs::create_dir_all(&dest);

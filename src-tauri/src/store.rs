@@ -145,7 +145,8 @@ fn default_settings() -> Value {
         "sftpColOn": { "name": true, "ext": true, "mode": true, "size": true, "mtime": true },
         "sftpColWidths": { "name": 200, "ext": 64, "mode": 52, "size": 84, "mtime": 136 },
         "sftpSortCol": "name",
-        "sftpSortDir": "asc"
+        "sftpSortDir": "asc",
+        "externalEditor": ""
     })
 }
 

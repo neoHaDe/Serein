@@ -241,3 +241,107 @@ fn large_file_survives_upload_and_download() {
         sftp::remove(&h, &dir, true).await.expect("уборка");
     });
 }
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn имена_с_сервера_не_выводят_запись_за_папку_скачивания() {
+    // На Linux `..\..\снаружи.txt` - законное имя файла: обратная косая там обычный
+    // символ. Windows читает её как разделитель каталогов, и такое имя, склеенное с папкой
+    // скачивания, указывает уже за её пределы. Проверяем на настоящем сервере: имя
+    // создаётся, попадает в листинг, но в задания на скачивание не проходит.
+    let s = Stand::from_env();
+    let dir = scratch("ловушка имён");
+    rt().block_on(async {
+        let h = connect(&s).await;
+        let _ = sftp::remove(&h, &dir, true).await;
+        sftp::mkdir(&h, &dir).await.expect("каталог");
+
+        let trap = format!("{dir}/..\\..\\снаружи.txt");
+        sftp::write_file(&h, &trap, "не должно попасть наружу", 0o644, 0, "lf")
+            .await
+            .expect("сервер обязан позволить такое имя - в этом и дело");
+        let ok = format!("{dir}/отчёт.txt");
+        sftp::write_file(&h, &ok, "обычный файл", 0o644, 0, "lf")
+            .await
+            .expect("обычный файл");
+
+        let local_dir = std::env::temp_dir().join("serein-имена-стенд");
+        let plan = sftp::plan_download(&h, &dir, &local_dir.to_string_lossy())
+            .await
+            .expect("план скачивания");
+
+        let names: Vec<&str> = plan.jobs.iter().map(|(lp, ..)| lp.as_str()).collect();
+        assert!(
+            names.iter().any(|lp| lp.ends_with("отчёт.txt")),
+            "безопасные имена должны скачиваться: {names:?}"
+        );
+        // Отклонять это имя обязана сборка для Windows: там оно и есть путь. На юниксах
+        // оно законно, и файл скачивается как есть - с обратными косыми внутри имени.
+        // Проверка ниже важна для обеих систем: наружу не выходит ни одно задание.
+        if cfg!(windows) {
+            assert!(
+                !plan.refused.is_empty(),
+                "имя-ловушка обязано быть отклонено, а не скачано молча"
+            );
+        }
+        for (lp, ..) in &plan.jobs {
+            assert!(
+                serein_lib::localname::under_root(
+                    std::path::Path::new(&local_dir),
+                    std::path::Path::new(lp)
+                ),
+                "задание «{lp}» выходит за папку скачивания"
+            );
+        }
+
+        sftp::remove(&h, &dir, true).await.expect("уборка");
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn сохранение_сохраняет_права_и_не_теряет_оригинал() {
+    // Раньше сохранение писало во временный файл с постоянным именем, при любой неудаче
+    // переименования удаляло оригинал и пробовало снова - а права терялись всегда:
+    // на месте закрытого файла оказывался новый с обычными правами.
+    let s = Stand::from_env();
+    let dir = scratch("права сохранения");
+    rt().block_on(async {
+        let h = connect(&s).await;
+        let _ = sftp::remove(&h, &dir, true).await;
+        sftp::mkdir(&h, &dir).await.expect("каталог");
+
+        let file = format!("{dir}/секрет.conf");
+        sftp::write_file(&h, &file, "было", 0o600, 0, "lf").await.expect("первая запись");
+        let before = sftp::list(&h, &dir).await.expect("листинг");
+        assert!(
+            format!("{before:?}").contains("секрет.conf"),
+            "файл должен появиться: {before:?}"
+        );
+
+        // Второй раз - как это делает панель после правки: права не передаются, их
+        // полагается сохранить от прежнего файла.
+        let saved = sftp::write_file(&h, &file, "стало", 0, 0, "lf").await.expect("вторая запись");
+        assert_eq!(saved.get("ok").and_then(|v| v.as_bool()), Some(true));
+
+        let read = sftp::read_file(&h, &file).await.expect("чтение");
+        assert_eq!(read.get("content").and_then(|v| v.as_str()), Some("стало"));
+        assert_eq!(
+            read.get("mode").and_then(|v| v.as_u64()).map(|m| m & 0o777),
+            Some(0o600),
+            "права обязаны остаться прежними"
+        );
+
+        // Ни одного временного или отложенного файла после успешного сохранения.
+        let listed = sftp::list(&h, &dir).await.expect("листинг");
+        let names: Vec<String> = listed["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .filter_map(|e| e["name"].as_str().map(str::to_string))
+            .collect();
+        assert_eq!(names.len(), 1, "после сохранения остаётся один файл: {names:?}");
+
+        sftp::remove(&h, &dir, true).await.expect("уборка");
+    });
+}

@@ -303,7 +303,14 @@ pub async fn download_file(
     if let Some(parent) = Path::new(local).parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
     }
-    tokio::fs::write(local, &data).await.map_err(|e| e.to_string())
+    // Готовое имя появляется одним переименованием: оборванная запись не должна оставить
+    // обрубок под именем целого файла.
+    let part = format!("{local}.part");
+    tokio::fs::write(&part, &data).await.map_err(|e| e.to_string())?;
+    tokio::fs::rename(&part, local).await.map_err(|e| {
+        let _ = std::fs::remove_file(&part);
+        e.to_string()
+    })
 }
 
 async fn send_file_bytes(io: &mut ScpIo, name: &str, data: &[u8], mode: u32) -> Result<(), String> {
@@ -580,6 +587,10 @@ async fn collect_remote_list(
     let abs = listed["path"].as_str().unwrap_or(remote);
     for entry in listed["entries"].as_array().unwrap_or(&vec![]).clone() {
         let name = entry["name"].as_str().unwrap_or("").to_string();
+        // Имя с сервера - не путь. Что бывает иначе, объяснено в `localname`.
+        if crate::localname::safe_component(&name).is_err() {
+            continue;
+        }
         let rp = join_remote(abs, &name);
         let lp = format!("{local}/{name}");
         let r = format!("{rel}/{name}");
@@ -630,6 +641,7 @@ pub async fn download_path(
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "download".into());
+        crate::localname::safe_component(&base).map_err(|why| format!("не могу сохранить: {why}"))?;
         let local_root = format!("{local_dir}/{base}");
         collect_remote_list(handle.as_ref(), remote, &local_root, &base, &mut jobs).await?;
     } else {
@@ -637,7 +649,17 @@ pub async fn download_path(
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "file".into());
+        crate::localname::safe_component(&name).map_err(|why| format!("не могу сохранить: {why}"))?;
         jobs.push((format!("{local_dir}/{name}"), remote.to_string(), name, 0));
+    }
+    // Вторая сеть на случай ошибки в сборке пути: за пределы выбранной папки не пишем.
+    if let Some((lp, ..)) = jobs
+        .iter()
+        .find(|(lp, ..)| !crate::localname::under_root(Path::new(&local_dir), Path::new(lp)))
+    {
+        return Err(format!(
+            "путь «{lp}» выходит за пределы папки скачивания - ничего не сохранено"
+        ));
     }
     for (lp, rp, rel, size) in jobs {
         if !alive.load(Ordering::Relaxed) {

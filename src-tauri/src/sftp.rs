@@ -605,6 +605,48 @@ pub async fn read_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>
     Ok(json!({ "content": content, "eol": eol, "mode": mode, "mtime": mtime }))
 }
 
+/// Ставит записанный файл на место прежнего.
+///
+/// Прежний файл не удаляем «на всякий случай»: именно так и терялись данные. Раньше при
+/// любой неудаче переименования оригинал удалялся и попытка повторялась - а если причина
+/// была в обрыве связи, полном диске или правах, вторая попытка падала тоже, и от файла
+/// не оставалось ничего.
+///
+/// Поэтому порядок такой: прежний файл отходит в сторону под своим именем, на его место
+/// встаёт новый, и только после этого отложенный удаляется. Если что-то сорвётся в
+/// середине, отложенный возвращается назад.
+async fn replace_file(
+    sftp: &SftpSession,
+    tmp: &str,
+    remote: &str,
+    dir: &str,
+    base: &str,
+    stamp: &str,
+) -> Result<(), String> {
+    // Прямое переименование проходит, когда файла ещё нет. Серверы SFTP версии 3 (а это
+    // весь OpenSSH) заменять существующий файл переименованием отказываются.
+    if sftp.rename(tmp, remote).await.is_ok() {
+        return Ok(());
+    }
+    let aside = format!("{dir}/.{base}.serein-{stamp}.bak");
+    if let Err(e) = sftp.rename(remote, &aside).await {
+        let _ = sftp.remove_file(tmp).await;
+        return Err(format!("не удалось освободить место для нового файла: {e}"));
+    }
+    if let Err(e) = sftp.rename(tmp, remote).await {
+        // Возвращаем прежний файл на место: пусть правка потеряна, но файл на сервере есть.
+        if sftp.rename(&aside, remote).await.is_err() {
+            return Err(format!(
+                "новый файл не встал на место ({e}), а прежний остался под именем {aside} - перенесите его вручную"
+            ));
+        }
+        let _ = sftp.remove_file(tmp).await;
+        return Err(format!("не удалось сохранить файл: {e}"));
+    }
+    let _ = sftp.remove_file(&aside).await;
+    Ok(())
+}
+
 pub async fn write_file(
     handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
     remote: &str,
@@ -625,7 +667,22 @@ pub async fn write_file(
     let data = if eol == "crlf" { content.replace('\n', "\r\n") } else { content.to_string() };
     let dir = Path::new(remote).parent().map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
     let base = Path::new(remote).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-    let tmp = format!("{dir}/.{base}.terminal-tmp");
+    // Имя временного файла своё на каждое сохранение. Постоянное имя два открытых
+    // редактора делили между собой, и кто сохранял вторым - затирал первого.
+    let stamp = uuid::Uuid::new_v4().simple().to_string();
+    let tmp = format!("{dir}/.{base}.serein-{}.tmp", &stamp[..8]);
+
+    // Права запоминаем до записи: после замены файл будет новым, и без этого шага
+    // `0600` превращался в обычные права только что созданного файла.
+    let keep_mode = if mode & 0o777 != 0 {
+        Some(mode & 0o777)
+    } else {
+        sftp.symlink_metadata(remote)
+            .await
+            .ok()
+            .and_then(|m| m.permissions)
+            .map(|p| p & 0o777)
+    };
 
     {
         let mut f = sftp.create(&tmp).await.map_err(|e| e.to_string())?;
@@ -633,15 +690,24 @@ pub async fn write_file(
         f.flush().await.map_err(|e| e.to_string())?;
         f.shutdown().await.ok();
     }
-    let _ = mode; // права: russh-sftp выставит дефолтные; точную установку добавим позже
-    // rename поверх (с фолбэком через unlink).
-    if sftp.rename(&tmp, remote).await.is_err() {
-        let _ = sftp.remove_file(remote).await;
-        sftp.rename(&tmp, remote).await.map_err(|e| {
-            let _ = tmp;
-            e.to_string()
-        })?;
+    if let Some(want) = keep_mode {
+        let high = sftp
+            .symlink_metadata(&tmp)
+            .await
+            .ok()
+            .and_then(|m| m.permissions)
+            .unwrap_or(0)
+            & !0o777;
+        let mut attrs = FileAttributes::empty();
+        attrs.permissions = Some(high | want);
+        if let Err(e) = sftp.set_metadata(&tmp, attrs).await {
+            // Права не выставились - файл не сохраняем: иначе закрытый файл станет
+            // открытым молча, и узнает об этом кто-нибудь другой.
+            let _ = sftp.remove_file(&tmp).await;
+            return Err(format!("не удалось сохранить права файла: {e}"));
+        }
     }
+    replace_file(&sftp, &tmp, remote, &dir, &base, &stamp[..8]).await?;
     let new_mtime = sftp
         .metadata(remote)
         .await
@@ -686,13 +752,33 @@ async fn copy_remote_to_local_inner(
     if size == 0 {
         size = sftp.metadata(remote).await.ok().and_then(|m| m.size).unwrap_or(0);
     }
-    if size >= PIPELINE_AFTER {
-        pipelined_download(ssh, app, item_id, session_id, remote, local, rel, size, alive, xfer).await
+    // Пишем в недокачанный файл, а готовое имя даём одним переименованием в самом конце.
+    // Иначе оборванная передача оставляет на месте готового файла обрубок, и отличить его
+    // от целого нельзя ничем: размер совпадёт, как только дойдёт последний байт.
+    let part = format!("{local}.part");
+    let result = if size >= PIPELINE_AFTER {
+        pipelined_download(ssh, app, item_id, session_id, remote, local, &part, rel, size, alive, xfer).await
     } else {
-        sequential_download(sftp, app, item_id, session_id, remote, local, rel, size, alive, xfer).await
+        sequential_download(sftp, app, item_id, session_id, remote, local, &part, rel, size, alive, xfer).await
+    };
+    match result {
+        Ok(n) => {
+            // Переименование заменяет прежний файл целиком - и на Windows тоже.
+            tokio::fs::rename(&part, local)
+                .await
+                .map_err(|e| format!("не удалось переименовать {part}: {e}"))?;
+            Ok(n)
+        }
+        Err(e) => {
+            // Обрывок не оставляем: докачивать его мы не умеем, а перепутать с готовым
+            // файлом он может легко.
+            let _ = tokio::fs::remove_file(&part).await;
+            Err(e)
+        }
     }
 }
 
+/// `local` - будущее имя файла: оно идёт в отчёты о ходе передачи. `part` - куда пишем.
 async fn sequential_download(
     sftp: &SftpSession,
     app: Option<&AppHandle>,
@@ -700,6 +786,7 @@ async fn sequential_download(
     session_id: &str,
     remote: &str,
     local: &str,
+    part: &str,
     rel: &str,
     size: u64,
     alive: Option<&AtomicBool>,
@@ -710,7 +797,7 @@ async fn sequential_download(
         let _ = tokio::fs::create_dir_all(parent).await;
     }
     let mut rf = sftp.open(remote).await.map_err(|e| e.to_string())?;
-    let mut lf = tokio::fs::File::create(local).await.map_err(|e| e.to_string())?;
+    let mut lf = tokio::fs::File::create(part).await.map_err(|e| e.to_string())?;
     let mut buf = vec![0u8; SFTP_CHUNK as usize];
     let mut transferred: u64 = 0;
     let mut last_emit: u64 = 0;
@@ -746,6 +833,7 @@ async fn pipelined_download(
     session_id: &str,
     remote: &str,
     local: &str,
+    part: &str,
     rel: &str,
     size: u64,
     alive: Option<&AtomicBool>,
@@ -770,7 +858,7 @@ async fn pipelined_download(
     let fh = opened.handle;
     let mut lf = BufWriter::with_capacity(
         1024 * 1024,
-        tokio::fs::File::create(local).await.map_err(|e| e.to_string())?,
+        tokio::fs::File::create(part).await.map_err(|e| e.to_string())?,
     );
     let mut next_send = 0u64;
     let mut next_write = 0u64;
@@ -1058,6 +1146,57 @@ pub async fn upload_path(
 }
 
 /// Рекурсивно скачивает удалённый путь (файл/папка) в localDir, эмитя события.
+/// Что предстоит скачать и что скачано не будет.
+pub struct DownloadPlan {
+    /// Задания: локальный путь, удалённый путь, имя для отчётов, размер.
+    pub jobs: Vec<(String, String, String, u64)>,
+    /// Имена, которые нельзя превратить в имя файла на этой машине, и причина отказа.
+    pub refused: Vec<(String, String)>,
+}
+
+/// Составляет список файлов к скачиванию, отсекая небезопасные имена.
+///
+/// Отдельно от самого скачивания, потому что именно здесь принимаются все решения о
+/// путях на своей машине - а проверять их надо без сети, файлов и окна приложения.
+pub async fn plan_download(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    remote: &str,
+    local_dir: &str,
+) -> Result<DownloadPlan, String> {
+    check_remote_path(remote)?;
+    let sftp = open(handle).await?;
+    let root_name = Path::new(remote)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download".into());
+    crate::localname::safe_component(&root_name).map_err(|why| format!("не могу сохранить: {why}"))?;
+    let local_dir = local_dir.replace('\\', "/");
+    let mut jobs: Vec<(String, String, String, u64)> = Vec::new();
+    let mut refused: Vec<(String, String)> = Vec::new();
+    collect_remote(
+        &sftp,
+        remote,
+        &format!("{local_dir}/{root_name}"),
+        &root_name,
+        &mut jobs,
+        &mut refused,
+    )
+    .await?;
+    drop(sftp);
+
+    // Вторая сеть: имена уже проверены по одному, но путь собирается в нескольких местах.
+    // Выход за пределы папки скачивания здесь означал бы нашу ошибку, и продолжать нельзя.
+    if let Some((lp, ..)) = jobs
+        .iter()
+        .find(|(lp, ..)| !crate::localname::under_root(Path::new(&local_dir), Path::new(lp)))
+    {
+        return Err(format!(
+            "путь «{lp}» выходит за пределы папки скачивания - ничего не сохранено"
+        ));
+    }
+    Ok(DownloadPlan { jobs, refused })
+}
+
 pub async fn download_path(
     app: AppHandle,
     handle: SharedHandle,
@@ -1068,16 +1207,18 @@ pub async fn download_path(
     hub: TransferHub,
 ) -> Result<(), String> {
     gone(Some(&alive), None)?;
-    check_remote_path(remote)?;
-    let sftp = open(handle.as_ref()).await?;
-    let root_name = Path::new(remote)
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "download".into());
-    let local_dir = local_dir.replace('\\', "/");
-    let mut files: Vec<(String, String, String, u64)> = Vec::new();
-    collect_remote(&sftp, remote, &format!("{local_dir}/{root_name}"), &root_name, &mut files).await?;
-    drop(sftp);
+    let plan = plan_download(handle.as_ref(), remote, local_dir).await?;
+    let files = plan.jobs;
+
+    // Отказ виден в списке передач, а не только в журнале: молча недокачанная папка
+    // выглядит как успешно скачанная.
+    for (rel, why) in plan.refused {
+        let id = uuid::Uuid::new_v4().to_string();
+        emit_transfer(
+            &app, &id, session_id, "download", "", remote, &rel, 0, 0, "error",
+            Some(&format!("не сохранено: {why}")),
+        );
+    }
 
     for (lp, _, _, _) in &files {
         if let Some(parent) = Path::new(lp).parent() {
@@ -1086,16 +1227,10 @@ pub async fn download_path(
     }
 
     let mut jobs = Vec::new();
+    // Раньше файл с таким же размером считался уже скачанным и пропускался. Размер - не
+    // содержимое: так пропускались и другие файлы того же размера, и свои же обрубки
+    // прошлой оборванной передачи, причём с отметкой «готово».
     for (lp, rp, rel, size) in files {
-        if size > 0 {
-            if let Ok(meta) = tokio::fs::metadata(&lp).await {
-                if meta.is_file() && meta.len() == size {
-                    let id = uuid::Uuid::new_v4().to_string();
-                    emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, size, "done", None);
-                    continue;
-                }
-            }
-        }
         let key = dup_key(session_id, "download", &lp, &rp);
         let id = uuid::Uuid::new_v4().to_string();
         let Some(ctrl) = hub.start(&id, session_id, key) else {
@@ -1204,12 +1339,17 @@ fn collect_local<'a>(
     })
 }
 
+/// Обходит удалённое дерево, складывая задания на скачивание.
+///
+/// `refused` - имена, которые нельзя превратить в имя файла на этой машине. Их не
+/// скачиваем, но и не замалчиваем: каждое попадёт в список передач отдельной ошибкой.
 fn collect_remote<'a>(
     sftp: &'a SftpSession,
     remote: &'a str,
     local: &'a str,
     rel: &'a str,
     out: &'a mut Vec<(String, String, String, u64)>,
+    refused: &'a mut Vec<(String, String)>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
     Box::pin(async move {
         let meta = sftp.metadata(remote).await.map_err(|e| e.to_string())?;
@@ -1220,10 +1360,14 @@ fn collect_remote<'a>(
                 if name == "." || name == ".." {
                     continue;
                 }
+                if let Err(why) = crate::localname::safe_component(&name) {
+                    refused.push((format!("{rel}/{name}"), why));
+                    continue;
+                }
                 let rp = format!("{remote}/{name}");
                 let lp = format!("{local}/{name}");
                 let r = format!("{rel}/{name}");
-                collect_remote(sftp, &rp, &lp, &r, out).await?;
+                collect_remote(sftp, &rp, &lp, &r, out, refused).await?;
             }
         } else {
             out.push((local.to_string(), remote.to_string(), rel.to_string(), meta.size.unwrap_or(0)));
