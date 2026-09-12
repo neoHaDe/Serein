@@ -41,7 +41,7 @@ use crate::ssh::SharedHandle;
 ///
 /// Отказ записи глушится осознанно: журнал - подспорье, и ронять из-за него рабочий
 /// стол было бы хуже самой неполадки.
-fn log(line: &str) {
+pub(crate) fn log(line: &str) {
     use std::io::Write as _;
     let dir = crate::store::config_dir().join("logs");
     if std::fs::create_dir_all(&dir).is_err() {
@@ -130,6 +130,9 @@ pub enum Target {
         handle: SharedHandle,
         host: String,
         port: u16,
+        /// Своё соединение рабочего стола, если его удалось поднять. Закрывается вместе
+        /// с сеансом: переживать его ему незачем.
+        link: Option<crate::ssh::DesktopLink>,
     },
 }
 
@@ -230,7 +233,12 @@ pub async fn open(
                     pump(sock, up, bridge_alive).await;
                 }
             }
-            Target::Ssh { handle, host, port } => {
+            Target::Ssh {
+                handle,
+                host,
+                port,
+                link,
+            } => {
                 // Порт открывается со стороны сервера, поэтому «127.0.0.1» здесь - его
                 // собственная петля, а не наша. Ради этого всё и затевалось.
                 let ch = {
@@ -238,8 +246,12 @@ pub async fn open(
                     g.channel_open_direct_tcpip(host.as_str(), port as u32, "127.0.0.1", 0)
                         .await
                 };
-                if let Ok(ch) = ch {
-                    pump(sock, ch.into_stream(), bridge_alive).await;
+                match ch {
+                    Ok(ch) => pump(sock, ch.into_stream(), bridge_alive).await,
+                    Err(e) => log(&format!("канал до {host}:{port} не открылся: {e}")),
+                }
+                if let Some(link) = link {
+                    link.close().await;
                 }
             }
         }
@@ -460,6 +472,12 @@ fn spawn_pipes(
                 let w = u16::from_be_bytes([body[5], body[6]]);
                 let h = u16::from_be_bytes([body[7], body[8]]);
                 crate::deskout::note_size(&id, w, h);
+            }
+            // Причину закрытия помощник сообщает пакетом, а не в поток ошибок: её видит
+            // интерфейс. В журнал её надо положить отдельно - иначе там остаётся только
+            // «помощник больше не отвечает», а что именно сломалось, знает один экран.
+            if body.first() == Some(&9) && body.len() > 9 {
+                log(&format!("помощник закрыл сеанс: {}", String::from_utf8_lossy(&body[9..])));
             }
             if out.send(InvokeResponseBody::Raw(body)).is_err() {
                 break "интерфейс больше не слушает".to_owned();

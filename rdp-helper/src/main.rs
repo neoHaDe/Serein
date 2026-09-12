@@ -21,7 +21,7 @@
 
 mod proto;
 
-use std::io::{BufRead, Write};
+use std::io::BufRead;
 
 use ironrdp_async::FramedWrite;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -188,7 +188,10 @@ fn config(a: &Args, password: String) -> connector::Config {
         // Правильно и медленнее лучше, чем быстро и криво.
         bitmap: Some(connector::BitmapConfig {
             color_depth: a.color_depth,
-            lossy_compression: false,
+            // В VPN-профиле разрешаем серверу пропускать альфу, снижать точность цвета
+            // и применять subsampling. Для текста это почти незаметно, зато полоса при
+            // прокрутке и перетаскивании окон падает существенно.
+            lossy_compression: matches!(a.network_profile, NetworkProfile::Vpn),
             codecs: ironrdp::pdu::rdp::capability_sets::client_codecs_capabilities(&[
                 "remotefx:off",
             ])
@@ -213,6 +216,14 @@ fn config(a: &Args, password: String) -> connector::Config {
         performance_flags,
         license_cache: None,
         timezone_info: Default::default(),
+        // Сжатие внутри RDP (MPPC) выключено, и это не экономия на мелочах. Включённое, оно
+        // ломает смену размера: после неё сервер присылает пакеты пересогласования уже
+        // сжатыми, а разбор пересогласования в IronRDP сжатых пакетов не понимает и рвёт
+        // сеанс с «unexpected server message». Пропускать их тоже нельзя - история
+        // разжимателя общая на весь сеанс, и следующий кадр развалился бы.
+        //
+        // Сжатие при этом есть, только уровнем ниже: в профиле VPN соединение рабочего
+        // стола идёт своим SSH с zlib, и оно сжимает весь поток целиком.
         compression_type: None,
         enable_server_pointer: true,
         pointer_software_rendering: false,
@@ -260,13 +271,24 @@ async fn main() {
     }
     let password = password.trim_end_matches(['\r', '\n']).to_owned();
 
-    if let Err(e) = run(args, password, &mut out).await {
-        proto::send_closed(&mut out, &e);
+    // Дальше в вывод пишет только поток выдачи: два писателя в одну трубу перемешали бы
+    // байты кадров, и приложение потеряло бы границы пакетов.
+    drop(out);
+    let out = Presenter::spawn(match args.network_profile {
+        NetworkProfile::Vpn => Some(72),
+        NetworkProfile::Lan => None,
+    });
+    let result = run(args, password, &out).await;
+    if let Err(e) = &result {
+        out.packet(proto::packet(proto::KIND_CLOSED, 0, 0, 0, 0, e.as_bytes()));
+    }
+    out.finish();
+    if result.is_err() {
         std::process::exit(1);
     }
 }
 
-async fn run(a: Args, password: String, out: &mut impl Write) -> Result<(), String> {
+async fn run(a: Args, password: String, out: &Presenter) -> Result<(), String> {
     // Приложение уже держит этот сокет: за ним канал внутри SSH-сессии.
     let sock = tokio::net::TcpStream::connect(("127.0.0.1", a.port))
         .await
@@ -329,7 +351,7 @@ async fn run(a: Args, password: String, out: &mut impl Write) -> Result<(), Stri
 async fn session(
     connection: ConnectionResult,
     framed: ironrdp_tokio::TokioFramed<Box<dyn AsyncReadWrite + Unpin + Send + Sync>>,
-    out: &mut impl Write,
+    out: &Presenter,
     frame_period: std::time::Duration,
 ) -> Result<(), String> {
     // Делим поток надвое: чтение держит свою половину всё время ожидания кадра, и
@@ -340,8 +362,7 @@ async fn session(
     let activation_factory = connection.activation_factory;
     let w = connection.desktop_size.width;
     let h = connection.desktop_size.height;
-    proto::send(out, &proto::packet(proto::KIND_RESIZE, 0, 0, w, h, &[]))
-        .map_err(|e| format!("приложение не читает вывод: {e}"))?;
+    out.packet(proto::packet(proto::KIND_RESIZE, 0, 0, w, h, &[]));
 
     let mut image = ironrdp::session::image::DecodedImage::new(
         ironrdp::graphics::image_processing::PixelFormat::RgbA32,
@@ -396,21 +417,17 @@ async fn session(
 
     loop {
         let payload = tokio::select! {
+            // Поток выдачи ещё занят прошлой пачкой - области копятся дальше и уйдут
+            // следующим тиком одной пачкой. Кадров в секунду становится меньше, но
+            // показывается всегда самое свежее, а сеть читается без остановки.
             _ = frame_tick.tick(), if !dirty.is_empty() => {
-                for rect in dirty.take() {
-                    let px = crop(&image, rect.left, rect.top, rect.width(), rect.height());
-                    proto::send(
-                        out,
-                        &proto::packet(
-                            proto::KIND_RAW,
-                            rect.left,
-                            rect.top,
-                            rect.width(),
-                            rect.height(),
-                            &px,
-                        ),
-                    )
-                    .map_err(|e| format!("приложение не читает вывод: {e}"))?;
+                if !out.is_busy() {
+                    let regions = dirty
+                        .take()
+                        .into_iter()
+                        .map(|r| (r, crop(&image, r.left, r.top, r.width(), r.height())))
+                        .collect();
+                    out.regions(regions);
                 }
                 None
             }
@@ -434,6 +451,12 @@ async fn session(
                                 u32::from(w),
                                 u32::from(h),
                             );
+                        // Тот же размер после подгонки - просить не о чем. Каждая просьба
+                        // стоит серверу полной пересборки сеанса, а картинка на это время
+                        // замирает.
+                        if (rw, rh) == (u32::from(image.width()), u32::from(image.height())) {
+                            continue;
+                        }
                         // Состояние канала называем словами: молча пропущенная просьба
                         // о новом размере выглядит как «ничего не произошло», и отличить
                         // «сервер не умеет» от «мы не отправили» по ней невозможно.
@@ -463,11 +486,8 @@ async fn session(
                     proto::Cmd::Full => {
                         dirty.clear();
                         let (fw, fh) = (image.width(), image.height());
-                        proto::send(out, &proto::packet(proto::KIND_RESIZE, 0, 0, fw, fh, &[]))
-                            .map_err(|e| format!("приложение не читает вывод: {e}"))?;
-                        let px = crop(&image, 0, 0, fw, fh);
-                        proto::send(out, &proto::packet(proto::KIND_RAW, 0, 0, fw, fh, &px))
-                            .map_err(|e| format!("приложение не читает вывод: {e}"))?;
+                        out.packet(proto::packet(proto::KIND_RESIZE, 0, 0, fw, fh, &[]));
+                        dirty.add(Rect::from_xywh(0, 0, fw, fh));
                     }
                     other => {
                         let events = input_db.apply(to_operations(other));
@@ -504,16 +524,20 @@ async fn session(
                 // последовательность не пройдена, обычных кадров не будет вовсе.
                 ActiveStageOutput::DeactivateAll => {
                     dirty.clear();
-                    let (nw, nh) =
-                        reactivate(&activation_factory, &mut framed, &mut writer, &mut stage)
-                            .await?;
+                    let (nw, nh) = reactivate(
+                        &activation_factory,
+                        &mut framed,
+                        &mut writer,
+                        &mut stage,
+                        &mut image,
+                    )
+                    .await?;
                     image = ironrdp::session::image::DecodedImage::new(
                         ironrdp::graphics::image_processing::PixelFormat::RgbA32,
                         nw,
                         nh,
                     );
-                    proto::send(out, &proto::packet(proto::KIND_RESIZE, 0, 0, nw, nh, &[]))
-                        .map_err(|e| format!("приложение не читает вывод: {e}"))?;
+                    out.packet(proto::packet(proto::KIND_RESIZE, 0, 0, nw, nh, &[]));
                 }
                 ActiveStageOutput::ResponseFrame(f) => {
                     writer
@@ -633,15 +657,51 @@ async fn reactivate(
     framed: &mut ironrdp_tokio::TokioFramed<tokio::io::ReadHalf<Stream>>,
     writer: &mut ironrdp_tokio::TokioFramed<tokio::io::WriteHalf<Stream>>,
     stage: &mut ironrdp::session::ActiveStage,
+    image: &mut ironrdp::session::image::DecodedImage,
 ) -> Result<(u16, u16), String> {
+    use ironrdp::connector::Sequence as _;
     use ironrdp::connector::connection_activation::ConnectionActivationState;
 
+    let fail = |e: &dyn std::fmt::Display| format!("пересогласование после смены размера не прошло: {e}");
     let mut activation = factory.create();
+    let io_channel = activation.io_channel_id();
     let mut buf = ironrdp_core::WriteBuf::new();
     loop {
-        let written = ironrdp_async::single_sequence_step_read(framed, &mut activation, &mut buf)
-            .await
-            .map_err(|e| format!("пересогласование после смены размера не прошло: {e}"))?;
+        buf.clear();
+        // Шаг за шагом вручную, а не готовым `single_sequence_step_read`: тот отдаёт
+        // последовательности всё подряд, а она на любой пакет не из своего списка
+        // обрывает сеанс. Сервер же в это время живёт своей жизнью - xrdp, например,
+        // успевает прислать состояние клавиатуры или данные виртуальных каналов.
+        let written = match activation.next_pdu_hint() {
+            Some(hint) => {
+                let pdu = framed.read_by_hint(hint).await.map_err(|e| fail(&e))?;
+                match classify_during_activation(&pdu, io_channel) {
+                    Activation::Step => activation.step(&pdu, None, &mut buf).map_err(|e| fail(&e))?,
+                    // Данные виртуальных каналов - дело сеанса, а не пересогласования:
+                    // канал управления экраном, например, живёт через всю пересборку.
+                    Activation::Channel => {
+                        match stage.process(image, ironrdp::pdu::Action::X224, &pdu) {
+                            Ok(outs) => {
+                                for o in outs {
+                                    if let ActiveStageOutput::ResponseFrame(f) = o {
+                                        writer.write_all(&f).await.map_err(|e| fail(&e))?;
+                                    }
+                                }
+                            }
+                            Err(e) => eprintln!("пакет канала во время пересогласования не разобрался: {e}"),
+                        }
+                        continue;
+                    }
+                    // Служебное, что к пересогласованию не относится. После него сервер
+                    // всё равно перерисует экран целиком, так что терять здесь нечего.
+                    Activation::Skip(name) => {
+                        eprintln!("во время пересогласования пропущен пакет: {name}");
+                        continue;
+                    }
+                }
+            }
+            None => activation.step_no_input(&mut buf).map_err(|e| fail(&e))?,
+        };
         if written.size().is_some() {
             writer
                 .write_all(buf.filled())
@@ -669,6 +729,50 @@ async fn reactivate(
             }
             return Ok((desktop_size.width, desktop_size.height));
         }
+    }
+}
+
+/// Что делать с пакетом, пришедшим посреди пересогласования.
+#[derive(Debug, PartialEq)]
+enum Activation {
+    /// Отдать последовательности пересогласования.
+    Step,
+    /// Данные виртуального канала - обработать сеансом.
+    Channel,
+    /// Постороннее служебное сообщение - пропустить, назвав его в журнале.
+    Skip(String),
+}
+
+/// Разбирает пакет ровно настолько, чтобы понять, чей он.
+///
+/// Последовательности пересогласования отдаём всё, что она умеет разобрать, и всё, что
+/// не удалось опознать: пусть лучше она внятно откажет, чем мы молча проглотим важное.
+/// Пропускаем только то, что опознано и заведомо не её.
+fn classify_during_activation(pdu: &[u8], io_channel: u16) -> Activation {
+    use ironrdp::pdu::rdp::headers::{ShareControlPdu, ShareDataPdu};
+
+    let Ok(ctx) = ironrdp::pdu::mcs::decode_send_data_indication(pdu) else {
+        return Activation::Step;
+    };
+    if ctx.channel_id != io_channel {
+        return Activation::Channel;
+    }
+    let Ok(share) = ironrdp::pdu::rdp::headers::decode_share_control(ctx) else {
+        return Activation::Step;
+    };
+    match share.pdu {
+        ShareControlPdu::Data(header) => match header.share_data_pdu {
+            // Это пересогласование знает. Сжатое тоже отдаём ему: раз сжатие выключено,
+            // такой пакет - поломка, и о ней надо сказать, а не пропустить его.
+            ShareDataPdu::Synchronize(_)
+            | ShareDataPdu::Control(_)
+            | ShareDataPdu::FontMap(_)
+            | ShareDataPdu::MonitorLayout(_)
+            | ShareDataPdu::ServerSetErrorInfo(_)
+            | ShareDataPdu::Compressed { .. } => Activation::Step,
+            other => Activation::Skip(other.as_short_name().to_owned()),
+        },
+        _ => Activation::Step,
     }
 }
 
@@ -735,6 +839,168 @@ fn crop(image: &ironrdp::session::image::DecodedImage, x: u16, y: u16, w: u16, h
     out
 }
 
+/// Пакет для интерфейса из уже вырезанной области RGBA.
+///
+/// Мелкие области остаются RGBA: на них запуск JPEG дороже самих данных. Большие
+/// обновления VPN-профиля кодируются в JPEG, чтобы мегабайты пикселей не копировались
+/// несколько раз между помощником, Tauri IPC и WebView.
+fn region_packet(rect: Rect, rgba: &[u8], jpeg_quality: Option<u8>) -> Vec<u8> {
+    const JPEG_MIN_PIXELS: usize = 256 * 256;
+    let pixels = usize::from(rect.width()) * usize::from(rect.height());
+    if let Some(quality) = jpeg_quality.filter(|_| pixels >= JPEG_MIN_PIXELS) {
+        let rgb: Vec<u8> = rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+        let mut encoded = Vec::with_capacity(pixels);
+        let encoder = jpeg_encoder::Encoder::new(&mut encoded, quality);
+        if encoder
+            .encode(&rgb, rect.width(), rect.height(), jpeg_encoder::ColorType::Rgb)
+            .is_ok()
+        {
+            return proto::packet(
+                proto::KIND_JPEG,
+                rect.left,
+                rect.top,
+                rect.width(),
+                rect.height(),
+                &encoded,
+            );
+        }
+    }
+    proto::packet(proto::KIND_RAW, rect.left, rect.top, rect.width(), rect.height(), rgba)
+}
+
+/// Задание потоку выдачи.
+enum Job {
+    /// Готовый пакет: смена размера, закрытие.
+    Packet(Vec<u8>),
+    /// Пачка вырезанных областей - упаковать и отдать.
+    Regions(Vec<(Rect, Vec<u8>)>),
+}
+
+/// Выдача кадров приложению - своим потоком, а не в сетевом цикле.
+///
+/// Причина измерена, а не придумана. JPEG полного кадра 2370x1248 стоит около 30 мс, а
+/// бюджет кадра в профиле VPN - 33 мс. Пока сжатие шло в сетевом цикле, при перетаскивании
+/// окна помощник почти всё время жал картинку и почти не читал сокет: данные от сервера
+/// копились в локальных буферах, и экран отставал на секунды. На маленьком окне этого не
+/// видно - пикселей вчетверо меньше.
+///
+/// Теперь сетевой цикл только разбирает поток и помечает изменённые области, а здесь их
+/// упаковывают и пишут. Пока поток занят, новая пачка не отдаётся: области копятся в
+/// цикле и уйдут одной пачкой, когда он освободится. Отстать так нельзя - самый свежий
+/// кадр ждёт не дольше одной упаковки.
+struct Presenter {
+    tx: std::sync::mpsc::Sender<Job>,
+    busy: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+impl Presenter {
+    fn spawn(jpeg_quality: Option<u8>) -> Self {
+        use std::sync::atomic::Ordering;
+        let (tx, rx) = std::sync::mpsc::channel::<Job>();
+        let busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = busy.clone();
+        let thread = std::thread::spawn(move || {
+            let mut out = std::io::stdout();
+            for job in rx {
+                let written = match job {
+                    Job::Packet(p) => proto::send(&mut out, &p),
+                    Job::Regions(list) => {
+                        let r = list.into_iter().try_for_each(|(rect, rgba)| {
+                            proto::send(&mut out, &region_packet(rect, &rgba, jpeg_quality))
+                        });
+                        done.store(false, Ordering::Release);
+                        r
+                    }
+                };
+                // Труба закрыта - приложение ушло, и показывать картинку больше некому.
+                if written.is_err() {
+                    std::process::exit(1);
+                }
+            }
+        });
+        Self { tx, busy, thread }
+    }
+
+    fn packet(&self, p: Vec<u8>) {
+        let _ = self.tx.send(Job::Packet(p));
+    }
+
+    fn is_busy(&self) -> bool {
+        self.busy.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    fn regions(&self, list: Vec<(Rect, Vec<u8>)>) {
+        self.busy.store(true, std::sync::atomic::Ordering::Release);
+        let _ = self.tx.send(Job::Regions(list));
+    }
+
+    /// Дописывает всё отправленное и закрывает поток. Без этого пакет о закрытии мог бы
+    /// не успеть уйти до выхода процесса.
+    fn finish(self) {
+        drop(self.tx);
+        let _ = self.thread.join();
+    }
+}
+
+#[cfg(test)]
+mod activation_tests {
+    use super::*;
+    use ironrdp::pdu::rdp::headers::{
+        CompressionFlags, ShareControlHeader, ShareControlPdu, ShareDataHeader, ShareDataPdu,
+        StreamPriority,
+    };
+
+    const IO: u16 = 1003;
+
+    /// Пакет от сервера - в том виде, в каком он приходит по сети.
+    fn from_server(channel: u16, pdu: ShareDataPdu) -> Vec<u8> {
+        let share = ShareControlHeader {
+            share_id: 0x1_0000,
+            pdu_source: 1002,
+            share_control_pdu: ShareControlPdu::Data(ShareDataHeader {
+                share_data_pdu: pdu,
+                stream_priority: StreamPriority::Undefined,
+                compression_flags: CompressionFlags::empty(),
+                compression_type: ironrdp::pdu::rdp::client_info::CompressionType::K8,
+            }),
+        };
+        let user_data = ironrdp_core::encode_vec(&share).expect("заголовок собирается");
+        ironrdp_core::encode_vec(&ironrdp::pdu::x224::X224(ironrdp::pdu::mcs::SendDataIndication {
+            initiator_id: 1002,
+            channel_id: channel,
+            user_data: std::borrow::Cow::Owned(user_data),
+        }))
+        .expect("пакет собирается")
+    }
+
+    #[test]
+    fn постороннее_служебное_пропускается_а_не_рвёт_сеанс() {
+        // Такое сообщение пересогласование не знает и раньше обрывало на нём сеанс с
+        // «unexpected server message».
+        let pdu = from_server(IO, ShareDataPdu::ShutdownDenied);
+        assert!(matches!(classify_during_activation(&pdu, IO), Activation::Skip(_)));
+    }
+
+    #[test]
+    fn своё_пересогласование_получает_как_есть() {
+        let pdu = from_server(IO, ShareDataPdu::FontMap(Default::default()));
+        assert_eq!(classify_during_activation(&pdu, IO), Activation::Step);
+    }
+
+    #[test]
+    fn виртуальный_канал_уходит_сеансу() {
+        let pdu = from_server(IO + 1, ShareDataPdu::FontMap(Default::default()));
+        assert_eq!(classify_during_activation(&pdu, IO), Activation::Channel);
+    }
+
+    #[test]
+    fn неопознанное_не_глотается_молча() {
+        // Пусть лучше пересогласование внятно откажет, чем мы потеряем важный пакет.
+        assert_eq!(classify_during_activation(&[3, 0, 0, 4], IO), Activation::Step);
+    }
+}
+
 #[cfg(test)]
 mod frame_tests {
     use super::*;
@@ -762,4 +1028,22 @@ mod frame_tests {
         dirty.add(Rect::from_xywh(100, 100, 2, 2));
         assert_eq!(dirty.take().len(), 2);
     }
+
+    #[test]
+    fn vpn_кодирует_большой_кадр_а_маленький_оставляет_сырым() {
+        let image = ironrdp::session::image::DecodedImage::new(
+            ironrdp::graphics::image_processing::PixelFormat::RgbA32,
+            512,
+            512,
+        );
+        let big = Rect::from_xywh(0, 0, 512, 512);
+        let little = Rect::from_xywh(0, 0, 32, 32);
+        let large = region_packet(big, &crop(&image, 0, 0, 512, 512), Some(72));
+        let small = region_packet(little, &crop(&image, 0, 0, 32, 32), Some(72));
+        assert_eq!(large[0], proto::KIND_JPEG);
+        assert_eq!(small[0], proto::KIND_RAW);
+        assert!(large.len() < 512 * 512 * 4);
+    }
 }
+
+

@@ -43,6 +43,19 @@ fn flag(server: &Value, name: &str) -> bool {
     server.get(name).and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
+/// Порядок сжатия «сжимать, если сервер умеет».
+///
+/// В наборе по умолчанию `none` стоит первым, поэтому сжатие фактически не включается.
+/// Просьба сжимать = поставить zlib вперёд, оставив `none` запасным вариантом: сервер
+/// без zlib так и подключится без сжатия.
+pub fn compression_first() -> Cow<'static, [compression::Name]> {
+    Cow::Owned(vec![
+        compression::ZLIB,
+        compression::ZLIB_LEGACY,
+        compression::NONE,
+    ])
+}
+
 /// Собирает набор алгоритмов под конкретный сервер.
 pub fn preferred_for(server: &Value) -> Preferred {
     let base = Preferred::DEFAULT;
@@ -95,14 +108,8 @@ pub fn preferred_for(server: &Value) -> Preferred {
         base.mac.clone()
     };
 
-    // Сжатие: в наборе по умолчанию `none` стоит первым, поэтому фактически не включается.
-    // Просьба сжимать = поставить zlib вперёд, оставив `none` запасным вариантом.
     let compression = if flag(server, "sshCompression") {
-        Cow::Owned(vec![
-            compression::ZLIB,
-            compression::ZLIB_LEGACY,
-            compression::NONE,
-        ])
+        compression_first()
     } else {
         base.compression.clone()
     };

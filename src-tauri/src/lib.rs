@@ -100,6 +100,14 @@ impl AppState {
 
     /// Идемпотентно: туннели, edit-watchers, KI, russh disconnect. Можно звать с фронта и из shell-таска.
     pub(crate) fn teardown(&self, app: &AppHandle, id: &str, user: bool) {
+        // Рабочий стол ходит своим SSH-соединением и сам со смертью сессии не умрёт.
+        // Открыт он был из неё и по её учётке - без неё жить не должен.
+        if let Some(desk) = deskout::active(id) {
+            match desk.kind {
+                deskout::Kind::Rdp => rdp::close(&desk.id),
+                deskout::Kind::Vnc => vnc::close(&desk.id),
+            }
+        }
         self.tunnels.close_session(id, app);
         self.edit.stop_session(id);
         self.transfers.cancel_session(id);
@@ -878,6 +886,58 @@ async fn desktop_set_password(
     Ok(json!({ "ok": true }))
 }
 
+/// Окно SSH-соединения рабочего стола - сколько сервер держит в пути, не дожидаясь нас.
+///
+/// Ровно столько же и может встать в очередь перед узким местом сети, поэтому для VPN
+/// оно маленькое: 128 КиБ на канале в 10 Мбит/с - это не больше 0,1 с задержки сверху,
+/// а потолок скорости при задержке 50 мс - около 20 Мбит/с, картинке этого хватает.
+/// В локальной сети задержка ничтожна, и то же окно дало бы лишь потолок скорости.
+const DESKTOP_WINDOW_VPN: u32 = 128 * 1024;
+const DESKTOP_WINDOW_LAN: u32 = 1024 * 1024;
+/// VNC сам запрашивает каждый кадр и лишнего не шлёт - окно чуть свободнее.
+const DESKTOP_WINDOW_VNC: u32 = 256 * 1024;
+
+/// Своё SSH-соединение под рабочий стол, а если не вышло - общий канал сессии.
+///
+/// «Не вышло» - не ошибка: второй фактор при входе, пароль, который не сохранён, быстрое
+/// подключение без профиля. Рабочий стол тогда работает как раньше, общим каналом, а
+/// причина уходит в журнал: без неё вопрос «почему терминал тормозит, пока открыт
+/// рабочий стол» не разобрать.
+async fn desktop_link(server_id: &str, window: u32, compress: bool) -> Option<ssh::DesktopLink> {
+    if server_id.is_empty() {
+        rdp::log("рабочий стол идёт общим каналом сессии: у неё нет сохранённого профиля");
+        return None;
+    }
+    let chain = match resolve_chain(server_id) {
+        Ok(c) => c,
+        Err(e) => {
+            rdp::log(&format!("рабочий стол идёт общим каналом сессии: {e}"));
+            return None;
+        }
+    };
+    let attempt = ssh::connect_desktop(chain, window, compress);
+    match tokio::time::timeout(std::time::Duration::from_secs(10), attempt).await {
+        Ok(Ok(link)) => {
+            rdp::log(&format!(
+                "рабочий стол: своё SSH-соединение, окно {} КиБ{}",
+                window / 1024,
+                if compress { ", сжатие zlib" } else { "" }
+            ));
+            Some(link)
+        }
+        Ok(Err(e)) => {
+            rdp::log(&format!(
+                "рабочий стол идёт общим каналом сессии: своё соединение не поднялось: {e}"
+            ));
+            None
+        }
+        Err(_) => {
+            rdp::log("рабочий стол идёт общим каналом сессии: своё соединение не поднялось за 10 с");
+            None
+        }
+    }
+}
+
 /// Открывает рабочий стол VNC поверх уже подключённой SSH-сессии.
 ///
 /// Через сессию, а не напрямую, потому что VNC на сервере почти всегда слушает `127.0.0.1`
@@ -896,11 +956,14 @@ async fn vnc_open(
         .ssh(&session_id)
         .ok_or_else(|| vnc::OpenError::from("Сессия не подключена".to_string()))?;
     let id = format!("vnc-{}", uuid::Uuid::new_v4());
+    // Tight и ZRLE уже сжаты zlib: второй раз сжимать их на уровне SSH - пустая работа.
+    let link = desktop_link(&s.server_id, DESKTOP_WINDOW_VNC, false).await;
     let target = vnc::Target::Ssh {
-        handle: s.handle.clone(),
+        handle: link.as_ref().map_or_else(|| s.handle.clone(), |l| l.handle.clone()),
         host: host.unwrap_or_else(|| "127.0.0.1".into()),
         // 5900 - нулевой дисплей; у большинства серверов рабочий стол именно там.
         port: port.unwrap_or(5900),
+        link,
     };
     vnc::open(id.clone(), session_id.clone(), target, password, on_frame).await?;
     Ok(id)
@@ -1117,15 +1180,22 @@ async fn rdp_open(
 ) -> Result<String, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let id = format!("rdp-{}", uuid::Uuid::new_v4());
-    let target = rdp::Target::Ssh {
-        handle: s.handle.clone(),
-        host: host.unwrap_or_else(|| "127.0.0.1".to_owned()),
-        port: port.unwrap_or(3389),
-    };
     let network_profile = match network_profile.as_deref().unwrap_or("vpn") {
         "vpn" => rdp::NetworkProfile::Vpn,
         "lan" => rdp::NetworkProfile::Lan,
         other => return Err(format!("неизвестный профиль сети RDP: {other}")),
+    };
+    // Для медленного канала окно меньше и поток сжимается на уровне SSH: сжатие внутри
+    // RDP (MPPC) ломает пересогласование после смены размера, подробности в помощнике.
+    let link = match network_profile {
+        rdp::NetworkProfile::Vpn => desktop_link(&s.server_id, DESKTOP_WINDOW_VPN, true).await,
+        rdp::NetworkProfile::Lan => desktop_link(&s.server_id, DESKTOP_WINDOW_LAN, false).await,
+    };
+    let target = rdp::Target::Ssh {
+        handle: link.as_ref().map_or_else(|| s.handle.clone(), |l| l.handle.clone()),
+        host: host.unwrap_or_else(|| "127.0.0.1".to_owned()),
+        port: port.unwrap_or(3389),
+        link,
     };
     rdp::open(
         id.clone(),

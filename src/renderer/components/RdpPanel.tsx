@@ -75,6 +75,9 @@ export function RdpPanel({
   const pendingPointerRef = useRef<{ x: number; y: number; buttons: number } | null>(null)
   const wheelRafRef = useRef<number | null>(null)
   const pendingWheelRef = useRef<{ vertical: number; horizontal: number }>({ vertical: 0, horizontal: 0 })
+  // JPEG декодируется асинхронно. Цепочка сохраняет порядок с соседними raw-кадрами:
+  // иначе старый большой кадр мог дорисоваться поверх более свежего маленького.
+  const paintChainRef = useRef<Promise<void>>(Promise.resolve())
   const metricsRef = useRef(new RdpUiMetrics(performance.now()))
   // Счётчик принятого и виденные виды кадров: без них разбор пустого экрана сводится
   // к разглядыванию снимков, а сказать «кадры не дошли» или «дошли, но не нарисовались»
@@ -216,18 +219,37 @@ export function RdpPanel({
             window.api.rdp.note(`кадр ${seen.n}: холста ещё нет, рисовать некуда`).catch(() => {})
             return
           }
-          // Раньше исключение отсюда просто обрывало показ: экран оставался пустым, а
-          // причина не доходила никуда. Теперь она видна и в панели, и в журнале.
-          try {
-            const drawStarted = performance.now()
-            screen.ctx.putImageData(new ImageData(f.pixels, f.rect.w, f.rect.h), f.rect.x, f.rect.y)
-            metricsRef.current.noteRaw(f.rect.w * f.rect.h, performance.now() - drawStarted)
-            schedulePresent()
-          } catch (e) {
-            const why = errText(e)
-            window.api.rdp.note(`кадр ${seen.n}: не нарисовался - ${why}`).catch(() => {})
-            setError(`Кадр не нарисовался: ${why}`)
-          }
+          paintChainRef.current = paintChainRef.current
+            .then(() => {
+              const drawStarted = performance.now()
+              screen.ctx.putImageData(new ImageData(f.pixels, f.rect.w, f.rect.h), f.rect.x, f.rect.y)
+              metricsRef.current.noteRaw(f.rect.w * f.rect.h, performance.now() - drawStarted)
+              schedulePresent()
+            })
+            .catch((e) => {
+              const why = errText(e)
+              window.api.rdp.note(`кадр ${seen.n}: не нарисовался - ${why}`).catch(() => {})
+              setError(`Кадр не нарисовался: ${why}`)
+            })
+          return
+        }
+        case 'jpeg': {
+          if (!screen) return
+          const bytes = f.bytes
+          const rect = f.rect
+          paintChainRef.current = paintChainRef.current
+            .then(async () => {
+              const blob = new Blob([bytes], { type: 'image/jpeg' })
+              const bitmap = await createImageBitmap(blob)
+              screen.ctx.drawImage(bitmap, rect.x, rect.y)
+              bitmap.close()
+              schedulePresent()
+            })
+            .catch((e) => {
+              const why = errText(e)
+              window.api.rdp.note(`JPEG-кадр ${seen.n}: не нарисовался - ${why}`).catch(() => {})
+              setError(`Кадр не нарисовался: ${why}`)
+            })
           return
         }
         case 'closed': {

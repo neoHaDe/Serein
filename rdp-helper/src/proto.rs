@@ -13,6 +13,7 @@ use std::io::{self, Write};
 
 pub const KIND_RESIZE: u8 = 1;
 pub const KIND_RAW: u8 = 2;
+pub const KIND_JPEG: u8 = 3;
 pub const KIND_CLOSED: u8 = 9;
 
 /// Собирает пакет: заголовок и тело.

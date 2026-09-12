@@ -142,6 +142,9 @@ pub struct ClientHandler {
     /// Куда спрашивать про незнакомый/сменившийся ключ. None - молча доверять (jump-хопы
     /// при восстановлении туннелей, где спросить некого).
     host_key_ask: Option<HostKeyAsk>,
+    /// Принимать только уже подтверждённый ключ. Для второго соединения к серверу, с
+    /// которым уже открыта сессия: незнакомый ключ там может значить только подмену.
+    known_only: bool,
     remote_forwards: RemoteForwards,
     cancel: CancelRx,
     agent_lock: Arc<tokio::sync::Mutex<()>>,
@@ -171,6 +174,9 @@ impl Handler for ClientHandler {
 
         if status == knownhosts::HostKeyStatus::Trusted {
             return Ok(true);
+        }
+        if self.known_only {
+            return Ok(false);
         }
 
         let Some(ask) = self.host_key_ask.clone() else {
@@ -315,6 +321,10 @@ fn auth_rejected(server: &Value) -> crate::error::SereinError {
 /// Окно и keepalive под длинные SFTP. `maximum_packet_size` 32 КиБ - как у OpenSSH;
 /// SFTP-чанк в `sftp.rs` режется под этот лимит, иначе DATA не влезает в SSH-пакет.
 pub(crate) fn ssh_client_config(server: &Value) -> Arc<client::Config> {
+    Arc::new(base_client_config(server))
+}
+
+fn base_client_config(server: &Value) -> client::Config {
     let mut cfg = client::Config::default();
     // Наборы алгоритмов зависят от профиля: сжатие и режим совместимости со старым железом.
     cfg.preferred = crate::ssh_algos::preferred_for(server);
@@ -322,7 +332,139 @@ pub(crate) fn ssh_client_config(server: &Value) -> Arc<client::Config> {
     cfg.maximum_packet_size = 32 * 1024;
     cfg.keepalive_interval = Some(std::time::Duration::from_secs(15));
     cfg.keepalive_max = 8;
+    // По умолчанию russh оставляет сокету алгоритм Нейгла, и ядро придерживает мелкие
+    // пакеты, пока не подтверждён предыдущий. Мелкие пакеты у нас - это нажатия в
+    // терминале, движения мыши на рабочем столе и подтверждения окна канала: ровно то,
+    // что должно уходить сразу. OpenSSH для интерактивных сессий делает то же самое.
+    cfg.nodelay = true;
+    cfg
+}
+
+/// Настройки соединения под рабочий стол.
+///
+/// Окно здесь маленькое намеренно, и в этом весь смысл отдельного соединения. russh
+/// возвращает окно серверу сразу по приходу данных, поэтому окно - это ровно столько,
+/// сколько сервер может держать в пути, не дожидаясь нас. При 32 МиБ сервер рабочего
+/// стола не чувствует сети вовсе: sshd вычитывает у него всё, что тот успевает
+/// нарисовать, и мегабайты кадров встают в очередь перед узким местом VPN. Всё, что
+/// идёт следом - нажатия, ответы терминала, замер пинга, - ждёт в той же очереди.
+/// С маленьким окном sshd перестаёт читать, сервер RDP упирается в запись и сам
+/// пропускает промежуточные кадры: так же, как при прямом подключении mstsc.
+///
+/// Очередь канала короткая по той же причине: всё, что в ней лежит, - уже устаревшая
+/// картинка, которую человек увидит с опозданием.
+fn desktop_client_config(server: &Value, window: u32, compress: bool) -> Arc<client::Config> {
+    let mut cfg = base_client_config(server);
+    cfg.window_size = window.max(cfg.maximum_packet_size);
+    cfg.channel_buffer_size = 16;
+    if compress {
+        cfg.preferred.compression = crate::ssh_algos::compression_first();
+    }
     Arc::new(cfg)
+}
+
+/// Отдельное SSH-соединение под рабочий стол.
+///
+/// Общее соединение сессии для рабочего стола не годится: все каналы SSH едут в одном
+/// потоке TCP, и поток кадров стоит в нём впереди всего остального. Отдельное соединение
+/// - это своя очередь и своё окно, настроенное под картинку, а не под SFTP.
+pub struct DesktopLink {
+    pub handle: SharedHandle,
+    /// Промежуточные хопы цепочки: живут, пока живо само соединение.
+    jumps: Vec<client::Handle<ClientHandler>>,
+}
+
+impl DesktopLink {
+    /// Закрывает соединение и всю цепочку за ним, от ближнего хопа к дальнему.
+    pub async fn close(self) {
+        let _ = self
+            .handle
+            .lock()
+            .await
+            .disconnect(russh::Disconnect::ByApplication, "desktop closed", "")
+            .await;
+        for j in self.jumps.into_iter().rev() {
+            let _ = j
+                .disconnect(russh::Disconnect::ByApplication, "desktop closed", "")
+                .await;
+        }
+    }
+}
+
+/// Поднимает отдельное соединение под рабочий стол по той же цепочке, что и сессия.
+///
+/// Ключ хоста принимается только уже подтверждённый: сессия к этому серверу только что
+/// прошла проверку, и незнакомый ключ на втором соединении значит подмену, а не новый
+/// сервер. Спрашивать о нём здесь некого и незачем.
+///
+/// Вход только без вопросов: пароль, ключ, агент. Если серверу нужен второй фактор,
+/// соединения не будет, и рабочий стол пойдёт общим каналом сессии - вызывающий об этом
+/// знает по ошибке.
+pub async fn connect_desktop(
+    chain: Vec<Value>,
+    window: u32,
+    compress: bool,
+) -> crate::error::Result<DesktopLink> {
+    if chain.is_empty() {
+        return Err(crate::error::SereinError::EmptyChain);
+    }
+    let dummy_ki: KiBridge = Arc::new(Mutex::new(HashMap::new()));
+    let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let mut jumps = Vec::new();
+
+    let far = &chain[chain.len() - 1];
+    let mut cur = connect_one(
+        far,
+        desktop_client_config(far, window, compress),
+        remote_forwards.clone(),
+        cancel_rx.clone(),
+        None,
+        true,
+    )
+    .await?;
+    if !authenticate(&mut cur, far, None, &dummy_ki, None).await? {
+        return Err(auth_rejected(far));
+    }
+    for i in (0..chain.len() - 1).rev() {
+        let next = &chain[i];
+        let nhost = field(next, "host")
+            .ok_or_else(|| crate::error::SereinError::Config("Не задан host промежуточного хоста".into()))?;
+        let channel = cur
+            .channel_open_direct_tcpip(nhost, port_of(next) as u32, "127.0.0.1", 0)
+            .await
+            .map_err(|e| crate::error::SereinError::ProxyJump {
+                host: nhost.to_string(),
+                detail: e.to_string(),
+            })?;
+        jumps.push(cur);
+        let handler = ClientHandler {
+            host_id: knownhosts::host_id(nhost, port_of(next)),
+            host_key_ask: None,
+            known_only: true,
+            remote_forwards: remote_forwards.clone(),
+            cancel: cancel_rx.clone(),
+            agent_lock: Arc::new(tokio::sync::Mutex::new(())),
+        };
+        let mut nh = client::connect_stream(
+            desktop_client_config(next, window, compress),
+            channel.into_stream(),
+            handler,
+        )
+        .await
+        .map_err(|e| crate::error::SereinError::ProxyJump {
+            host: nhost.to_string(),
+            detail: e.to_string(),
+        })?;
+        if !authenticate(&mut nh, next, None, &dummy_ki, None).await? {
+            return Err(auth_rejected(next));
+        }
+        cur = nh;
+    }
+    Ok(DesktopLink {
+        handle: Arc::new(tokio::sync::Mutex::new(cur)),
+        jumps,
+    })
 }
 
 async fn request_ki(app: &AppHandle, ki: &KiBridge, id: &str, prompts: Vec<Value>) -> Vec<String> {
@@ -425,9 +567,11 @@ async fn authenticate(
 
 async fn connect_one(
     server: &Value,
+    config: Arc<client::Config>,
     rf: RemoteForwards,
     cancel: CancelRx,
     ask: Option<HostKeyAsk>,
+    known_only: bool,
 ) -> crate::error::Result<client::Handle<ClientHandler>> {
     let host = field(server, "host")
         .ok_or_else(|| crate::error::SereinError::Config("Не задан host".into()))?;
@@ -435,11 +579,11 @@ async fn connect_one(
     let handler = ClientHandler {
         host_id: knownhosts::host_id(host, port_of(server)),
         host_key_ask: ask.clone(),
+        known_only,
         remote_forwards: rf,
         cancel,
         agent_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
-    let config = ssh_client_config(server);
     let secs = server
         .get("connectTimeout")
         .and_then(|v| v.as_u64())
@@ -500,7 +644,15 @@ pub async fn connect_chain(
 
     // Самый дальний хоп (конец цепочки) - прямое подключение.
     let far = &chain[chain.len() - 1];
-    let mut handle = connect_one(far, remote_forwards.clone(), cancel_rx.clone(), ask.clone()).await?;
+    let mut handle = connect_one(
+        far,
+        ssh_client_config(far),
+        remote_forwards.clone(),
+        cancel_rx.clone(),
+        ask.clone(),
+        false,
+    )
+    .await?;
     let far_is_target = chain.len() == 1;
     if !authenticate(
         &mut handle,
@@ -532,6 +684,7 @@ pub async fn connect_chain(
         let handler = ClientHandler {
             host_id: knownhosts::host_id(nhost, port_of(next)),
             host_key_ask: ask.clone(),
+            known_only: false,
             remote_forwards: remote_forwards.clone(),
             cancel: cancel_rx.clone(),
                 agent_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -649,7 +802,15 @@ pub async fn connect_client(chain: Vec<Value>) -> crate::error::Result<SharedHan
     let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
     let (_cancel_tx, cancel_rx) = watch::channel(false);
     let far = &chain[chain.len() - 1];
-    let mut handle = connect_one(far, remote_forwards.clone(), cancel_rx.clone(), None).await?;
+    let mut handle = connect_one(
+        far,
+        ssh_client_config(far),
+        remote_forwards.clone(),
+        cancel_rx.clone(),
+        None,
+        false,
+    )
+    .await?;
     if !authenticate(&mut handle, far, None, &dummy_ki, None).await? {
         return Err(auth_rejected(far));
     }
@@ -669,6 +830,7 @@ pub async fn connect_client(chain: Vec<Value>) -> crate::error::Result<SharedHan
         let handler = ClientHandler {
             host_id: knownhosts::host_id(nhost, port_of(next)),
             host_key_ask: None,
+            known_only: false,
             remote_forwards: remote_forwards.clone(),
             cancel: cancel_rx.clone(),
                 agent_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -893,6 +1055,28 @@ mod tests {
             .enable_all()
             .build()
             .expect("рантайм")
+    }
+
+    #[test]
+    fn рабочий_стол_получает_маленькое_окно_а_сессия_большое() {
+        // Окно сессии рассчитано на SFTP. Отдать его рабочему столу значило бы снова
+        // пустить мегабайты кадров в очередь впереди терминала и замера пинга.
+        let server = serde_json::json!({ "host": "h" });
+        let session = ssh_client_config(&server);
+        let desk = desktop_client_config(&server, 128 * 1024, true);
+        assert_eq!(session.window_size, 32 * 1024 * 1024);
+        assert_eq!(desk.window_size, 128 * 1024);
+        assert!(desk.channel_buffer_size < session.channel_buffer_size);
+        assert!(session.nodelay && desk.nodelay, "мелкие пакеты не должно придерживать ядро");
+        assert_eq!(desk.preferred.compression[0].as_ref(), "zlib");
+        assert_ne!(session.preferred.compression[0].as_ref(), "zlib");
+    }
+
+    #[test]
+    fn окно_не_бывает_меньше_одного_пакета() {
+        // Иначе сервер не смог бы отправить ни одного полного пакета и встал бы навсегда.
+        let desk = desktop_client_config(&serde_json::json!({}), 1024, false);
+        assert_eq!(desk.window_size, desk.maximum_packet_size);
     }
 
     /// Сторож блокера, из-за которого весь SSH-слой был непокрываем.

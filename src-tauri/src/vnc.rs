@@ -123,7 +123,15 @@ impl From<String> for OpenError {
 pub enum Target {
     Tcp { host: String, port: u16 },
     /// Через SSH: канал `direct-tcpip` до `host:port` со стороны сервера.
-    Ssh { handle: SharedHandle, host: String, port: u16 },
+    ///
+    /// `link` - своё соединение рабочего стола, если его удалось поднять; `handle` тогда
+    /// указывает на него. Закрывается вместе с сеансом.
+    Ssh {
+        handle: SharedHandle,
+        host: String,
+        port: u16,
+        link: Option<crate::ssh::DesktopLink>,
+    },
 }
 
 /// Открывает VNC-сессию и запускает цикл событий.
@@ -146,18 +154,33 @@ pub async fn open(
                 .await
                 .map_err(|e| OpenError::from(format!("Не удалось подключиться к {host}:{port}: {e}")))?;
             sock.set_nodelay(true).ok();
-            spawn_loop(id.clone(), sock, password, rx, alive.clone(), out.clone()).await?;
+            spawn_loop(id.clone(), sock, password, rx, alive.clone(), out.clone(), None).await?;
         }
-        Target::Ssh { handle, host, port } => {
+        Target::Ssh {
+            handle,
+            host,
+            port,
+            link,
+        } => {
             // Порт открывается со стороны сервера, поэтому «127.0.0.1» здесь - это его
             // собственный loopback, а не наш. Ради этого всё и затевалось.
             let ch = {
                 let g = handle.lock().await;
                 g.channel_open_direct_tcpip(host.as_str(), port as u32, "127.0.0.1", 0)
                     .await
-                    .map_err(|e| OpenError::from(format!("SSH-канал до {host}:{port} не открылся: {e}")))?
             };
-            spawn_loop(id.clone(), ch.into_stream(), password, rx, alive.clone(), out.clone())
+            let ch = match ch {
+                Ok(ch) => ch,
+                Err(e) => {
+                    if let Some(link) = link {
+                        link.close().await;
+                    }
+                    return Err(OpenError::from(format!(
+                        "SSH-канал до {host}:{port} не открылся: {e}"
+                    )));
+                }
+            };
+            spawn_loop(id.clone(), ch.into_stream(), password, rx, alive.clone(), out.clone(), link)
                 .await?;
         }
     }
@@ -174,27 +197,42 @@ async fn spawn_loop<S>(
     mut rx: mpsc::UnboundedReceiver<X11Event>,
     alive: Arc<AtomicBool>,
     out: crate::deskout::Out,
+    link: Option<crate::ssh::DesktopLink>,
 ) -> Result<(), OpenError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync + 'static,
 {
     let secret = password.unwrap_or_default();
-    let client = VncConnector::new(stream)
-        .set_auth_method(async move { Ok(secret) })
-        .add_encoding(VncEncoding::Tight)
-        .add_encoding(VncEncoding::Zrle)
-        .add_encoding(VncEncoding::CopyRect)
-        .add_encoding(VncEncoding::Raw)
-        .add_encoding(VncEncoding::CursorPseudo)
-        .add_encoding(VncEncoding::DesktopSizePseudo)
-        .set_pixel_format(PixelFormat::bgra())
-        .build()
-        .map_err(|e| OpenError::from(&e))?
-        .try_start()
-        .await
-        .map_err(|e| OpenError::from(&e))?
-        .finish()
-        .map_err(|e| OpenError::from(&e))?;
+    let started = async {
+        VncConnector::new(stream)
+            .set_auth_method(async move { Ok(secret) })
+            .add_encoding(VncEncoding::Tight)
+            .add_encoding(VncEncoding::Zrle)
+            .add_encoding(VncEncoding::CopyRect)
+            .add_encoding(VncEncoding::Raw)
+            .add_encoding(VncEncoding::CursorPseudo)
+            .add_encoding(VncEncoding::DesktopSizePseudo)
+            .set_pixel_format(PixelFormat::bgra())
+            .build()
+            .map_err(|e| OpenError::from(&e))?
+            .try_start()
+            .await
+            .map_err(|e| OpenError::from(&e))?
+            .finish()
+            .map_err(|e| OpenError::from(&e))
+    }
+    .await;
+    // Не вошли - своё соединение рабочего стола больше не нужно, а висеть оно будет,
+    // пока его не закроют явно.
+    let client = match started {
+        Ok(c) => c,
+        Err(e) => {
+            if let Some(link) = link {
+                link.close().await;
+            }
+            return Err(e);
+        }
+    };
 
     let client = Arc::new(client);
 
@@ -221,6 +259,9 @@ where
         let end = event_loop(&client, &reader_alive, &id, &out).await;
         reader_alive.store(false, Ordering::Relaxed);
         let _ = client.close().await;
+        if let Some(link) = link {
+            link.close().await;
+        }
         let (text, auth, blocked) = end.unwrap_or_default();
         let _ = out.send(InvokeResponseBody::Raw(packet(
             kind::CLOSED,
