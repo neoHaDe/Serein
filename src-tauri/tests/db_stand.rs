@@ -435,3 +435,74 @@ fn несколько_выборок_в_одном_запросе_не_смеш�
         db::close(&id);
     });
 }
+
+
+fn mssql_params(s: &Stand) -> Params {
+    // Пароль свой: SQL Server не стартует с простым, поэтому общий пароль стенда ему не годится.
+    Params {
+        kind: Kind::Mssql,
+        host: Some(s.mssql_host.clone()),
+        port: None,
+        user: Some("sa".to_string()),
+        password: Some("Probe-pass-1".to_string()),
+        database: None,
+    }
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn sql_server_отвечает_через_ssh_канал() {
+    // Порт SQL Server наружу не опубликован: дойти до него можно только каналом внутри
+    // SSH-сессии - и с шифрованием, которое новые установки требуют по умолчанию.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let id = open(&s, mssql_params(&s)).await;
+        let out = db::query(
+            &id,
+            "SELECT 1 AS число, N'привет' AS текст, CAST(NULL AS int) AS пусто, '' AS пустая_строка",
+        )
+        .await
+        .expect("запрос");
+        let row = &out["rows"][0];
+        assert_eq!(row["число"], "1");
+        assert_eq!(row["текст"], "привет", "юникод обязан доехать целым");
+        assert!(row["пусто"].is_null(), "NULL остаётся NULL");
+        assert_eq!(row["пустая_строка"], "", "пустая строка - не NULL");
+
+        // Номер ошибки в тексте: по нему ошибку ищут, текст бывает переведён.
+        let err = db::query(&id, "SELECT * FROM нет_такой_таблицы").await.expect_err("ошибка");
+        assert!(err.contains("208"), "ожидался номер ошибки 208: {err}");
+        db::close(&id);
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn sql_server_отдаёт_наборы_даты_и_числа() {
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let id = open(&s, mssql_params(&s)).await;
+        let out = db::query(
+            &id,
+            "SELECT 1 AS a; SELECT CAST('2026-09-13T10:20:30' AS datetime2) AS когда, CAST(12.50 AS decimal(5,2)) AS сумма",
+        )
+        .await
+        .expect("запрос из двух выборок");
+        let sets = out["sets"].as_array().expect("наборы");
+        assert_eq!(sets.len(), 2, "две выборки - два набора: {out}");
+        assert_eq!(
+            sets[1]["rows"][0]["когда"], "2026-09-13 10:20:30",
+            "дата - датой, а не внутренним видом TDS"
+        );
+        assert!(
+            sets[1]["rows"][0]["сумма"].as_str().unwrap_or("").starts_with("12.5"),
+            "десятичное число текстом: {}",
+            sets[1]["rows"][0]["сумма"]
+        );
+
+        // Соединение исправно после нескольких наборов: поток дочитан до конца.
+        let again = db::query(&id, "SELECT 7 AS сверка").await.expect("повторный запрос");
+        assert_eq!(again["rows"][0]["сверка"], "7");
+        db::close(&id);
+    });
+}

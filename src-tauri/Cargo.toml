@@ -53,6 +53,13 @@ dunce = "1"
 vnc-rs = "0.5"
 tokio-postgres = "0.7"
 redis = { version = "1", features = ["tokio-comp"] }
+# SQL Server. Выбран по тому же признаку, что и остальные клиенты баз: принимает готовый
+# поток, а значит, идёт каналом внутри SSH-сессии. `winauth` не нужен - вход по учётке
+# SQL; `chrono` - чтобы даты приходили датами, а не внутренним представлением TDS.
+tiberius = { version = "0.12", default-features = false, features = ["tds73", "native-tls", "chrono"] }
+chrono = "0.4"
+# Переходник между потоками tokio и futures: tiberius говорит на вторых.
+tokio-util = { version = "0.7", features = ["compat"] }
 # MySQL/MariaDB: клиента целиком здесь нет намеренно. Ни mysql_async, ни sqlx не умеют
 # принимать готовый поток — сокет они открывают сами, а нам нужен канал внутри SSH.
 # mysql_common даёт разбор пакетов и скрэмблы без единого системного вызова, поэтому

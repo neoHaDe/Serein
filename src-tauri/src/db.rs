@@ -1,4 +1,4 @@
-//! Базы данных рядом с сервером: PostgreSQL, MySQL/MariaDB и Redis через уже открытую
+//! Базы данных рядом с сервером: PostgreSQL, MySQL/MariaDB, SQL Server и Redis через уже открытую
 //! SSH-сессию.
 //!
 //! Смысл ровно в слове «через». Базу почти никогда не выставляют в сеть: она слушает
@@ -25,6 +25,8 @@ pub enum Kind {
     Postgres,
     /// MySQL и MariaDB - один протокол и один порт, различать их клиенту незачем.
     Mysql,
+    /// Microsoft SQL Server.
+    Mssql,
     Redis,
 }
 
@@ -34,6 +36,7 @@ impl Kind {
         match self {
             Kind::Postgres => 5432,
             Kind::Mysql => 3306,
+            Kind::Mssql => 1433,
             Kind::Redis => 6379,
         }
     }
@@ -42,6 +45,7 @@ impl Kind {
         match self {
             Kind::Postgres => "postgres",
             Kind::Mysql => "mysql",
+            Kind::Mssql => "mssql",
             Kind::Redis => "redis",
         }
     }
@@ -83,8 +87,16 @@ enum Live {
     /// Под замком, а не как у PostgreSQL: наш клиент MySQL держит один поток и
     /// разговаривает по нему строго по очереди - запрос, потом ответ.
     Mysql(Arc<AsyncMutex<MysqlConn>>),
+    /// Под замком: запросы tiberius требуют исключительного доступа к клиенту и идут строго
+    /// по очереди, как у нашего клиента MySQL.
+    Mssql(Arc<AsyncMutex<MssqlClient>>),
     Redis(Arc<AsyncMutex<redis::aio::MultiplexedConnection>>),
 }
+
+/// Клиент SQL Server поверх канала SSH. Переходник нужен потому, что tiberius говорит на
+/// потоках futures, а канал - поток tokio.
+type MssqlClient =
+    tiberius::Client<tokio_util::compat::Compat<russh::ChannelStream<russh::client::Msg>>>;
 
 /// Открытое соединение вместе с тем, через какую SSH-сессию оно идёт.
 ///
@@ -194,6 +206,29 @@ pub async fn open(
             .map_err(|e| redis_err(&e))?;
             tokio::spawn(driver);
             Live::Redis(Arc::new(AsyncMutex::new(conn)))
+        }
+        Kind::Mssql => {
+            use tokio_util::compat::TokioAsyncWriteCompatExt as _;
+            let mut cfg = tiberius::Config::new();
+            cfg.host(p.host());
+            cfg.port(p.port());
+            cfg.authentication(tiberius::AuthMethod::sql_server(
+                p.user.as_deref().filter(|s| !s.is_empty()).unwrap_or("sa"),
+                p.password.as_deref().unwrap_or(""),
+            ));
+            if let Some(db) = p.database.as_deref().filter(|s| !s.is_empty()) {
+                cfg.database(db);
+            }
+            // Шифрование включаем, хотя канал и так внутри SSH: SQL Server с обязательным
+            // шифрованием иначе просто закроет соединение, а у новых установок оно такое по
+            // умолчанию. Сертификат не проверяем по той же причине, что у RDP: подлинность
+            // стороны даёт SSH-сессия, а сертификаты SQL Server почти всегда самоподписанные.
+            cfg.encryption(tiberius::EncryptionLevel::Required);
+            cfg.trust_cert();
+            let client = tiberius::Client::connect(cfg, stream.compat_write())
+                .await
+                .map_err(|e| mssql_err(&e))?;
+            Live::Mssql(Arc::new(AsyncMutex::new(client)))
         }
     };
     let kind = p.kind;
@@ -336,6 +371,7 @@ pub async fn query(id: &str, text: &str) -> Result<Value, String> {
     let live = with_sessions(|m| match m.get(id).map(|o| &o.live) {
         Some(Live::Postgres(c)) => Some(Live::Postgres(c.clone())),
         Some(Live::Mysql(c)) => Some(Live::Mysql(c.clone())),
+        Some(Live::Mssql(c)) => Some(Live::Mssql(c.clone())),
         Some(Live::Redis(c)) => Some(Live::Redis(c.clone())),
         None => None,
     })
@@ -346,6 +382,7 @@ pub async fn query(id: &str, text: &str) -> Result<Value, String> {
         match live {
             Live::Postgres(c) => pg_query(&c, text).await,
             Live::Mysql(c) => mysql_query(&c, text).await,
+            Live::Mssql(c) => mssql_query(&c, text).await,
             Live::Redis(c) => redis_query(&c, text).await,
         }
     };
@@ -459,6 +496,98 @@ async fn mysql_query(conn: &AsyncMutex<MysqlConn>, sql: &str) -> Result<Value, S
         sets.push(set);
     }
     Ok(answer(sets))
+}
+
+/// Запрос к SQL Server. Граница набора - описание колонок, как у PostgreSQL; строки
+/// складываются в те же пределы.
+///
+/// Поток ответа дочитываем до конца даже после того, как место в таблице кончилось: иначе
+/// следующий запрос по этому соединению прочтёт хвост предыдущего.
+async fn mssql_query(conn: &AsyncMutex<MssqlClient>, sql: &str) -> Result<Value, String> {
+    use futures::TryStreamExt as _;
+    let mut g = conn.lock().await;
+    let mut stream = g.simple_query(sql).await.map_err(|e| mssql_err(&e))?;
+    let mut sets: Vec<ResultSet> = Vec::new();
+    let mut current: Option<ResultSet> = None;
+    while let Some(item) = stream.try_next().await.map_err(|e| mssql_err(&e))? {
+        match item {
+            tiberius::QueryItem::Metadata(meta) => {
+                if let Some(done) = current.take() {
+                    sets.push(done);
+                }
+                current = Some(ResultSet::new(unique_names(
+                    meta.columns().iter().map(|c| c.name()),
+                )));
+            }
+            tiberius::QueryItem::Row(row) => {
+                let Some(set) = current.as_mut() else {
+                    continue;
+                };
+                let values: Vec<Option<String>> = row.into_iter().map(|c| mssql_cell(&c)).collect();
+                let mut obj = Map::new();
+                let mut size = 0usize;
+                for (i, name) in set.columns.iter().enumerate() {
+                    // NULL и пустая строка - разные вещи, как и у остальных баз.
+                    let cell = match values.get(i).cloned().flatten() {
+                        Some(v) => {
+                            size += v.len();
+                            set.budget.cell(&v)
+                        }
+                        None => Value::Null,
+                    };
+                    obj.insert(name.clone(), cell);
+                }
+                // Место кончилось - строку не берём, но поток дочитываем.
+                let _ = set.budget.push(Value::Object(obj), size);
+            }
+        }
+    }
+    if let Some(done) = current.take() {
+        sets.push(done);
+    }
+    Ok(answer(sets))
+}
+
+/// Значение ячейки SQL Server текстом. `None` - это NULL.
+fn mssql_cell(data: &tiberius::ColumnData<'static>) -> Option<String> {
+    use tiberius::ColumnData as D;
+    use tiberius::FromSql as _;
+    match data {
+        D::U8(v) => v.map(|x| x.to_string()),
+        D::I16(v) => v.map(|x| x.to_string()),
+        D::I32(v) => v.map(|x| x.to_string()),
+        D::I64(v) => v.map(|x| x.to_string()),
+        D::F32(v) => v.map(|x| x.to_string()),
+        D::F64(v) => v.map(|x| x.to_string()),
+        // Как пишет сам SQL Server: 1 и 0, а не true и false.
+        D::Bit(v) => v.map(|x| (if x { "1" } else { "0" }).to_owned()),
+        D::String(v) => v.as_ref().map(|s| s.to_string()),
+        D::Guid(v) => v.map(|g| g.to_string().to_uppercase()),
+        D::Binary(v) => v.as_ref().map(|b| {
+            let hex: String = b.iter().map(|x| format!("{x:02X}")).collect();
+            format!("0x{hex}")
+        }),
+        D::Numeric(v) => v.map(|n| n.to_string()),
+        D::Xml(v) => v.as_ref().map(|x| x.to_string()),
+        D::DateTime(_) | D::SmallDateTime(_) | D::DateTime2(_) => {
+            chrono::NaiveDateTime::from_sql(data).ok().flatten().map(|d| d.to_string())
+        }
+        D::Date(_) => chrono::NaiveDate::from_sql(data).ok().flatten().map(|d| d.to_string()),
+        D::Time(_) => chrono::NaiveTime::from_sql(data).ok().flatten().map(|d| d.to_string()),
+        D::DateTimeOffset(_) => chrono::DateTime::<chrono::FixedOffset>::from_sql(data)
+            .ok()
+            .flatten()
+            .map(|d| d.to_string()),
+    }
+}
+
+/// Текст ошибки SQL Server. У ошибок сервера есть номер - его и показываем: по номеру
+/// ошибку находят в документации, а текст сообщения бывает переведён.
+fn mssql_err(e: &tiberius::error::Error) -> String {
+    match e {
+        tiberius::error::Error::Server(t) => format!("SQL Server {}: {}", t.code(), t.message()),
+        other => format!("SQL Server: {other}"),
+    }
 }
 
 async fn redis_query(

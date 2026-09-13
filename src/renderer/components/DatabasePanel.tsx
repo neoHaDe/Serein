@@ -19,7 +19,7 @@ import { forget, isGone, recall, remember, update } from '../dbMemory'
  * поэтому при появлении на пустом месте панель переспрашивает приложение.
  */
 
-type Kind = 'postgres' | 'mysql' | 'redis'
+type Kind = 'postgres' | 'mysql' | 'mssql' | 'redis'
 
 interface Props {
   sessionId: string
@@ -32,6 +32,7 @@ interface Props {
 const HINT: Record<Kind, string> = {
   postgres: 'SELECT * FROM pg_stat_activity LIMIT 20;',
   mysql: 'SHOW FULL PROCESSLIST;',
+  mssql: 'SELECT TOP 20 session_id, status, command FROM sys.dm_exec_requests;',
   redis: 'INFO server'
 }
 
@@ -49,6 +50,12 @@ const STARTERS: Record<Kind, { label: string; text: string }[]> = {
     { label: 'Активные запросы', text: 'SHOW FULL PROCESSLIST' },
     { label: 'Версия', text: 'SELECT VERSION() AS версия' }
   ],
+  mssql: [
+    { label: 'Таблицы', text: 'SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES ORDER BY 1, 2' },
+    { label: 'Размеры баз', text: 'SELECT DB_NAME(database_id) AS база, SUM(size) * 8 / 1024 AS мегабайт FROM sys.master_files GROUP BY database_id ORDER BY 2 DESC' },
+    { label: 'Активные запросы', text: 'SELECT r.session_id, r.status, r.command, t.text FROM sys.dm_exec_requests r CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) t WHERE r.session_id <> @@SPID' },
+    { label: 'Версия', text: 'SELECT @@VERSION AS версия' }
+  ],
   redis: [
     { label: 'Сервер', text: 'INFO server' },
     { label: 'Память', text: 'INFO memory' },
@@ -58,11 +65,11 @@ const STARTERS: Record<Kind, { label: string; text: string }[]> = {
 }
 
 /** Кого подставлять в поле пользователя. У Redis имени обычно нет вовсе. */
-const DEFAULT_USER: Record<Kind, string> = { postgres: 'postgres', mysql: 'root', redis: '' }
+const DEFAULT_USER: Record<Kind, string> = { postgres: 'postgres', mysql: 'root', mssql: 'sa', redis: '' }
 
 /** Подсказки в пустых полях - то же, что подставит бэкенд, если оставить их пустыми. */
-const DEFAULT_PORT: Record<Kind, number> = { postgres: 5432, mysql: 3306, redis: 6379 }
-const DEFAULT_DB: Record<Kind, string> = { postgres: 'postgres', mysql: 'mysql', redis: '0' }
+const DEFAULT_PORT: Record<Kind, number> = { postgres: 5432, mysql: 3306, mssql: 1433, redis: 6379 }
+const DEFAULT_DB: Record<Kind, string> = { postgres: 'postgres', mysql: 'mysql', mssql: 'master', redis: '0' }
 
 export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props): JSX.Element {
   // Что было открыто в прошлый раз на этой же сессии. Читаем один раз при создании
@@ -262,6 +269,7 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
               >
                 <option value="postgres">PostgreSQL</option>
                 <option value="mysql">MySQL / MariaDB</option>
+                <option value="mssql">SQL Server</option>
                 <option value="redis">Redis</option>
               </select>
             </label>

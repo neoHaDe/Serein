@@ -30,7 +30,7 @@ done
 # Базы данных наружу портов не публикуют, поэтому их готовность спрашиваем у самого
 # compose. MySQL 8 при первом запуске создаёт системные таблицы десятки секунд, и без
 # этого ожидания тесты стартовали бы раньше, чем база начнёт отвечать.
-for svc in mariadb mysql web ldap; do
+for svc in mariadb mysql mssql web ldap; do
   echo -n "жду $svc "
   for _ in $(seq 1 90); do
     state=$(docker compose ps --format '{{.Health}}' "$svc" 2>/dev/null | head -1)

@@ -33,6 +33,8 @@ pub struct Stand {
     /// и клиент обязан пройти оба.
     pub mariadb_host: String,
     pub mysql_host: String,
+    /// SQL Server - тоже машина внутри сети стенда, снаружи не видна.
+    pub mssql_host: String,
     /// Веб-служба внутри сети стенда: снаружи её адреса не существует.
     pub web_host: String,
     /// Каталог LDAP. Его порт опубликован: клиент ходит к нему напрямую, не каналом.
@@ -78,6 +80,7 @@ impl Stand {
             redis_host: env("SEREIN_STAND_REDIS_HOST"),
             mariadb_host: env("SEREIN_STAND_MARIADB_HOST"),
             mysql_host: env("SEREIN_STAND_MYSQL_HOST"),
+            mssql_host: env("SEREIN_STAND_MSSQL_HOST"),
             web_host: env("SEREIN_STAND_WEB_HOST"),
             ldap_url: env("SEREIN_STAND_LDAP_URL"),
             ldap_base: env("SEREIN_STAND_LDAP_BASE"),

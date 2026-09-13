@@ -126,6 +126,21 @@ services:
       timeout: 5s
       retries: 40
 
+  # SQL Server - третий движок SQL рядом с PostgreSQL и MySQL. Порт наружу не публикуется,
+  # как и у остальных баз: дойти до него можно только каналом внутри SSH-сессии. Пароль
+  # сложнее, чем у соседей, не случайно - SQL Server отказывается стартовать с простым.
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: Probe-pass-1
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -b -Q \"SELECT 1\" >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
   alpine:
     build:
       context: .
