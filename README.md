@@ -10,7 +10,7 @@ SSH, SFTP and SCP with an editor, serial consoles, telnet and raw TCP.
 Tabs and split panes, port forwards, resource monitoring, a Docker panel
 and a local terminal - in an installer of about **7.8 MB**.
 
-Free, open source, Apache 2.0. Windows x64 and Linux x64, **v1.3.1**.
+Free, open source, Apache 2.0. Windows x64 and Linux x64, **v1.4.0**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -84,13 +84,18 @@ figures are public measurements normalised to the same metric; size is the 1.3.1
 - Import from **`~/.ssh/config`**, **PuTTY**, and (v1.2.7) **MobaXterm · XShell · SecureCRT**.
   Passwords are not imported
 
-### Databases (v1.3)
-- **PostgreSQL, MySQL/MariaDB and Redis** over a channel inside the SSH session you already
-  have - no port forward to set up
-- Result grid, query history, and a confirmation for destructive statements: `DELETE`
-  without `WHERE` asks twice, and a `#` in MySQL counts as a comment too
+### Databases (v1.3, all seven in v1.4)
+- **PostgreSQL, MySQL/MariaDB, SQL Server, MongoDB and Redis** over a channel inside the SSH
+  session you already have - no port forward to set up; **SQLite** is a file on the server,
+  queried by `sqlite3` right there
+- **MongoDB (v1.4)** - queries the way mongosh reads them: `db.collection.find().sort().limit()`,
+  `aggregate`, counts, inserts, updates, deletes, indexes, `show dbs`, `use`
+- **A "Stop" button (v1.4)** for a running query; a long query is stopped by the database itself
+  after 28 seconds
+- Result table paged at 200 rows, several result sets with a switch between them, query history,
+  and a confirmation for destructive statements: `DELETE` without `WHERE` asks twice, and a `#`
+  in MySQL counts as a comment too
 - The connection survives switching tabs and detaching the panel into its own window
-- The MySQL client is our own, built on `mysql_common`
 
 ### Remote desktop (v1.3, RDP in v1.3.1)
 - **VNC and RDP over a channel inside the SSH session**, with no port exposed to the network
@@ -98,12 +103,9 @@ figures are public measurements normalised to the same metric; size is the 1.3.1
   instead of ten times that
 - **RDP logs in once (v1.3.1)** - credentials go to the server with the autologon flag, and
   its own login window never appears. Settings: resolution, colour depth, traffic saving
-- **VPN profile:** the saved default advertises a limited-bandwidth connection, uses 16-bit
-  colour and disables desktop effects. The LAN profile keeps full quality for a fast network
-- **Bounded presentation:** RDP updates are combined against the current framebuffer and shown
-  at up to 30 FPS over VPN or 60 FPS on LAN, instead of redrawing for every dirty rectangle
-- **Complete input:** vertical and horizontal wheel scrolling, coalesced pointer movement,
-  optional shortcut capture while the canvas is focused, and a Ctrl+Alt+Del toolbar command
+- **VPN profile (v1.4)** saves bandwidth: 16-bit colour, no wallpaper or effects, up to 30 frames
+  per second; the LAN profile keeps full quality
+- **Full screen (v1.4)** for RDP and VNC, wheel in both directions, Ctrl+Alt+Del as a command
 - **Resolution follows the window (v1.3.1)**: stretch it and the server redraws the desktop
   at the new size, with no reconnection
 - **The desktop session belongs to the SSH connection (v1.3.1)**, not to a window: switching
@@ -129,6 +131,9 @@ figures are public measurements normalised to the same metric; size is the 1.3.1
 - chmod, hidden files, symlink follow, image preview; actions in the right-click menu
 - Dual-pane (local ↔ remote); **detach SFTP** into its own OS window
 - **Ctrl+wheel** (and Ctrl+/−/0) zooms text in SFTP and logs
+- **Compare a folder with the server (v1.4)** in dual-pane mode: new, changed, newer on the
+  server, only on the server. "Upload N" sends only new and changed files; nothing is deleted on
+  the server
 - **Built-in editor** (CodeMirror 6) - atomic save back to the server
 - **External editor** - OS default app, re-upload on save
 - **SCP fallback (v1.2.7)** - servers with no `Subsystem sftp` (old switches, stripped images)
@@ -147,14 +152,29 @@ figures are public measurements normalised to the same metric; size is the 1.3.1
   found through `/sys`, with no `lspci` on the server. Load average is spelled out in words
 - **Server overview (v1.2.7)** - CPU, RAM, disk, load, network, uptime, OS and kernel, process
   count, failed services and Docker health on one screen
+- **Last-hour charts and health (v1.4)** in the overview: CPU, memory, disk, load and network;
+  "Normal / Attention / Bad" with the reasons. Thresholds are global and per server
 - **Run one command on several servers** (`Ctrl+Shift+M`) - results per host with exit code,
-  stdout and stderr; hosts whose key is unknown are skipped with a reason, never trusted silently
+  stdout and stderr; hosts whose key is unknown are skipped with a reason, never trusted silently.
+  **Since v1.4:** how many hosts at once (up to 64), a time limit per host, "Retry failed", a
+  summary by exit code and a report saved to a file
 - **Utilities (v1.3)** moved out of a modal covering the app into a tab of their own with a
   rail: port check, port range, traceroute, HTTP request, DNS, TLS certificate, LDAP query,
   file comparison. The subnet calculator, hashes and JWT decode need no server at all
 - **Checks run from the server as well as from your machine.** Traceroute from the server
   uses `tracepath`, which needs no root
 - Files for comparison are picked over SFTP
+
+### Tasks and profiles (v1.4)
+- **Tasks** - ordered steps on the servers you pick: command, upload, download, folder sync,
+  service, Docker container and health check (a command, a port or an HTTP address, checked from
+  the server itself)
+- Every step has a condition (after successful ones, only after an error - for a rollback, or
+  always), a time limit, retries and "continue on error"
+- **Dry run** checks the servers and shows the plan without changing anything; progress per step
+  in real time, and a history of the last 50 runs
+- **Workspace profiles** - a set of tabs under a name ("Production", "Logs"): open next to the
+  current tabs or instead of them
 
 ### App windows
 - Detached tabs, SFTP, logs, and workspace panels - **separate OS windows**, no Windows caption
@@ -174,7 +194,9 @@ figures are public measurements normalised to the same metric; size is the 1.3.1
 - **A wrong password is not retried** - no fail2ban bans, no locked domain accounts
 - **Config schema is versioned**: the profile is copied before a migration, and a profile from
   a newer version is refused
-- Encrypted **`.tbk` backup** of servers, settings, and snippets
+- Encrypted **`.tbk` backup** of servers, settings, snippets, profiles and tasks; import shows
+  the contents first, and every ProxyCommand is enabled only by a separate confirmation
+- **One profile, one process (v1.4)**: a second copy with the same profile will not start
 - **SSH keygen** (ed25519 / RSA) + `ssh-copy-id`
 - Published with every release: SHA-256 sums and a **CycloneDX SBOM**; `cargo audit` and
   `npm audit` run in CI on every push
@@ -209,17 +231,17 @@ Matrix and smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
 
 From [Releases](../../releases/latest):
 
-- **`Serein_1.3.1_x64-setup.exe`** - Windows installer (Start menu, uninstall).
-- **`Serein_1.3.1_x64-portable.exe`** - Windows single file, no installer. Drop it and run. Settings still live in `%APPDATA%\serein`. In 1.3.1 this file has **no RDP**: remote desktop over RDP needs the helper `serein-rdp.exe` next to it, and the single-file build does not carry it. From the next release the portable build is a ZIP with both files.
-- **`Serein_1.3.1_amd64.deb`** - Debian/Ubuntu/**Astra** package (`/usr/bin/serein`).
-- **`Serein-1.3.1-1.x86_64.rpm`** - **Fedora** package. Installs and runs on a clean Fedora; on RedOS and Alt it has not been checked yet.
-- **`Serein_1.3.1_amd64.AppImage`** - portable Linux binary, one file for both families.
+- **`Serein_1.4.0_x64-setup.exe`** - Windows installer (Start menu, uninstall).
+- **`Serein_1.4.0_x64-portable.zip`** - portable Windows build, no installer: `Serein.exe` and the RDP helper `serein-rdp.exe`. Unpack into a folder and run. Settings still live in `%APPDATA%\serein`.
+- **`Serein_1.4.0_amd64.deb`** - Debian/Ubuntu/**Astra** package (`/usr/bin/serein`).
+- **`Serein-1.4.0-1.x86_64.rpm`** - **Fedora** package. Installs and runs on a clean Fedora; on RedOS and Alt it has not been checked yet.
+- **`Serein_1.4.0_amd64.AppImage`** - portable Linux binary, one file for both families.
 
 Every release publishes SHA-256 sums and a **CycloneDX SBOM** for both the Rust and the npm
 dependency trees. Check the sums - the Windows build is **unsigned** and SmartScreen will
 complain (*More info → Run anyway*).
 
-Release notes: [RELEASE_NOTES_v1.3.1.md](docs/RELEASE_NOTES_v1.3.1.md).
+Release notes: [RELEASE_NOTES_v1.4.0.md](docs/RELEASE_NOTES_v1.4.0.md).
 Security policy and threat model: [SECURITY.md](SECURITY.md).
 
 Auto-update checks GitHub Releases first and falls back to our own mirror
@@ -258,7 +280,8 @@ see offline mode below, and [SECURITY.md](SECURITY.md) for exactly what goes out
 │  sftp · scp · remote_fs · tunnels · monitor · workspace · docker ·     │
 │  pty · term_out · store · schema · vault · crypto · dpapi ·            │
 │  os_secrets · keygen · importers · knownhosts · remoteedit ·           │
-│  ownership · multihost · tools · error · sync                          │
+│  ownership · multihost · tasks · foldersync · db · mongo · mysql ·     │
+│  metrics · profile_lock · tools · error · sync                         │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -348,15 +371,15 @@ stripped; there is no application-wide log file yet - for that, use `npm run tau
 - Telnet has not been run against real network hardware, only an emulator.
 - The `.rpm` is built in a Fedora container and checked on Fedora only. RedOS and Alt are close
   relatives, not the same system: older libraries there can stop a Fedora-built binary.
-- The 1.3.1 portable single-file `.exe` has no RDP - the helper is a separate program and the
-  single file does not carry it. Use the installer, or the portable ZIP from the next release.
+- Windows Server in the overview is checked against recorded answers only: the stand has no live machine.
 - RDP over a slow VPN is usable but heavier than `mstsc`: plain bitmaps, no RemoteFX/H.264 yet.
 - Not planned: cloud sync, mobile, plugins, a generic LLM chat pane.
 
 Product plan. 1.2.7 was about security; 1.3 closed three parity items at once: **VNC**,
-**databases** over our own channels, and **Windows Server**; 1.3.1 added **RDP**. Still open:
-the other three databases (SQLite, MongoDB, SQL Server), macOS, and the Russian software
-registry. See [release notes 1.3.1](docs/RELEASE_NOTES_v1.3.1.md).
+**databases** over our own channels, and **Windows Server**; 1.3.1 added **RDP**; 1.4 brought
+**all seven databases**, **tasks**, a finished **Fleet**, **folder comparison** and **profiles**.
+Still open: macOS, the Russian software registry, and the corporate layer (audit log, shared
+catalog, roles). See [release notes 1.4.0](docs/RELEASE_NOTES_v1.4.0.md).
 
 ---
 
