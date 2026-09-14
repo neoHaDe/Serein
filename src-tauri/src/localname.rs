@@ -93,9 +93,69 @@ pub fn under_root(root: &Path, path: &Path) -> bool {
     path.starts_with(&root) && path != root
 }
 
+/// Нет ли ссылок между корнем и файлом.
+///
+/// `under_root` проверяет путь как строку и диск не спрашивает. Если внутри выбранной папки
+/// уже лежит ссылка или junction, ведущая наружу, безопасное по имени `sub/файл` запишется
+/// по ней за пределы корня. Поэтому каждый уже существующий каталог на пути проверяется.
+/// Сам корень - выбор человека, его не трогаем; сам файл тоже: запись идёт во временный
+/// файл рядом, а готовое имя даёт переименование, которое ссылку не разыменовывает.
+///
+/// Полной защиты от гонки проверка не даёт: другой локальный процесс может подложить
+/// ссылку между проверкой и записью. Она закрывает случай уже существующей ссылки.
+pub fn no_links_below(root: &Path, path: &Path) -> Result<(), String> {
+    let (root_n, path_n) = (normalize(root), normalize(path));
+    let Ok(rel) = path_n.strip_prefix(&root_n) else {
+        return Err(format!("путь «{}» выходит за пределы папки назначения", path.display()));
+    };
+    let parts: Vec<_> = rel.components().collect();
+    let mut cur = root_n.clone();
+    for c in parts.iter().take(parts.len().saturating_sub(1)) {
+        cur.push(c.as_os_str());
+        match std::fs::symlink_metadata(&cur) {
+            // На Windows `is_symlink` верен и для junction: обе - точки повторного анализа
+            // с подменой имени.
+            Ok(m) if m.file_type().is_symlink() => {
+                return Err(format!(
+                    "«{}» - ссылка внутри папки назначения, через неё не пишем",
+                    cur.display()
+                ))
+            }
+            Ok(_) => {}
+            // Дальше каталогов ещё нет - их создаст само скачивание.
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn обычные_вложенные_каталоги_назначения_проходят() {
+        let root = std::env::temp_dir().join(format!("serein-dest-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("а").join("б")).unwrap();
+        assert!(no_links_below(&root, &root.join("а").join("б").join("файл.txt")).is_ok());
+        assert!(no_links_below(&root, &root.join("нет").join("ещё").join("файл.txt")).is_ok(), "несуществующие каталоги создаст скачивание");
+        assert!(no_links_below(&root, &root.join("..").join("чужое.txt")).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ссылка_внутри_папки_назначения_останавливает_запись() {
+        let base = std::env::temp_dir().join(format!("serein-dest-{}", uuid::Uuid::new_v4()));
+        let root = base.join("корень");
+        let outside = base.join("снаружи");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("sub")).unwrap();
+        let err = no_links_below(&root, &root.join("sub").join("файл.txt")).unwrap_err();
+        assert!(err.contains("ссылка"), "{err}");
+        let _ = std::fs::remove_dir_all(base);
+    }
 
     #[test]
     fn имя_с_обратной_косой_не_проходит_на_windows() {

@@ -44,6 +44,24 @@ const RETRY_AFTER_FAIL: std::time::Duration = std::time::Duration::from_secs(5);
 /// нечем, и разница внутри секунды ничего не доказывает.
 const MTIME_SLACK_MS: u64 = 1000;
 
+/// Что делать с незалитой правкой, когда версия на сервере уже спрошена.
+#[derive(Debug, PartialEq)]
+enum Verdict {
+    Upload,
+    /// На сервере правили после нашего скачивания - заливка затёрла бы чужое.
+    Conflict,
+    /// Раньше версию знали, а сейчас узнать не вышло. Это не разрешение затереть оригинал.
+    Unknown,
+}
+
+fn verdict(seen_at_open: Option<u64>, now: Option<u64>) -> Verdict {
+    match (seen_at_open, now) {
+        (Some(_), None) => Verdict::Unknown,
+        (Some(ours), Some(theirs)) if theirs > ours + MTIME_SLACK_MS => Verdict::Conflict,
+        _ => Verdict::Upload,
+    }
+}
+
 /// Закрывает временный каталог от других пользователей машины.
 ///
 /// На Linux `/tmp` общий, и файл конфигурации сервера, скачанный для правки, по умолчанию
@@ -185,6 +203,10 @@ impl EditManager {
             // увиденного»: прежний код сдвигал отметку до отправки, поэтому сбой сети
             // означал, что правку не повторят никогда - она просто пропадала.
             let mut pending: Option<SystemTime> = None;
+            // Конфликт с правкой на сервере. Пока он есть, сами не заливаем, но и правку не
+            // забываем: локальная копия остаётся на диске до успешной заливки или решения
+            // человека. Прежний код сбрасывал `pending`, и остановка слежки удаляла её.
+            let mut conflict = false;
             loop {
                 tokio::time::sleep(if pending.is_some() { RETRY_AFTER_FAIL } else { WATCH_TICK }).await;
                 if !running.load(Ordering::Relaxed) {
@@ -196,6 +218,9 @@ impl EditManager {
                     last = cur;
                 }
                 let Some(_) = pending else { continue };
+                if conflict {
+                    continue;
+                }
 
                 // Не затираем чужое. Если файл на сервере поменялся после того, как мы его
                 // скачали, заливка уничтожила бы правку, которой мы даже не видели.
@@ -203,19 +228,31 @@ impl EditManager {
                     .await
                     .ok()
                     .flatten();
-                if let (Some(theirs), Some(ours)) = (now_remote, remote_seen) {
-                    if theirs > ours + MTIME_SLACK_MS {
+                match verdict(remote_seen, now_remote) {
+                    Verdict::Conflict => {
+                        conflict = true;
                         emit(
                             &app,
                             &session_id,
                             &remote,
                             "conflict",
-                            Some("файл на сервере изменился - ваша правка не залита, чтобы не затереть чужую"),
+                            Some(&format!(
+                                "файл на сервере изменился - ваша правка не залита, чтобы не затереть чужую. Ваша версия сохранена: {local_str}"
+                            )),
                         );
-                        // Ждём решения человека: сами не заливаем и не забываем правку.
-                        pending = None;
                         continue;
                     }
+                    Verdict::Unknown => {
+                        emit(
+                            &app,
+                            &session_id,
+                            &remote,
+                            "error",
+                            Some("не удалось узнать версию файла на сервере - правка не залита, повторю"),
+                        );
+                        continue;
+                    }
+                    Verdict::Upload => {}
                 }
 
                 emit(&app, &session_id, &remote, "uploading", None);
@@ -236,6 +273,14 @@ impl EditManager {
             // Несохранённую работу человека удалять нельзя ни при каких обстоятельствах.
             if pending.is_none() {
                 let _ = std::fs::remove_dir_all(&dir);
+            } else {
+                emit(
+                    &app,
+                    &session_id,
+                    &remote,
+                    "error",
+                    Some(&format!("слежка остановлена, незалитая правка сохранена: {local_str}")),
+                );
             }
         });
         Ok(())
@@ -266,6 +311,14 @@ impl EditManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn правка_не_заливается_поверх_чужой_и_при_неизвестной_версии() {
+        assert_eq!(verdict(Some(1_000), Some(1_500)), Verdict::Upload, "в пределах запаса");
+        assert_eq!(verdict(Some(1_000), Some(9_000)), Verdict::Conflict, "на сервере правили позже");
+        assert_eq!(verdict(Some(1_000), None), Verdict::Unknown, "не узнали - не значит «можно затереть»");
+        assert_eq!(verdict(None, None), Verdict::Upload, "сервер без stat: сравнивать не с чем с самого начала");
+    }
 
     #[test]
     fn путь_уходит_редактору_отдельным_доводом() {

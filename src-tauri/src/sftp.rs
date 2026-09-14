@@ -181,6 +181,12 @@ async fn wait_if_paused(
 }
 
 pub(crate) fn dup_key(session_id: &str, direction: &str, local: &str, remote: &str) -> String {
+    // Скачивание - по конечному файлу, без сессии и источника: два задания в один файл
+    // перезаписали бы друг друга, откуда бы они ни шли. На Windows регистр в пути не важен.
+    if direction == "download" {
+        let dest = local.replace('\\', "/");
+        return format!("download|{}", if cfg!(windows) { dest.to_lowercase() } else { dest });
+    }
     format!(
         "{session_id}|{direction}|{}|{remote}",
         local.replace('\\', "/")
@@ -812,7 +818,7 @@ async fn copy_remote_to_local_inner(
     // Пишем в недокачанный файл, а готовое имя даём одним переименованием в самом конце.
     // Иначе оборванная передача оставляет на месте готового файла обрубок, и отличить его
     // от целого нельзя ничем: размер совпадёт, как только дойдёт последний байт.
-    let part = format!("{local}.part");
+    let part = part_path(local);
     let result = if size >= PIPELINE_AFTER {
         pipelined_download(ssh, app, item_id, session_id, remote, local, &part, rel, size, alive, xfer).await
     } else {
@@ -835,6 +841,25 @@ async fn copy_remote_to_local_inner(
     }
 }
 
+/// Временное имя для скачивания рядом с готовым файлом.
+///
+/// Своё на каждое скачивание. Общее `<файл>.part` уничтожало одноимённый файл человека
+/// (`отчёт.part` рядом с `отчёт`) и сталкивало две передачи в один временный файл.
+pub(crate) fn part_path(local: &str) -> String {
+    let tag: String = uuid::Uuid::new_v4().simple().to_string().chars().take(8).collect();
+    format!("{local}.serein-{tag}.part")
+}
+
+/// Создаёт временный файл, только если такого ещё нет: чужой файл с тем же именем не трогаем.
+pub(crate) async fn create_part(part: &str) -> Result<tokio::fs::File, String> {
+    tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(part)
+        .await
+        .map_err(|e| format!("не создать временный файл {part}: {e}"))
+}
+
 /// `local` - будущее имя файла: оно идёт в отчёты о ходе передачи. `part` - куда пишем.
 async fn sequential_download(
     sftp: &SftpSession,
@@ -854,7 +879,7 @@ async fn sequential_download(
         let _ = tokio::fs::create_dir_all(parent).await;
     }
     let mut rf = sftp.open(remote).await.map_err(|e| e.to_string())?;
-    let mut lf = tokio::fs::File::create(part).await.map_err(|e| e.to_string())?;
+    let mut lf = create_part(part).await?;
     let mut buf = vec![0u8; SFTP_CHUNK as usize];
     let mut transferred: u64 = 0;
     let mut last_emit: u64 = 0;
@@ -915,7 +940,7 @@ async fn pipelined_download(
     let fh = opened.handle;
     let mut lf = BufWriter::with_capacity(
         1024 * 1024,
-        tokio::fs::File::create(part).await.map_err(|e| e.to_string())?,
+        create_part(part).await?,
     );
     let mut next_send = 0u64;
     let mut next_write = 0u64;
@@ -1262,6 +1287,11 @@ pub async fn plan_download_while(
             "путь «{lp}» выходит за пределы папки скачивания - ничего не сохранено"
         ));
     }
+    // Ссылка внутри папки назначения увела бы запись наружу, хотя путь как строка внутри.
+    for (lp, ..) in &jobs {
+        crate::localname::no_links_below(Path::new(&local_dir), Path::new(lp))
+            .map_err(|e| format!("{e} - ничего не сохранено"))?;
+    }
     Ok(DownloadPlan { jobs, refused })
 }
 
@@ -1322,6 +1352,14 @@ pub async fn download_path(
                     hub.finish(&id);
                     emit_transfer(
                         &app, &id, &session_id, "download", &lp, &rp, &rel, size, 0, "canceled", None,
+                    );
+                    return;
+                }
+                // Ссылку могли подложить уже после плана: перед записью проверяем ещё раз.
+                if let Err(e) = crate::localname::no_links_below(Path::new(local_dir), Path::new(&lp)) {
+                    hub.finish(&id);
+                    emit_transfer(
+                        &app, &id, &session_id, "download", &lp, &rp, &rel, size, 0, "error", Some(&e),
                     );
                     return;
                 }
@@ -1601,5 +1639,41 @@ mod walk_tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].2, "root/sub/a.txt");
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod part_tests {
+    use super::*;
+
+    #[test]
+    fn временное_имя_своё_у_каждого_скачивания() {
+        let a = part_path("C:/Загрузки/отчёт");
+        let b = part_path("C:/Загрузки/отчёт");
+        assert_ne!(a, b, "две передачи в один файл не делят временное имя");
+        assert!(a.starts_with("C:/Загрузки/отчёт.serein-") && a.ends_with(".part"), "{a}");
+        assert_ne!(a, "C:/Загрузки/отчёт.part", "файл человека «отчёт.part» не трогаем");
+    }
+
+    #[test]
+    fn чужой_файл_с_временным_именем_не_перезаписывается() {
+        let dir = std::env::temp_dir().join(format!("serein-part-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let taken = dir.join("занято.part");
+        std::fs::write(&taken, "важное").unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        assert!(rt.block_on(create_part(&taken.to_string_lossy())).is_err());
+        assert_eq!(std::fs::read_to_string(&taken).unwrap(), "важное");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn два_скачивания_в_один_файл_считаются_дублем() {
+        assert_eq!(
+            dup_key("s1", "download", "C:/a/файл", "/srv/x"),
+            dup_key("s2", "download", "C:/a/файл", "/srv/y"),
+            "источник и сессия не важны - важен конечный файл"
+        );
+        assert_ne!(dup_key("s1", "upload", "C:/a/файл", "/srv/x"), dup_key("s1", "upload", "C:/a/файл", "/srv/y"));
     }
 }

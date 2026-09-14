@@ -302,8 +302,20 @@ pub async fn download_file(
     }
     // Готовое имя появляется одним переименованием: оборванная запись не должна оставить
     // обрубок под именем целого файла.
-    let part = format!("{local}.part");
-    tokio::fs::write(&part, &data).await.map_err(|e| e.to_string())?;
+    let part = crate::sftp::part_path(local);
+    let mut file = crate::sftp::create_part(&part).await?;
+    {
+        use tokio::io::AsyncWriteExt as _;
+        let written = match file.write_all(&data).await {
+            Ok(()) => file.flush().await,
+            Err(e) => Err(e),
+        };
+        drop(file);
+        if let Err(e) = written {
+            let _ = tokio::fs::remove_file(&part).await;
+            return Err(e.to_string());
+        }
+    }
     tokio::fs::rename(&part, local).await.map_err(|e| {
         let _ = std::fs::remove_file(&part);
         e.to_string()
@@ -695,6 +707,11 @@ pub async fn download_path(
             "путь «{lp}» выходит за пределы папки скачивания - ничего не сохранено"
         ));
     }
+    // Ссылка внутри папки назначения увела бы запись наружу, хотя путь как строка внутри.
+    for (lp, ..) in &jobs {
+        crate::localname::no_links_below(Path::new(&local_dir), Path::new(lp))
+            .map_err(|e| format!("{e} - ничего не сохранено"))?;
+    }
     // Отказ виден в списке передач, как и у SFTP: молча недокачанная папка выглядит как
     // скачанная целиком.
     for (rel, why) in refused {
@@ -707,6 +724,12 @@ pub async fn download_path(
     for (lp, rp, rel, size) in jobs {
         if !alive.load(Ordering::Relaxed) {
             return Err(CANCELLED.into());
+        }
+        // Перед записью - ещё раз: ссылку могли подложить уже после плана.
+        if let Err(e) = crate::localname::no_links_below(Path::new(&local_dir), Path::new(&lp)) {
+            let id = uuid::Uuid::new_v4().to_string();
+            emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "error", Some(&e));
+            return Err(e);
         }
         if let Some(parent) = Path::new(&lp).parent() {
             let _ = tokio::fs::create_dir_all(parent).await;

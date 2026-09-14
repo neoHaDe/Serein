@@ -380,6 +380,8 @@ fn split_remote(remote: &str) -> (String, String) {
 /// Всё, что нужно шагу на одном сервере.
 struct Host {
     handle: ssh::SharedHandle,
+    /// Id сервера: из него - часть имени подпапки при скачивании с нескольких серверов.
+    server_id: String,
     fs: Arc<Mutex<SessionFs>>,
     kind: platform::Kind,
     server_name: String,
@@ -504,15 +506,30 @@ async fn remote_jobs(h: &Host, remote: &str, base: &str) -> Result<(Jobs, Vec<(S
     {
         return Err(format!("путь «{lp}» выходит за пределы папки скачивания"));
     }
+    for (lp, ..) in &jobs {
+        crate::localname::no_links_below(Path::new(base), Path::new(lp))?;
+    }
     Ok((jobs, refused))
 }
 
 fn download_base(h: &Host, local_dir: &str) -> String {
     let dir = local_dir.trim_end_matches(['/', '\\']).replace('\\', "/");
     if h.multi {
-        format!("{dir}/{}", safe_dir_name(&h.server_name))
+        format!("{dir}/{}", server_folder(&h.server_name, &h.server_id))
     } else {
         dir
+    }
+}
+
+/// Подпапка сервера: имя для человека и начало id. Без id два сервера «prod» - или имена,
+/// которые после замены символов сводятся к одному, - писали бы в одну папку, и файлы
+/// одного перезаписывали бы файлы другого.
+fn server_folder(name: &str, id: &str) -> String {
+    let tag: String = id.chars().filter(|c| c.is_ascii_alphanumeric()).take(8).collect();
+    if tag.is_empty() {
+        safe_dir_name(name)
+    } else {
+        format!("{} [{tag}]", safe_dir_name(name))
     }
 }
 
@@ -787,6 +804,7 @@ async fn run_server(ctx: &RunCtx<'_>, server_id: String) -> Value {
     let (kind, _) = platform::of_session(&key, &handle).await;
     let host = Host {
         handle,
+        server_id: server_id.clone(),
         fs: Arc::new(Mutex::new(SessionFs::new())),
         kind,
         server_name: name.clone(),
@@ -1030,6 +1048,16 @@ mod tests {
         assert_eq!(safe_dir_name("prod/db: основной"), "prod_db_ основной");
         assert_eq!(safe_dir_name("../.."), "_", "точки по краям снимаются - выше папки не уйти");
         assert!(safe_container("web;rm").is_err());
+    }
+
+    #[test]
+    fn одноимённые_серверы_качают_в_разные_папки() {
+        let a = server_folder("prod", "1111aaaa-0000-0000-0000-000000000000");
+        let b = server_folder("prod", "2222bbbb-0000-0000-0000-000000000000");
+        assert_ne!(a, b, "одинаковое имя - разные папки");
+        assert_eq!(a, "prod [1111aaaa]");
+        // «a/b» и «a?b» после замены символов совпадают по имени, но не по папке.
+        assert_ne!(server_folder("a/b", "id-one"), server_folder("a?b", "id-two"));
     }
 
     #[test]

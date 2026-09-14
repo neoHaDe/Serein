@@ -1284,6 +1284,11 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
               >
                 ✕
               </button>
+              {/* Текст ошибки - на виду, а не только в подсказке: при конфликте в нём путь к
+                  сохранённой правке, и искать его под значком никто не станет. */}
+              {(ed.state === 'error' || ed.state === 'conflict') && ed.error && (
+                <div className="sftp-edit-error">{ed.error}</div>
+              )}
             </div>
           ))}
         </div>
