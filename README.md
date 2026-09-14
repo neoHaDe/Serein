@@ -132,8 +132,9 @@ figures are public measurements normalised to the same metric; size is the 1.4.0
 - Dual-pane (local ↔ remote); **detach SFTP** into its own OS window
 - **Ctrl+wheel** (and Ctrl+/−/0) zooms text in SFTP and logs
 - **Compare a folder with the server (v1.4)** in dual-pane mode: new, changed, newer on the
-  server, only on the server. "Upload N" sends only new and changed files; nothing is deleted on
-  the server
+  server, only on the server, and "can't tell" (same size, no modification time to check).
+  "Upload N" sends only new and changed files, re-checks the server first and stops if a file
+  changed there since the comparison; nothing is deleted on the server
 - **Built-in editor** (CodeMirror 6) - atomic save back to the server
 - **External editor** - OS default app, re-upload on save
 - **SCP fallback (v1.2.7)** - servers with no `Subsystem sftp` (old switches, stripped images)

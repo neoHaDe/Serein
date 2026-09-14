@@ -6,7 +6,7 @@
  * и покрыто тестами, потому что ошибка здесь - это залитый не туда файл.
  */
 
-export type SyncKind = 'changed' | 'new' | 'remoteNewer' | 'remoteOnly' | 'same'
+export type SyncKind = 'changed' | 'new' | 'remoteNewer' | 'unsure' | 'remoteOnly' | 'same'
 
 export interface SyncItem {
   rel: string
@@ -20,7 +20,7 @@ export interface SyncItem {
 export interface SyncPlan {
   localRoot: string
   remoteRoot: string
-  /** Знаем ли время правки на сервере. По SCP - нет, сравнение только по размеру. */
+  /** Знаем ли время правки на сервере. По SCP - нет: одинаковый размер тогда - «не определить». */
   timeKnown: boolean
   items: SyncItem[]
   /** Каталоги, которые на сервере уже есть, - путями от корня сравнения. */
@@ -32,26 +32,50 @@ export const KIND_LABEL: Record<SyncKind, string> = {
   changed: 'изменён',
   new: 'новый',
   remoteNewer: 'на сервере новее',
+  unsure: 'не определить',
   remoteOnly: 'только на сервере',
   same: 'совпадает'
 }
 
-export const KIND_ORDER: SyncKind[] = ['changed', 'new', 'remoteNewer', 'remoteOnly', 'same']
+export const KIND_ORDER: SyncKind[] = ['changed', 'new', 'remoteNewer', 'unsure', 'remoteOnly', 'same']
 
 export function countKinds(items: SyncItem[]): Record<SyncKind, number> {
-  const out: Record<SyncKind, number> = { changed: 0, new: 0, remoteNewer: 0, remoteOnly: 0, same: 0 }
+  const out: Record<SyncKind, number> = { changed: 0, new: 0, remoteNewer: 0, unsure: 0, remoteOnly: 0, same: 0 }
   for (const it of items) out[it.kind]++
   return out
 }
 
 /**
  * Что заливать. «На сервере новее» - только по явному согласию: там правили позже, и
- * заливка затёрла бы чужую правку.
+ * заливка затёрла бы чужую правку. «Не определить» - тоже: размер тот же, а одинаково ли
+ * содержимое, не проверить.
  */
-export function toUpload(items: SyncItem[], includeRemoteNewer: boolean): SyncItem[] {
+export function toUpload(items: SyncItem[], includeRemoteNewer: boolean, includeUnsure = false): SyncItem[] {
   return items.filter(
-    (it) => it.kind === 'changed' || it.kind === 'new' || (includeRemoteNewer && it.kind === 'remoteNewer')
+    (it) =>
+      it.kind === 'changed' ||
+      it.kind === 'new' ||
+      (includeRemoteNewer && it.kind === 'remoteNewer') ||
+      (includeUnsure && it.kind === 'unsure')
   )
+}
+
+/**
+ * Что из заливаемого изменилось на сервере после сравнения: в свежем сравнении у файла
+ * другое время правки или размер на сервере, он там появился - или своего файла больше нет.
+ * По старому плану такое не заливаем: согласие было на другую версию.
+ */
+export function changedSincePlan(upload: SyncItem[], fresh: SyncPlan): string[] {
+  const now = new Map(fresh.items.map((it) => [it.rel, it]))
+  return upload
+    .filter((it) => {
+      const cur = now.get(it.rel)
+      if (!cur) return true
+      return (
+        (cur.remoteSize ?? null) !== (it.remoteSize ?? null) || (cur.remoteMtime ?? null) !== (it.remoteMtime ?? null)
+      )
+    })
+    .map((it) => it.rel)
 }
 
 export function joinRemoteRel(root: string, rel: string): string {
@@ -83,8 +107,8 @@ export interface UploadSteps {
  * Каталоги создаются заранее и по одному уровню: заливка по SCP сама каталогов не создаёт,
  * а файл в несуществующий каталог просто не ляжет.
  */
-export function uploadSteps(plan: SyncPlan, includeRemoteNewer: boolean): UploadSteps {
-  const files = toUpload(plan.items, includeRemoteNewer)
+export function uploadSteps(plan: SyncPlan, includeRemoteNewer: boolean, includeUnsure = false): UploadSteps {
+  const files = toUpload(plan.items, includeRemoteNewer, includeUnsure)
   const have = new Set(plan.remoteDirs)
   const need = new Set<string>()
   for (const f of files) {

@@ -464,6 +464,44 @@ async fn put_all(h: &Host, files: &[(String, String, u64)]) -> Result<u64, Strin
     Ok(bytes)
 }
 
+/// Файл синхронизации: свой путь, путь на сервере, размер и время правки на сервере по
+/// сравнению (`None` - файла там не было).
+type SyncFile = (String, String, u64, Option<u64>);
+
+/// Заливка по плану сравнения. Перед каждым файлом - не изменился ли он на сервере после
+/// сравнения: такой пропускаем и называем, а не затираем. Строгой гарантии нет - между
+/// проверкой и записью остаются доли секунды, - но окно больше не длится весь обход.
+async fn put_sync(h: &Host, files: &[SyncFile]) -> Result<(u64, Vec<String>), String> {
+    ensure_remote_parents(h, files.iter().map(|(_, rp, ..)| rp.as_str())).await;
+    let mut bytes = 0;
+    let mut moved = Vec::new();
+    for (lp, rp, size, seen) in files {
+        if h.stopped() {
+            return Err("задача остановлена".into());
+        }
+        let now = remote_fs::remote_mtime(&h.fs, &h.handle, rp).await;
+        if crate::foldersync::moved_since_plan(*seen, &now) {
+            moved.push(rp.clone());
+            continue;
+        }
+        remote_fs::put_file(&h.fs, &h.handle, lp, rp)
+            .await
+            .map_err(|e| format!("{rp}: {e}"))?;
+        bytes += size;
+    }
+    Ok((bytes, moved))
+}
+
+/// Первые несколько имён и сколько ещё: сообщение шага не разрастается на тысячу строк.
+fn some_names(names: &[String]) -> String {
+    let head = names.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+    if names.len() > 5 {
+        format!("{head} и ещё {}", names.len() - 5)
+    } else {
+        head
+    }
+}
+
 /// Свои файлы для заливки: (свой путь, путь на сервере, размер).
 async fn local_files(h: &Host, local: &str, remote_dir: &str) -> Result<Vec<(String, String, u64)>, String> {
     let local = local.replace('\\', "/");
@@ -538,7 +576,7 @@ async fn sync_targets(
     local: &str,
     remote: &str,
     include_remote_newer: bool,
-) -> Result<(Vec<(String, String, u64)>, Value), String> {
+) -> Result<(Vec<SyncFile>, Value), String> {
     let plan = crate::foldersync::compare(&h.fs, &h.handle, local, remote, h.alive.clone()).await?;
     let root = plan["remoteRoot"].as_str().unwrap_or(remote).to_owned();
     let local_root = local.trim_end_matches(['/', '\\']).replace('\\', "/");
@@ -553,7 +591,8 @@ async fn sync_targets(
         .filter_map(|it| {
             let rel = it["rel"].as_str()?;
             let size = it["localSize"].as_u64().unwrap_or(0);
-            Some((format!("{local_root}/{rel}"), crate::sftp::join_remote(&root, rel), size))
+            let seen = it["remoteMtime"].as_u64();
+            Some((format!("{local_root}/{rel}"), crate::sftp::join_remote(&root, rel), size, seen))
         })
         .collect();
     Ok((files, plan))
@@ -585,14 +624,21 @@ async fn run_action(h: &Host, action: &Action, limit: Duration) -> Result<String
         }
         Action::Sync { local_path, remote_path, include_remote_newer } => {
             let (files, plan) = sync_targets(h, local_path, remote_path, *include_remote_newer).await?;
-            let bytes = put_all(h, &files).await?;
-            Ok(format!(
-                "залито файлов: {} ({}); совпадает: {}, на сервере новее: {}",
-                files.len(),
+            let (bytes, moved) = put_sync(h, &files).await?;
+            let msg = format!(
+                "залито файлов: {} ({}); совпадает: {}, на сервере новее: {}, не определить: {}",
+                files.len() - moved.len(),
                 fmt_bytes(bytes),
                 count_kind(&plan, "same"),
-                count_kind(&plan, "remoteNewer")
-            ))
+                count_kind(&plan, "remoteNewer"),
+                count_kind(&plan, "unsure")
+            );
+            if moved.is_empty() {
+                Ok(msg)
+            } else {
+                // Шаг не удался: часть файлов сознательно не залита.
+                Err(format!("{msg}; не залито - изменились на сервере после сравнения: {}", some_names(&moved)))
+            }
         }
         Action::Download { remote_path, local_path } => {
             let base = download_base(h, local_path);
@@ -677,9 +723,9 @@ async fn plan_action(h: &Host, action: &Action) -> Result<String, String> {
         }
         Action::Sync { local_path, remote_path, include_remote_newer } => {
             let (files, plan) = sync_targets(h, local_path, remote_path, *include_remote_newer).await?;
-            let bytes: u64 = files.iter().map(|(.., s)| s).sum();
+            let bytes: u64 = files.iter().map(|(_, _, s, _)| s).sum();
             Ok(format!(
-                "будет залито файлов: {} ({}): изменено {}, новых {}{}; совпадает {}",
+                "будет залито файлов: {} ({}): изменено {}, новых {}{}; совпадает {}, не определить {}",
                 files.len(),
                 fmt_bytes(bytes),
                 count_kind(&plan, "changed"),
@@ -689,7 +735,8 @@ async fn plan_action(h: &Host, action: &Action) -> Result<String, String> {
                 } else {
                     String::new()
                 },
-                count_kind(&plan, "same")
+                count_kind(&plan, "same"),
+                count_kind(&plan, "unsure")
             ))
         }
         Action::Download { remote_path, local_path } => {

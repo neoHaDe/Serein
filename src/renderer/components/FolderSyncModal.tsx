@@ -3,7 +3,9 @@ import { errText } from '../errText'
 import {
   KIND_LABEL,
   KIND_ORDER,
+  changedSincePlan,
   countKinds,
+  toUpload,
   uploadSteps,
   type SyncItem,
   type SyncPlan
@@ -45,6 +47,7 @@ export function FolderSyncModal({ sessionId, localDir, remoteDir, onClose }: Pro
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [includeRemoteNewer, setIncludeRemoteNewer] = useState(false)
+  const [includeUnsure, setIncludeUnsure] = useState(false)
   const [showSame, setShowSame] = useState(false)
   const [starting, setStarting] = useState(false)
 
@@ -68,7 +71,7 @@ export function FolderSyncModal({ sessionId, localDir, remoteDir, onClose }: Pro
   }, [sessionId, localDir, remoteDir])
 
   const counts = plan ? countKinds(plan.items) : null
-  const steps = plan ? uploadSteps(plan, includeRemoteNewer) : null
+  const steps = plan ? uploadSteps(plan, includeRemoteNewer, includeUnsure) : null
   const visible = useMemo(
     () => (plan ? plan.items.filter((it) => showSame || it.kind !== 'same') : []),
     [plan, showSame]
@@ -80,6 +83,21 @@ export function FolderSyncModal({ sessionId, localDir, remoteDir, onClose }: Pro
     setStarting(true)
     setError('')
     try {
+      // С момента сравнения могли пройти минуты, а согласие было на те версии файлов на
+      // сервере. Сравниваем заново и заливаем, только если заливаемое там не менялось. Строгой
+      // гарантии SFTP не даёт - между проверкой и записью остаются секунды, - но окно больше
+      // не длится, пока открыто это окно.
+      const fresh = await window.api.sftp.compare(sessionId, localDir, remoteDir)
+      const moved = changedSincePlan(toUpload(plan.items, includeRemoteNewer, includeUnsure), fresh)
+      if (moved.length > 0) {
+        setPlan(fresh)
+        setError(
+          `После сравнения на сервере изменились файлы (${moved.length}): ${moved.slice(0, 5).join(', ')}` +
+            `${moved.length > 5 ? '…' : ''}. Сравнение обновлено - проверьте и залейте снова.`
+        )
+        setStarting(false)
+        return
+      }
       for (const dir of steps.mkdirs) {
         try {
           await window.api.sftp.mkdir(sessionId, dir)
@@ -119,8 +137,8 @@ export function FolderSyncModal({ sessionId, localDir, remoteDir, onClose }: Pro
           <>
             {!plan.timeKnown && (
               <div className="hint">
-                Файлы на этом сервере идут по SCP, а там время правки не узнать: сравнение только по размеру.
-                Файл, изменённый без смены размера, будет считаться совпадающим.
+                Файлы на этом сервере идут по SCP, а там время правки не узнать. Файлы одного размера помечены
+                «не определить»: одинаковое содержимое этим не доказано.
               </div>
             )}
             <div className="sync-counts">
@@ -168,6 +186,12 @@ export function FolderSyncModal({ sessionId, localDir, remoteDir, onClose }: Pro
                     onChange={(e) => setIncludeRemoteNewer(e.target.checked)}
                   />
                   Заливать и те, что на сервере новее ({counts.remoteNewer}) - правка на сервере будет затёрта
+                </label>
+              )}
+              {counts.unsure > 0 && (
+                <label className="checkbox-row">
+                  <input type="checkbox" checked={includeUnsure} onChange={(e) => setIncludeUnsure(e.target.checked)} />
+                  Заливать и те, что не определить ({counts.unsure}) - размер тот же, различие не проверить
                 </label>
               )}
             </div>

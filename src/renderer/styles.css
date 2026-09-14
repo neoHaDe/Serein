@@ -5422,7 +5422,9 @@ button.secondary:hover {
   color: var(--green);
 }
 .sync-count.remoteNewer,
-.sync-row.remoteNewer .sync-kind {
+.sync-count.unsure,
+.sync-row.remoteNewer .sync-kind,
+.sync-row.unsure .sync-kind {
   color: var(--warn);
 }
 .sync-list {

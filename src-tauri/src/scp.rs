@@ -13,6 +13,11 @@ use tauri::AppHandle;
 const SCP_CHUNK: usize = 64 * 1024;
 const MAX_PREVIEW: u64 = 8 * 1024 * 1024;
 const MAX_EDIT_SIZE: u64 = 5 * 1024 * 1024;
+/// Предел служебной строки. Заголовок файла - режим, размер и имя, а имя длиннее 255 байт
+/// файловые системы не держат.
+const MAX_SCP_LINE: usize = 4096;
+/// Как часто сообщать о ходе передачи.
+const PROGRESS_STEP: u64 = 1024 * 1024;
 
 pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\"'\"'"))
@@ -30,13 +35,14 @@ impl ScpIo {
         Ok(Self { channel, buf: Vec::new() })
     }
 
-    async fn read_byte(&mut self) -> Result<u8, String> {
+    /// Дочитывает в буфер следующий пакет канала.
+    async fn fill(&mut self) -> Result<(), String> {
         loop {
-            if !self.buf.is_empty() {
-                return Ok(self.buf.remove(0));
-            }
             match self.channel.wait().await {
-                Some(ChannelMsg::Data { data }) => self.buf.extend_from_slice(&data),
+                Some(ChannelMsg::Data { data }) => {
+                    self.buf.extend_from_slice(&data);
+                    return Ok(());
+                }
                 Some(ChannelMsg::ExitStatus { exit_status }) => {
                     return Err(format!("SCP: канал закрыт (код {exit_status})"));
                 }
@@ -46,6 +52,13 @@ impl ScpIo {
                 _ => {}
             }
         }
+    }
+
+    async fn read_byte(&mut self) -> Result<u8, String> {
+        while self.buf.is_empty() {
+            self.fill().await?;
+        }
+        Ok(self.buf.remove(0))
     }
 
     /// Ответ удалённого scp: 0 - принято, 1 - предупреждение, 2 - фатальная ошибка.
@@ -80,40 +93,12 @@ impl ScpIo {
                 self.buf.drain(..=i);
                 return Ok(line);
             }
-            match self.channel.wait().await {
-                Some(ChannelMsg::Data { data }) => self.buf.extend_from_slice(&data),
-                Some(ChannelMsg::ExitStatus { exit_status }) => {
-                    return Err(format!("SCP: канал закрыт (код {exit_status})"));
-                }
-                Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
-                    return Err("SCP: неожиданный конец канала".into());
-                }
-                _ => {}
+            // Сервер, не присылающий перевода строки, иначе растил бы буфер до конца памяти.
+            if self.buf.len() > MAX_SCP_LINE {
+                return Err("SCP: служебная строка без конца - поток не похож на SCP".into());
             }
+            self.fill().await?;
         }
-    }
-
-    async fn read_exact(&mut self, n: usize) -> Result<Vec<u8>, String> {
-        let mut out = Vec::with_capacity(n);
-        while out.len() < n {
-            if !self.buf.is_empty() {
-                let take = (n - out.len()).min(self.buf.len());
-                out.extend_from_slice(&self.buf[..take]);
-                self.buf.drain(..take);
-                continue;
-            }
-            match self.channel.wait().await {
-                Some(ChannelMsg::Data { data }) => self.buf.extend_from_slice(&data),
-                Some(ChannelMsg::ExitStatus { exit_status }) => {
-                    return Err(format!("SCP: канал закрыт (код {exit_status})"));
-                }
-                Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
-                    return Err("SCP: неожиданный конец канала".into());
-                }
-                _ => {}
-            }
-        }
-        Ok(out)
     }
 
     async fn write_all(&mut self, data: &[u8]) -> Result<(), String> {
@@ -259,33 +244,81 @@ pub async fn list(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, pa
     Ok(json!({ "path": abs, "entries": entries, "backend": "scp" }))
 }
 
-async fn recv_file_bytes(io: &mut ScpIo) -> Result<Vec<u8>, String> {
+/// Заголовок файла `C<режим> <размер> <имя>`: режим и размер.
+///
+/// Размер - недоверенное число с сервера. Память по нему не выделяется, а `limit` отсекает
+/// слишком большой файл ещё до передачи данных.
+fn parse_file_header(line: &str, limit: Option<u64>) -> Result<(u32, u64), String> {
+    if line == "\x04" || line.is_empty() {
+        return Err("SCP: файл не передан".into());
+    }
+    let Some(rest) = line.strip_prefix('C') else {
+        return Err(format!("SCP: ожидали файл, получили «{line}»"));
+    };
+    let mut parts = rest.trim().splitn(3, ' ');
+    let mode = parts
+        .next()
+        .and_then(|m| u32::from_str_radix(m, 8).ok())
+        .unwrap_or(0o644)
+        & 0o7777;
+    let size: u64 = parts
+        .next()
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| format!("SCP: неверный размер в «{line}»"))?;
+    if let Some(limit) = limit.filter(|l| size > *l) {
+        return Err(format!("SCP: файл {size} байт больше предела {limit} байт"));
+    }
+    Ok((mode, size))
+}
+
+/// Принимает один файл в `sink` по мере прихода: в памяти не больше пакета канала, сколько
+/// бы ни весил файл. Отмена проверяется на каждом куске.
+async fn recv_file<W>(
+    io: &mut ScpIo,
+    sink: &mut W,
+    limit: Option<u64>,
+    live: &(dyn Fn() -> bool + Send + Sync),
+    progress: &mut (dyn FnMut(u64, u64) + Send),
+) -> Result<u64, String>
+where
+    W: tokio::io::AsyncWrite + Unpin + Send,
+{
+    use tokio::io::AsyncWriteExt as _;
     // В режиме `scp -f` первым говорит клиент: удалённый scp молчит, пока не получит
     // нулевой байт. Лишнее ожидание ответа здесь ставило обе стороны ждать друг друга,
     // и скачивание висело до конца сессии - молча, без ошибки.
     io.send_ack().await?;
     let line = io.read_line().await?;
-    if line == "\x04" || line.is_empty() {
-        return Err("SCP: файл не передан".into());
-    }
-    if !line.starts_with('C') {
-        return Err(format!("SCP: ожидали файл, получили «{line}»"));
-    }
-    let rest = line[1..].trim();
-    let mut parts = rest.splitn(3, ' ');
-    let _mode = parts.next().unwrap_or("");
-    let size: usize = parts
-        .next()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| format!("SCP: неверный размер в «{line}»"))?;
+    let (_mode, size) = parse_file_header(&line, limit)?;
     io.send_ack().await?;
-    let data = io.read_exact(size).await?;
-    let pad = io.read_byte().await?;
-    if pad != 0 {
+    let mut done = 0u64;
+    while done < size {
+        if !live() {
+            return Err(CANCELLED.into());
+        }
+        if io.buf.is_empty() {
+            io.fill().await?;
+            continue;
+        }
+        let take = usize::try_from(size - done).map_or(io.buf.len(), |left| left.min(io.buf.len()));
+        sink.write_all(&io.buf[..take]).await.map_err(|e| e.to_string())?;
+        io.buf.drain(..take);
+        done += take as u64;
+        progress(done, size);
+    }
+    sink.flush().await.map_err(|e| e.to_string())?;
+    if io.read_byte().await? != 0 {
         return Err("SCP: неверный терминатор данных".into());
     }
     io.send_ack().await?;
-    Ok(data)
+    Ok(size)
+}
+
+/// Небольшой файл целиком в память - для просмотра и редактора, с их пределом.
+async fn recv_small(io: &mut ScpIo, limit: u64) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    recv_file(io, &mut out, Some(limit), &|| true, &mut |_: u64, _: u64| {}).await?;
+    Ok(out)
 }
 
 pub async fn download_file(
@@ -293,44 +326,180 @@ pub async fn download_file(
     remote: &str,
     local: &str,
 ) -> Result<(), String> {
+    download_file_ctl(handle, remote, local, &|| true, &mut |_: u64, _: u64| {})
+        .await
+        .map(|_| ())
+}
+
+/// Скачивание с отменой и ходом передачи: файл идёт на диск кусками, мимо памяти.
+pub async fn download_file_ctl(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    remote: &str,
+    local: &str,
+    live: &(dyn Fn() -> bool + Send + Sync),
+    progress: &mut (dyn FnMut(u64, u64) + Send),
+) -> Result<u64, String> {
     check_remote_path(remote)?;
     let cmd = format!("scp -f -- {}", shell_quote(remote));
     let mut io = ScpIo::open(handle, &cmd).await?;
-    let data = recv_file_bytes(&mut io).await?;
     if let Some(parent) = Path::new(local).parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
     }
     // Готовое имя появляется одним переименованием: оборванная запись не должна оставить
     // обрубок под именем целого файла.
     let part = crate::sftp::part_path(local);
-    let mut file = crate::sftp::create_part(&part).await?;
-    {
-        use tokio::io::AsyncWriteExt as _;
-        let written = match file.write_all(&data).await {
-            Ok(()) => file.flush().await,
-            Err(e) => Err(e),
-        };
-        drop(file);
-        if let Err(e) = written {
+    let mut sink = tokio::io::BufWriter::with_capacity(1024 * 1024, crate::sftp::create_part(&part).await?);
+    let got = recv_file(&mut io, &mut sink, None, live, progress).await;
+    drop(sink);
+    let size = match got {
+        Ok(n) => n,
+        Err(e) => {
             let _ = tokio::fs::remove_file(&part).await;
-            return Err(e.to_string());
+            return Err(e);
         }
-    }
+    };
     tokio::fs::rename(&part, local).await.map_err(|e| {
         let _ = std::fs::remove_file(&part);
         e.to_string()
-    })
+    })?;
+    Ok(size)
 }
 
-async fn send_file_bytes(io: &mut ScpIo, name: &str, data: &[u8], mode: u32) -> Result<(), String> {
+/// Отдаёт один файл ровно в `size` байт, кусками. Укоротившийся во время заливки файл -
+/// ошибка: сервер ждёт объявленный размер, а дописать недостающее нечем.
+async fn send_file<R>(
+    io: &mut ScpIo,
+    name: &str,
+    src: &mut R,
+    size: u64,
+    mode: u32,
+    live: &(dyn Fn() -> bool + Send + Sync),
+    progress: &mut (dyn FnMut(u64, u64) + Send),
+) -> Result<(), String>
+where
+    R: tokio::io::AsyncRead + Unpin + Send,
+{
+    use tokio::io::AsyncReadExt as _;
     io.read_ack().await?;
-    let header = format!("C{:04o} {} {}\n", mode & 0o777, data.len(), name);
+    let header = format!("C{:04o} {} {}\n", mode & 0o777, size, name);
     io.write_all(header.as_bytes()).await?;
     io.read_ack().await?;
-    io.write_all(data).await?;
+    let mut buf = vec![0u8; SCP_CHUNK];
+    let mut done = 0u64;
+    while done < size {
+        if !live() {
+            return Err(CANCELLED.into());
+        }
+        let want = usize::try_from(size - done).map_or(buf.len(), |left| left.min(buf.len()));
+        let n = src.read(&mut buf[..want]).await.map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Err("файл укоротился во время заливки".into());
+        }
+        io.channel.data(&buf[..n]).await.map_err(|e| e.to_string())?;
+        done += n as u64;
+        progress(done, size);
+    }
     io.channel.data(&[0u8][..]).await.map_err(|e| e.to_string())?;
     io.read_ack().await?;
     Ok(())
+}
+
+fn local_mode(meta: &std::fs::Metadata) -> u32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o777
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        0o644
+    }
+}
+
+/// Каталог и имя файла на сервере.
+fn split_remote(remote: &str) -> (String, String) {
+    let parent = Path::new(remote)
+        .parent()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| "/".into());
+    let name = Path::new(remote)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "file".into());
+    (parent, name)
+}
+
+/// Временное имя на сервере рядом с целевым файлом. Своё на каждую заливку; длинное имя
+/// укорачивается, чтобы временное уложилось в 255 байт.
+fn remote_part_name(name: &str) -> String {
+    let mut end = name.len().min(200);
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    let tag: String = uuid::Uuid::new_v4().simple().to_string().chars().take(8).collect();
+    format!(".{}.serein-{tag}.part", &name[..end])
+}
+
+/// Команда, которая ставит залитый временный файл на место целевого.
+///
+/// Замена - одним `mv`, поэтому оборванная раньше заливка оставляет оригинал целым. Права
+/// существующего файла сохраняются, как было при записи прямо в него; время правки
+/// переносится со своего файла. Ссылка разрешается до замены, иначе `mv` заменил бы саму
+/// ссылку обычным файлом, а каталог с тем же именем не трогаем: `mv` молча положил бы файл
+/// внутрь него.
+fn finish_upload_script(tmp: &str, remote: &str, mtime_secs: Option<u64>) -> String {
+    let t = shell_quote(tmp);
+    let touch = mtime_secs
+        .map(|s| format!("touch -m -d @{s} -- {t} 2>/dev/null; "))
+        .unwrap_or_default();
+    format!(
+        "r={r}; \
+         if [ -L \"$r\" ] && ! r=$(readlink -f -- \"$r\"); then echo 'ссылку на сервере не разрешить' >&2; exit 1; fi; \
+         if [ -d \"$r\" ]; then echo 'на сервере с этим именем каталог' >&2; exit 1; fi; \
+         if [ -e \"$r\" ]; then m=$(stat -c %a -- \"$r\" 2>/dev/null || stat -f %Lp \"$r\" 2>/dev/null) && chmod \"$m\" {t} 2>/dev/null; fi; \
+         {touch}mv -f -- {t} \"$r\"",
+        r = shell_quote(remote),
+    )
+}
+
+/// Заливка во временный файл рядом с целевым и замена одним `mv`.
+///
+/// Раньше `scp -t` писал прямо в целевой файл: обрыв посреди передачи оставлял на сервере
+/// половину нового содержимого под именем старого.
+#[allow(clippy::too_many_arguments)]
+async fn put_via_temp<R>(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    remote: &str,
+    src: &mut R,
+    size: u64,
+    mode: u32,
+    mtime_secs: Option<u64>,
+    live: &(dyn Fn() -> bool + Send + Sync),
+    progress: &mut (dyn FnMut(u64, u64) + Send),
+) -> Result<(), String>
+where
+    R: tokio::io::AsyncRead + Unpin + Send,
+{
+    check_remote_path(remote)?;
+    let (parent, name) = split_remote(remote);
+    let tmp_name = remote_part_name(&name);
+    let tmp = join_remote(&parent, &tmp_name);
+    let sent = async {
+        let mut io = ScpIo::open(handle, &format!("scp -t -- {}", shell_quote(&parent))).await?;
+        send_file(&mut io, &tmp_name, src, size, mode, live, progress).await
+    }
+    .await;
+    let placed = match sent {
+        Ok(()) => run_sh(handle, &finish_upload_script(&tmp, remote, mtime_secs)).await,
+        Err(e) => Err(e),
+    };
+    if placed.is_err() {
+        // Прежний файл не тронут - убираем только свой временный.
+        let _ = run_sh(handle, &format!("rm -f -- {}", shell_quote(&tmp))).await;
+    }
+    placed
 }
 
 pub async fn put_file(
@@ -338,36 +507,33 @@ pub async fn put_file(
     local: &str,
     remote: &str,
 ) -> Result<(), String> {
-    check_remote_path(remote)?;
-    let data = tokio::fs::read(local).await.map_err(|e| e.to_string())?;
-    let mode = tokio::fs::metadata(local)
+    put_file_ctl(handle, local, remote, &|| true, &mut |_: u64, _: u64| {})
         .await
+        .map(|_| ())
+}
+
+/// Заливка своего файла с отменой и ходом передачи. Файл читается кусками, а не целиком.
+pub async fn put_file_ctl(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    local: &str,
+    remote: &str,
+    live: &(dyn Fn() -> bool + Send + Sync),
+    progress: &mut (dyn FnMut(u64, u64) + Send),
+) -> Result<u64, String> {
+    let file = tokio::fs::File::open(local).await.map_err(|e| e.to_string())?;
+    let meta = file.metadata().await.map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err(format!("«{local}» - не файл"));
+    }
+    let size = meta.len();
+    let mtime = meta
+        .modified()
         .ok()
-        .map(|m| {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                m.permissions().mode() & 0o777
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = m;
-                0o644u32
-            }
-        })
-        .unwrap_or(0o644);
-    let parent = Path::new(remote)
-        .parent()
-        .map(|p| p.to_string_lossy().replace('\\', "/"))
-        .filter(|p| !p.is_empty())
-        .unwrap_or_else(|| "/".into());
-    let fname = Path::new(remote)
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "file".into());
-    let cmd = format!("scp -t -- {}", shell_quote(&parent));
-    let mut io = ScpIo::open(handle, &cmd).await?;
-    send_file_bytes(&mut io, &fname, &data, mode).await
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs());
+    let mut src = tokio::io::BufReader::with_capacity(SCP_CHUNK, file);
+    put_via_temp(handle, remote, &mut src, size, local_mode(&meta), mtime, live, progress).await?;
+    Ok(size)
 }
 
 pub async fn mkdir(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, path: &str) -> Result<(), String> {
@@ -420,7 +586,7 @@ pub async fn preview(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
     }
     let cmd = format!("scp -f -- {}", shell_quote(remote));
     let mut io = ScpIo::open(handle, &cmd).await?;
-    let buf = recv_file_bytes(&mut io).await?;
+    let buf = recv_small(&mut io, MAX_PREVIEW).await?;
     Ok(json!({
         "kind": "bytes",
         "size": size,
@@ -440,7 +606,7 @@ pub async fn read_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>
     }
     let cmd = format!("scp -f -- {}", shell_quote(remote));
     let mut io = ScpIo::open(handle, &cmd).await?;
-    let buf = recv_file_bytes(&mut io).await?;
+    let buf = recv_small(&mut io, MAX_EDIT_SIZE).await?;
     if buf.iter().take(8192).any(|b| *b == 0) {
         return Ok(json!({ "content": "", "eol": "lf", "mode": mode, "mtime": mtime, "binary": true }));
     }
@@ -465,20 +631,10 @@ pub async fn write_file(
     } else {
         content.to_string()
     };
-    let dir = Path::new(remote)
-        .parent()
-        .map(|p| p.to_string_lossy().replace('\\', "/"))
-        .unwrap_or_else(|| "/".into());
-    let base = Path::new(remote)
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "file".into());
-    let tmp_name = format!(".{base}.terminal-tmp");
-    let tmp = join_remote(&dir, &tmp_name);
-    let cmd = format!("scp -t -- {}", shell_quote(&dir));
-    let mut io = ScpIo::open(handle, &cmd).await?;
-    send_file_bytes(&mut io, &tmp_name, data.as_bytes(), mode).await?;
-    rename(handle, &tmp, remote).await?;
+    // Через временный файл и одну замену: оборванная запись не оставит полфайла, а права
+    // правленого файла сохраняются.
+    let mut src = data.as_bytes();
+    put_via_temp(handle, remote, &mut src, data.len() as u64, mode, None, &|| true, &mut |_: u64, _: u64| {}).await?;
     Ok(json!({ "ok": true, "mtime": base_mtime }))
 }
 
@@ -538,14 +694,24 @@ pub async fn upload_path(
             continue;
         };
         emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "active", None);
-        let result = put_file(handle.as_ref(), &lp, &rp).await;
+        let result = {
+            let live = || ctrl.is_live() && alive.load(Ordering::Relaxed);
+            let mut last = 0u64;
+            let mut progress = |done: u64, total: u64| {
+                if done - last >= PROGRESS_STEP {
+                    last = done;
+                    emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, total, done, "active", None);
+                }
+            };
+            put_file_ctl(handle.as_ref(), &lp, &rp, &live, &mut progress).await
+        };
         hub.finish(&id);
         if !ctrl.is_live() {
             emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "canceled", None);
             return Err(CANCELLED.into());
         }
         match result {
-            Ok(()) => emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, size, "done", None),
+            Ok(_) => emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, size, "done", None),
             Err(e) if e == CANCELLED => {
                 emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "canceled", None);
                 return Err(e);
@@ -740,14 +906,24 @@ pub async fn download_path(
             continue;
         };
         emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "active", None);
-        let result = download_file(handle.as_ref(), &rp, &lp).await;
+        let result = {
+            let live = || ctrl.is_live() && alive.load(Ordering::Relaxed);
+            let mut last = 0u64;
+            let mut progress = |done: u64, total: u64| {
+                if done - last >= PROGRESS_STEP {
+                    last = done;
+                    emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, total, done, "active", None);
+                }
+            };
+            download_file_ctl(handle.as_ref(), &rp, &lp, &live, &mut progress).await
+        };
         hub.finish(&id);
         if !ctrl.is_live() {
             emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "canceled", None);
             return Err(CANCELLED.into());
         }
         match result {
-            Ok(()) => emit_transfer(
+            Ok(n) => emit_transfer(
                 &app,
                 &id,
                 session_id,
@@ -755,8 +931,8 @@ pub async fn download_path(
                 &lp,
                 &rp,
                 &rel,
-                size,
-                size.max(1),
+                n,
+                n.max(1),
                 "done",
                 None,
             ),
@@ -794,5 +970,35 @@ mod tests {
         assert_eq!(l.0, 'l');
         assert_eq!(l.4, "link");
         assert_eq!(l.5.as_deref(), Some("/etc"));
+    }
+
+    #[test]
+    fn заголовок_scp_с_недопустимым_размером_отвергается_до_приёма() {
+        assert_eq!(parse_file_header("C0644 12 a.txt", None).unwrap(), (0o644, 12));
+        let big = parse_file_header("C0644 18446744073709551615 a", Some(MAX_PREVIEW)).unwrap_err();
+        assert!(big.contains("больше предела"), "{big}");
+        assert!(parse_file_header("C0644 18446744073709551616 a", None).is_err(), "за пределами u64");
+        assert!(parse_file_header("C0644 -1 a", None).is_err());
+        assert!(parse_file_header("D0755 0 dir", None).is_err());
+        assert_eq!(parse_file_header("\x04", None).unwrap_err(), "SCP: файл не передан");
+    }
+
+    #[test]
+    fn временное_имя_на_сервере_своё_и_укладывается_в_предел_имени() {
+        let a = remote_part_name("отчёт.txt");
+        assert_ne!(a, remote_part_name("отчёт.txt"));
+        assert!(a.starts_with(".отчёт.txt.serein-") && a.ends_with(".part"), "{a}");
+        assert!(remote_part_name(&"я".repeat(200)).len() <= 255);
+        assert!(remote_part_name(&"ab".repeat(150)).len() <= 255);
+    }
+
+    #[test]
+    fn замена_на_сервере_не_кладёт_файл_в_каталог_и_экранирует_пути() {
+        let s = finish_upload_script("/srv/.a'b.serein-1.part", "/srv/a'b", Some(1_700_000_000));
+        assert!(s.starts_with(&format!("r={};", shell_quote("/srv/a'b"))), "{s}");
+        assert!(s.contains("if [ -d \"$r\" ]"), "{s}");
+        assert!(s.contains("touch -m -d @1700000000"), "{s}");
+        assert!(s.ends_with(&format!("mv -f -- {} \"$r\"", shell_quote("/srv/.a'b.serein-1.part"))), "{s}");
+        assert!(!finish_upload_script("/t", "/r", None).contains("touch"));
     }
 }

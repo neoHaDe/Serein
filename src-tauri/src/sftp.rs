@@ -1082,7 +1082,21 @@ async fn copy_local_to_remote_inner(
     }
     rf.flush().await.ok();
     rf.shutdown().await.ok();
+    // Время правки - как у своего файла. Иначе на сервере стояло бы время заливки, и
+    // сравнение папок сочло бы файл правленым на сервере позже. Не вышло - файл всё равно
+    // залит, а сравнение честно покажет его «на сервере новее».
+    if let Some(t) = file_mtime_secs(&lf).await {
+        let mut attrs = FileAttributes::empty();
+        attrs.atime = Some(t);
+        attrs.mtime = Some(t);
+        let _ = sftp.set_metadata(remote, attrs).await;
+    }
     Ok(transferred)
+}
+
+async fn file_mtime_secs(f: &tokio::fs::File) -> Option<u32> {
+    let t = f.metadata().await.ok()?.modified().ok()?;
+    u32::try_from(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs()).ok()
 }
 
 /// Для бенча: те же пути, что у UI.

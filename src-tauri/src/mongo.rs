@@ -174,7 +174,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
         };
         let r = self.command(source, start).await?;
         let conversation = r.get("conversationId").cloned().unwrap_or(Bson::Int32(1));
-        let (last, server_signature) = client_final(mech, &secret, &first_bare, &payload(&r)?, &nonce)?;
+        let server_first = payload(&r)?;
+        // Ключ из пароля считается вне асинхронного потока: пока идёт расчёт, поток не
+        // обслуживал бы ни другие подключения, ни окно. Одновременных расчётов немного, а
+        // запрос дороже предела `client_final` отвергает раньше, чем расчёт начнётся.
+        let (last, server_signature) = {
+            let _slot = SCRAM_SLOTS.acquire().await.map_err(|_| "MongoDB: вход прерван".to_owned())?;
+            tokio::task::spawn_blocking(move || client_final(mech, &secret, &first_bare, &server_first, &nonce))
+                .await
+                .map_err(|e| format!("MongoDB: расчёт входа прерван: {e}"))??
+        };
         let r = self
             .command(
                 source,
@@ -668,6 +677,20 @@ fn index_name(keys: &Document) -> String {
 // ---------------------------------------------------------------------------------------
 // SCRAM
 
+/// Сколько итераций хеширования пароля готовы считать.
+///
+/// Число задаёт сервер, и задаёт ещё до того, как докажет, что знает пароль, а считает
+/// машина пользователя. Без предела ответ с `i=4000000000` занял бы поток на много минут,
+/// и прервать уже идущий расчёт нечем. У MongoDB по умолчанию 10 000 (SHA-1) и 15 000
+/// (SHA-256); миллион - с большим запасом на ужесточённые настройки.
+const MAX_SCRAM_ROUNDS: u32 = 1_000_000;
+/// Соль MongoDB - 16 или 28 байт.
+const MAX_SCRAM_SALT: usize = 64;
+/// Первый ответ сервера - его случайное число, соль и итерации: сотни байт.
+const MAX_SERVER_FIRST: usize = 1024;
+/// Одновременных расчётов входа: десяток подключений разом не должен занять все потоки.
+static SCRAM_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Mech {
     Sha1,
@@ -728,9 +751,15 @@ fn client_final(
     nonce: &str,
 ) -> Result<(String, Vec<u8>), String> {
     let bad = || "MongoDB: непонятный ответ сервера при входе".to_owned();
+    if server_first.len() > MAX_SERVER_FIRST {
+        return Err(bad());
+    }
     let field = |name: &str| server_first.split(',').find_map(|p| p.strip_prefix(name));
     let r = field("r=").ok_or_else(bad)?;
     let salt = B64.decode(field("s=").ok_or_else(bad)?).map_err(|_| bad())?;
+    if salt.is_empty() || salt.len() > MAX_SCRAM_SALT {
+        return Err(bad());
+    }
     let rounds: u32 = field("i=").ok_or_else(bad)?.parse().map_err(|_| bad())?;
     // Сервер обязан продолжить наше случайное число своим, иначе это чужой разговор.
     if !r.starts_with(nonce) || r.len() <= nonce.len() {
@@ -741,6 +770,11 @@ fn client_final(
     if rounds < 4096 {
         return Err(format!(
             "MongoDB: сервер просит всего {rounds} итераций хеширования пароля - это небезопасно, вход прерван"
+        ));
+    }
+    if rounds > MAX_SCRAM_ROUNDS {
+        return Err(format!(
+            "MongoDB: сервер просит {rounds} итераций хеширования пароля - больше предела {MAX_SCRAM_ROUNDS}; вход прерван, чтобы расчёт не занял машину надолго"
         ));
     }
     let salted = mech.hi(password, &salt, rounds);
@@ -1722,6 +1756,21 @@ mod tests {
         let weak = client_final(Mech::Sha256, b"p", &bare, "r=abc123,s=AAAA,i=1", "abc").unwrap_err();
         assert!(weak.contains("итераций"), "{weak}");
         assert_eq!(client_first_bare("a=b,c", "n"), "n=a=3Db=2Cc,r=n");
+    }
+
+    #[test]
+    fn scram_отвергает_дорогой_расчёт_до_его_начала() {
+        let bare = client_first_bare("user", "abc");
+        let started = std::time::Instant::now();
+        let huge = client_final(Mech::Sha256, b"p", &bare, "r=abc123,s=AAAA,i=4294967295", "abc").unwrap_err();
+        assert!(huge.contains("предела"), "{huge}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "расчёт не запускался");
+        let salt = B64.encode([7u8; 65]);
+        let fat = format!("r=abc123,s={salt},i=4096");
+        assert!(client_final(Mech::Sha256, b"p", &bare, &fat, "abc").is_err(), "соль больше предела");
+        assert!(client_final(Mech::Sha256, b"p", &bare, "r=abc123,s=,i=4096", "abc").is_err(), "пустая соль");
+        let long = format!("r=abc{},s=AAAA,i=4096", "x".repeat(2000));
+        assert!(client_final(Mech::Sha256, b"p", &bare, &long, "abc").is_err(), "ответ больше предела");
     }
 
     #[test]

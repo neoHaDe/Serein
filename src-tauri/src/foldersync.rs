@@ -27,6 +27,9 @@ pub enum Kind {
     New,
     /// На сервере правили позже - по умолчанию не заливаем, чтобы не затереть чужое.
     RemoteNewer,
+    /// Размер тот же, а времени правки хотя бы с одной стороны нет: одинаковое содержимое
+    /// этим не доказано. По умолчанию не заливаем, но и «совпадает» не пишем.
+    Unsure,
     /// Только на сервере. Удалять не предлагаем.
     RemoteOnly,
     Same,
@@ -38,6 +41,7 @@ impl Kind {
             Kind::Changed => "changed",
             Kind::New => "new",
             Kind::RemoteNewer => "remoteNewer",
+            Kind::Unsure => "unsure",
             Kind::RemoteOnly => "remoteOnly",
             Kind::Same => "same",
         }
@@ -52,7 +56,7 @@ pub struct Stamp {
 }
 
 /// Решение по одному файлу. `time_known` - знаем ли время правки на сервере: по SCP его
-/// нет, и тогда сравнение идёт только по размеру.
+/// нет, и тогда одинаковый размер - «не определить», а не «совпадает».
 pub fn classify(local: Option<Stamp>, remote: Option<Stamp>, time_known: bool) -> Kind {
     let (l, r) = match (local, remote) {
         (Some(_), None) => return Kind::New,
@@ -60,21 +64,37 @@ pub fn classify(local: Option<Stamp>, remote: Option<Stamp>, time_known: bool) -
         _ => return Kind::RemoteOnly,
     };
     if !time_known || r.mtime == 0 || l.mtime == 0 {
-        return if l.size == r.size { Kind::Same } else { Kind::Changed };
+        // Одинаковый размер без времени правки ничего не доказывает: «mode=dev» и «mode=prd»
+        // одной длины.
+        return if l.size == r.size { Kind::Unsure } else { Kind::Changed };
     }
     if l.mtime > r.mtime + MTIME_TOLERANCE_MS {
         return Kind::Changed;
     }
     if r.mtime > l.mtime + MTIME_TOLERANCE_MS {
-        // Заливка не сохраняет время правки: у только что залитого файла на сервере время
-        // новее локального, а размер тот же. Это не правка на сервере - иначе после каждой
-        // синхронизации всё выглядело бы «новее на сервере».
-        return if l.size == r.size { Kind::Same } else { Kind::RemoteNewer };
+        // Правили на сервере позже - и неважно, сменился ли размер. Своя заливка сюда не
+        // попадает: она переносит на сервер время правки своего файла.
+        return Kind::RemoteNewer;
     }
     if l.size == r.size {
         Kind::Same
     } else {
         Kind::Changed
+    }
+}
+
+/// Изменился ли файл на сервере после сравнения - проверка прямо перед заливкой.
+///
+/// `seen` - время правки из плана (`None` - файла тогда не было, `Some(0)` - время не
+/// узнали), `now` - ответ сервера сейчас. Пропавший или непроверяемый сейчас файл, который
+/// при сравнении был, - тоже «изменился»: заливать вслепую поверх нельзя.
+pub fn moved_since_plan(seen: Option<u64>, now: &Result<Option<u64>, String>) -> bool {
+    match (seen, now) {
+        (None, Ok(Some(_))) => true,
+        (None, _) => false,
+        (Some(0), _) => false,
+        (Some(seen), Ok(Some(now))) => *now != seen,
+        (Some(_), _) => true,
     }
 }
 
@@ -304,15 +324,28 @@ mod tests {
         assert_eq!(classify(st(5, t + 60_000), st(5, t), true), Kind::Changed, "правили локально");
         assert_eq!(classify(st(6, t), st(5, t), true), Kind::Changed, "размер другой, время то же");
         assert_eq!(classify(st(6, t), st(5, t + 60_000), true), Kind::RemoteNewer, "правили на сервере");
-        // Только что залитый файл: на сервере время заливки, размер тот же.
-        assert_eq!(classify(st(5, t), st(5, t + 60_000), true), Kind::Same);
+        // Размер тот же, но на сервере правили позже: содержимое могло смениться.
+        assert_eq!(classify(st(5, t), st(5, t + 60_000), true), Kind::RemoteNewer);
     }
 
     #[test]
-    fn без_времени_на_сервере_сравнение_только_по_размеру() {
+    fn без_времени_правки_одинаковый_размер_не_значит_совпадает() {
         let t = 1_000_000;
-        assert_eq!(classify(st(5, t + 60_000), st(5, 0), false), Kind::Same);
+        assert_eq!(classify(st(5, t + 60_000), st(5, 0), false), Kind::Unsure);
+        assert_eq!(classify(st(5, 0), st(5, t), true), Kind::Unsure, "своё время неизвестно");
         assert_eq!(classify(st(6, t), st(5, 0), false), Kind::Changed);
+    }
+
+    #[test]
+    fn правка_на_сервере_после_сравнения_не_затирается() {
+        let ok: Result<Option<u64>, String> = Ok(Some(5_000));
+        assert!(!moved_since_plan(Some(5_000), &ok), "не менялся");
+        assert!(moved_since_plan(Some(4_000), &ok), "время другое");
+        assert!(moved_since_plan(Some(5_000), &Err("нет файла".into())), "пропал или не проверить");
+        assert!(moved_since_plan(Some(5_000), &Ok(None)), "не проверить");
+        assert!(moved_since_plan(None, &ok), "появился, пока ждали");
+        assert!(!moved_since_plan(None, &Err("нет файла".into())));
+        assert!(!moved_since_plan(Some(0), &ok), "времени в плане не было - сравнить не с чем");
     }
 
     #[test]

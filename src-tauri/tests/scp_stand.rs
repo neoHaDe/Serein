@@ -13,6 +13,7 @@ use common::{rt, Stand};
 use serein_lib::remote_fs::{self, SessionFs};
 use serein_lib::scp;
 use serein_lib::ssh;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Подключение к серверу без SFTP плюс свежее состояние выбора бэкенда.
@@ -173,3 +174,88 @@ fn обход_scp_не_заходит_в_ссылки_и_сообщает_о_н�
         );
     });
 }
+
+/// Своя временная папка на этой машине.
+fn local_scratch(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("serein-scp-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("своя папка");
+    dir
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn большой_файл_по_scp_идёт_потоком_и_возвращается_целым() {
+    // Раньше файл целиком лежал в памяти и по пути туда, и обратно. Здесь несколько
+    // мегабайт неповторяющегося содержимого: сдвиг или потерянный кусок сразу виден.
+    let s = Stand::from_env();
+    let dir = scratch("поток");
+    rt().block_on(async {
+        let (h, fs) = connect(&s).await;
+        let _ = remote_fs::remove(&fs, &h, &dir, true).await;
+        remote_fs::mkdir(&fs, &h, &dir).await.expect("каталог");
+        let local = local_scratch("поток");
+        let src = local.join("big.bin");
+        let data: Vec<u8> = (0..5 * 1024 * 1024 + 7u64).map(|i| ((i * 2_654_435_761) >> 13) as u8).collect();
+        std::fs::write(&src, &data).unwrap();
+
+        let remote = format!("{dir}/big.bin");
+        let mut seen = 0;
+        scp::put_file_ctl(&h, src.to_str().unwrap(), &remote, &|| true, &mut |done: u64, _: u64| seen = done)
+            .await
+            .expect("заливка");
+        assert_eq!(seen, data.len() as u64, "ход передачи дошёл до конца");
+
+        let back = local.join("back.bin");
+        scp::download_file(&h, &remote, back.to_str().unwrap()).await.expect("скачивание");
+        assert!(std::fs::read(&back).unwrap() == data, "содержимое вернулось без искажений");
+
+        let listed = remote_fs::list(&fs, &h, &dir).await.expect("листинг");
+        let names: Vec<&str> = listed["entries"].as_array().unwrap().iter().filter_map(|e| e["name"].as_str()).collect();
+        assert_eq!(names, vec!["big.bin"], "временных файлов на сервере не осталось");
+
+        let _ = std::fs::remove_dir_all(&local);
+        remote_fs::remove(&fs, &h, &dir, true).await.expect("уборка");
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn прерванная_заливка_по_scp_оставляет_прежний_файл_а_удачная_его_права() {
+    // Замена идёт через временный файл: отмена посреди передачи не оставляет на сервере
+    // половину нового файла под именем старого, а удачная заливка не сбрасывает права.
+    let s = Stand::from_env();
+    let dir = scratch("замена");
+    rt().block_on(async {
+        let (h, fs) = connect(&s).await;
+        let _ = remote_fs::remove(&fs, &h, &dir, true).await;
+        remote_fs::mkdir(&fs, &h, &dir).await.expect("каталог");
+        let remote = format!("{dir}/run.sh");
+        let (code, _, err) = ssh::exec(&h, &format!("printf 'старое' > '{remote}' && chmod 750 '{remote}'"), None)
+            .await
+            .expect("исходный файл");
+        assert_eq!(code, 0, "{err}");
+
+        let local = local_scratch("замена");
+        let src = local.join("run.sh");
+        std::fs::write(&src, vec![b'x'; 1024 * 1024]).unwrap();
+        let checks = AtomicU32::new(0);
+        let live = || checks.fetch_add(1, Ordering::Relaxed) < 3;
+        scp::put_file_ctl(&h, src.to_str().unwrap(), &remote, &live, &mut |_: u64, _: u64| {})
+            .await
+            .expect_err("заливка отменена посреди файла");
+
+        let state = format!("cat '{remote}'; echo; stat -c %a '{remote}'; ls -A '{dir}'");
+        let (_, out, _) = ssh::exec(&h, &state, None).await.expect("состояние");
+        assert_eq!(out.trim(), "старое\n750\nrun.sh", "оригинал цел, временного файла нет");
+
+        std::fs::write(&src, "новое").unwrap();
+        scp::put_file(&h, src.to_str().unwrap(), &remote).await.expect("заливка");
+        let (_, out, _) = ssh::exec(&h, &state, None).await.expect("состояние");
+        assert_eq!(out.trim(), "новое\n750\nrun.sh", "содержимое заменено, права прежние");
+
+        let _ = std::fs::remove_dir_all(&local);
+        remote_fs::remove(&fs, &h, &dir, true).await.expect("уборка");
+    });
+}
+
