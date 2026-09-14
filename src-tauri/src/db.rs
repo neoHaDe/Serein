@@ -1,4 +1,4 @@
-//! Базы данных рядом с сервером: PostgreSQL, MySQL/MariaDB, SQL Server и Redis через уже открытую
+//! Базы данных рядом с сервером: PostgreSQL, MySQL/MariaDB, SQL Server, SQLite и Redis через уже открытую
 //! SSH-сессию.
 //!
 //! Смысл ровно в слове «через». Базу почти никогда не выставляют в сеть: она слушает
@@ -27,6 +27,8 @@ pub enum Kind {
     Mysql,
     /// Microsoft SQL Server.
     Mssql,
+    /// SQLite: файл на сервере, запросы через `sqlite3` там же.
+    Sqlite,
     Redis,
 }
 
@@ -37,6 +39,8 @@ impl Kind {
             Kind::Postgres => 5432,
             Kind::Mysql => 3306,
             Kind::Mssql => 1433,
+            // У SQLite порта нет: это файл, а не служба.
+            Kind::Sqlite => 0,
             Kind::Redis => 6379,
         }
     }
@@ -46,6 +50,7 @@ impl Kind {
             Kind::Postgres => "postgres",
             Kind::Mysql => "mysql",
             Kind::Mssql => "mssql",
+            Kind::Sqlite => "sqlite",
             Kind::Redis => "redis",
         }
     }
@@ -90,6 +95,8 @@ enum Live {
     /// Под замком: запросы tiberius требуют исключительного доступа к клиенту и идут строго
     /// по очереди, как у нашего клиента MySQL.
     Mssql(Arc<AsyncMutex<MssqlClient>>),
+    /// У SQLite держать открытым нечего: каждый запрос - отдельный запуск `sqlite3`.
+    Sqlite(Arc<SqliteTarget>),
     Redis(Arc<AsyncMutex<redis::aio::MultiplexedConnection>>),
 }
 
@@ -149,9 +156,10 @@ pub async fn open(
     handle: &SharedHandle,
     p: Params,
 ) -> Result<Value, String> {
-    let stream = channel(handle, p.host(), p.port()).await?;
+    // Канал внутри SSH нужен сетевым базам. SQLite - файл, до него канал не открываем.
     let live = match p.kind {
         Kind::Postgres => {
+            let stream = channel(handle, p.host(), p.port()).await?;
             let mut cfg = tokio_postgres::Config::new();
             cfg.user(p.user.as_deref().unwrap_or("postgres"));
             if let Some(pw) = p.password.as_deref().filter(|s| !s.is_empty()) {
@@ -174,6 +182,7 @@ pub async fn open(
             Live::Postgres(Arc::new(client))
         }
         Kind::Mysql => {
+            let stream = channel(handle, p.host(), p.port()).await?;
             let conn = crate::mysql::Conn::connect(
                 stream,
                 p.user.as_deref().unwrap_or("root"),
@@ -184,6 +193,7 @@ pub async fn open(
             Live::Mysql(Arc::new(AsyncMutex::new(conn)))
         }
         Kind::Redis => {
+            let stream = channel(handle, p.host(), p.port()).await?;
             let mut info = redis::RedisConnectionInfo::default();
             if let Some(pw) = p.password.as_deref().filter(|s| !s.is_empty()) {
                 info = info.set_password(pw);
@@ -208,6 +218,7 @@ pub async fn open(
             Live::Redis(Arc::new(AsyncMutex::new(conn)))
         }
         Kind::Mssql => {
+            let stream = channel(handle, p.host(), p.port()).await?;
             use tokio_util::compat::TokioAsyncWriteCompatExt as _;
             let mut cfg = tiberius::Config::new();
             cfg.host(p.host());
@@ -230,9 +241,16 @@ pub async fn open(
                 .map_err(|e| mssql_err(&e))?;
             Live::Mssql(Arc::new(AsyncMutex::new(client)))
         }
+        Kind::Sqlite => Live::Sqlite(Arc::new(sqlite_open(handle, &p).await?)),
     };
     let kind = p.kind;
-    let info = json!({ "id": id, "kind": kind.as_str(), "host": p.host(), "port": p.port() });
+    // У SQLite вместо адреса - путь к файлу: по нему человек и узнает базу в заголовке.
+    let place = if kind == Kind::Sqlite {
+        p.database.clone().unwrap_or_default()
+    } else {
+        p.host().to_owned()
+    };
+    let info = json!({ "id": id, "kind": kind.as_str(), "host": place, "port": p.port() });
     with_sessions(|m| {
         m.insert(
             id.clone(),
@@ -372,6 +390,7 @@ pub async fn query(id: &str, text: &str) -> Result<Value, String> {
         Some(Live::Postgres(c)) => Some(Live::Postgres(c.clone())),
         Some(Live::Mysql(c)) => Some(Live::Mysql(c.clone())),
         Some(Live::Mssql(c)) => Some(Live::Mssql(c.clone())),
+        Some(Live::Sqlite(t)) => Some(Live::Sqlite(t.clone())),
         Some(Live::Redis(c)) => Some(Live::Redis(c.clone())),
         None => None,
     })
@@ -383,6 +402,7 @@ pub async fn query(id: &str, text: &str) -> Result<Value, String> {
             Live::Postgres(c) => pg_query(&c, text).await,
             Live::Mysql(c) => mysql_query(&c, text).await,
             Live::Mssql(c) => mssql_query(&c, text).await,
+            Live::Sqlite(t) => sqlite_query(&t, text).await,
             Live::Redis(c) => redis_query(&c, text).await,
         }
     };
@@ -590,6 +610,165 @@ fn mssql_err(e: &tiberius::error::Error) -> String {
     }
 }
 
+/// Куда ходить за SQLite: сессия и путь к файлу на сервере.
+struct SqliteTarget {
+    handle: SharedHandle,
+    path: String,
+}
+
+/// Проверяет, что до файла SQLite можно достучаться: `sqlite3` на сервере есть, файл есть.
+///
+/// Новую базу не создаём: `sqlite3` молча создаёт пустой файл по любому пути, и опечатка в
+/// пути превратилась бы в новую пустую базу вместо ошибки.
+async fn sqlite_open(handle: &SharedHandle, p: &Params) -> Result<SqliteTarget, String> {
+    let path = p
+        .database
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Укажите путь к файлу базы на сервере".to_owned())?
+        .to_owned();
+    let q = crate::scp::shell_quote(&path);
+    let cmd = format!(
+        "command -v sqlite3 >/dev/null 2>&1 && echo tool; test -f {q} && echo file; test -r {q} && echo read"
+    );
+    let (_c, out, _e) = crate::ssh::exec(handle, &cmd, None).await?;
+    let has = |w: &str| out.lines().any(|l| l.trim() == w);
+    if !has("tool") {
+        return Err("На сервере нет sqlite3 - поставьте пакет sqlite3 (на Alpine - sqlite)".into());
+    }
+    if !has("file") {
+        return Err(format!(
+            "Файла {path} нет - новую базу не создаём, чтобы опечатка в пути не стала пустой базой"
+        ));
+    }
+    if !has("read") {
+        return Err(format!("Файл {path} не читается под этим пользователем"));
+    }
+    Ok(SqliteTarget {
+        handle: handle.clone(),
+        path,
+    })
+}
+
+/// Запрос к SQLite через `sqlite3` на самом сервере.
+///
+/// SQL уходит на стандартный вход, а не доводом команды: так нет ни экранирования, ни предела
+/// длины строки запуска, и текст запроса не виден в списке процессов сервера. Вывод
+/// обрезается там же, на сервере: иначе `SELECT *` по большой таблице приехал бы целиком.
+async fn sqlite_query(t: &SqliteTarget, sql: &str) -> Result<Value, String> {
+    let limit = MAX_BYTES + 1;
+    let cmd = format!(
+        "sqlite3 -json -bail {} | head -c {limit}",
+        crate::scp::shell_quote(&t.path)
+    );
+    let (_code, out, err) = crate::ssh::exec_with_input(&t.handle, &cmd, sql, None).await?;
+    let err = err.trim();
+    if !err.is_empty() {
+        // Вывод JSON появился в sqlite3 3.33 (2020). Старый sqlite3 ругается на ключ - говорим
+        // по-человечески, что именно не так, а не пересказываем его «unknown option».
+        if err.contains("-json") {
+            return Err("sqlite3 на сервере старше 3.33 и не умеет выводить JSON - нужен новее".into());
+        }
+        return Err(format!("SQLite: {}", err.lines().next().unwrap_or(err)));
+    }
+    parse_sqlite_json(&out, out.len() > MAX_BYTES)
+}
+
+/// Строка ответа `sqlite3 -json` с колонками в том порядке, в каком они в тексте.
+///
+/// Свой разбор, а не `serde_json::Value`: у нас `Value` хранит ключи объекта отсортированными,
+/// и колонки `SELECT b, a` приходили бы как `a, b`. Включить сохранение порядка в `serde_json`
+/// значило бы поменять его поведение во всём приложении ради одного места.
+struct OrderedRow(Vec<(String, Value)>);
+
+impl<'de> serde::Deserialize<'de> for OrderedRow {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = OrderedRow;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("строку ответа sqlite3")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut a: A) -> Result<OrderedRow, A::Error> {
+                let mut out = Vec::new();
+                while let Some((k, v)) = a.next_entry::<String, Value>()? {
+                    out.push((k, v));
+                }
+                Ok(OrderedRow(out))
+            }
+        }
+        d.deserialize_map(V)
+    }
+}
+
+fn sqlite_set(rows: Vec<OrderedRow>) -> ResultSet {
+    let names: Vec<String> = rows
+        .first()
+        .map(|r| r.0.iter().map(|(k, _)| k.clone()).collect())
+        .unwrap_or_default();
+    let mut set = ResultSet::new(unique_names(names.iter().map(String::as_str)));
+    for row in &rows {
+        let mut obj = Map::new();
+        let mut size = 0usize;
+        for (i, name) in set.columns.iter().enumerate() {
+            let cell = match row.0.get(i).map(|(_, v)| v) {
+                None | Some(Value::Null) => Value::Null,
+                Some(Value::String(s)) => {
+                    size += s.len();
+                    set.budget.cell(s)
+                }
+                Some(other) => {
+                    let s = other.to_string();
+                    size += s.len();
+                    set.budget.cell(&s)
+                }
+            };
+            obj.insert(name.clone(), cell);
+        }
+        if !set.budget.push(Value::Object(obj), size) {
+            break;
+        }
+    }
+    set
+}
+
+/// Разбирает вывод `sqlite3 -json`: по массиву на каждую выборку, выборки без строк
+/// `sqlite3` не печатает вовсе.
+///
+/// Если вывод обрезан на сервере, последний массив оборван. Из него берём целые строки до
+/// последней законченной: половина таблицы честнее, чем пустая таблица с ошибкой разбора.
+fn parse_sqlite_json(out: &str, capped: bool) -> Result<Value, String> {
+    let mut sets = Vec::new();
+    let mut truncated = capped;
+    let mut stream = serde_json::Deserializer::from_str(out).into_iter::<Vec<OrderedRow>>();
+    loop {
+        let start = stream.byte_offset();
+        match stream.next() {
+            None => break,
+            Some(Ok(rows)) => sets.push(sqlite_set(rows)),
+            Some(Err(e)) => {
+                if !capped {
+                    return Err(format!("SQLite вернул непонятный ответ: {e}"));
+                }
+                let rest = &out[start..];
+                if let Some(cut) = rest.rfind("},\n{") {
+                    if let Ok(rows) = serde_json::from_str::<Vec<OrderedRow>>(&format!("{}]", &rest[..cut + 1])) {
+                        sets.push(sqlite_set(rows));
+                    }
+                }
+                truncated = true;
+                break;
+            }
+        }
+    }
+    let mut v = answer(sets);
+    if truncated {
+        v["truncated"] = json!(true);
+    }
+    Ok(v)
+}
+
 async fn redis_query(
     conn: &AsyncMutex<redis::aio::MultiplexedConnection>,
     line: &str,
@@ -734,6 +913,33 @@ fn redis_err(e: &redis::RedisError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ответ_sqlite3_разбирается_с_порядком_колонок() {
+        // `Value` у нас сортирует ключи - порядок колонок обязан браться из самого текста.
+        let out = "[{\"b\":\"x\",\"a\":1},\n{\"b\":\"\",\"a\":null}]\n[{\"n\":2}]\n";
+        let v = parse_sqlite_json(out, false).expect("разбор");
+        let sets = v["sets"].as_array().expect("наборы");
+        assert_eq!(sets.len(), 2, "две выборки - два набора");
+        assert_eq!(sets[0]["columns"], json!(["b", "a"]), "колонки в порядке запроса");
+        assert_eq!(sets[0]["rows"][0]["a"], "1");
+        assert_eq!(sets[0]["rows"][1]["b"], "", "пустая строка - не NULL");
+        assert!(sets[0]["rows"][1]["a"].is_null(), "NULL остаётся NULL");
+    }
+
+    #[test]
+    fn обрезанный_ответ_sqlite3_отдаёт_целые_строки() {
+        // Вывод оборван на сервере посреди третьей строки.
+        let out = "[{\"a\":1},\n{\"a\":2},\n{\"a\":3";
+        let v = parse_sqlite_json(out, true).expect("разбор");
+        assert_eq!(v["truncated"], true, "об обрезке надо сказать");
+        assert_eq!(v["sets"][0]["rows"].as_array().expect("строки").len(), 2, "две целые строки: {v}");
+    }
+
+    #[test]
+    fn непонятный_ответ_sqlite3_без_обрезки_это_ошибка() {
+        assert!(parse_sqlite_json("[{\"a\":", false).is_err());
+    }
 
     #[test]
     fn одинаковые_имена_колонок_не_съедают_друг_друга() {

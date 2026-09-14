@@ -19,7 +19,7 @@ import { forget, isGone, recall, remember, update } from '../dbMemory'
  * поэтому при появлении на пустом месте панель переспрашивает приложение.
  */
 
-type Kind = 'postgres' | 'mysql' | 'mssql' | 'redis'
+type Kind = 'postgres' | 'mysql' | 'mssql' | 'sqlite' | 'redis'
 
 interface Props {
   sessionId: string
@@ -33,6 +33,7 @@ const HINT: Record<Kind, string> = {
   postgres: 'SELECT * FROM pg_stat_activity LIMIT 20;',
   mysql: 'SHOW FULL PROCESSLIST;',
   mssql: 'SELECT TOP 20 session_id, status, command FROM sys.dm_exec_requests;',
+  sqlite: "SELECT name FROM sqlite_master WHERE type = 'table';",
   redis: 'INFO server'
 }
 
@@ -56,6 +57,12 @@ const STARTERS: Record<Kind, { label: string; text: string }[]> = {
     { label: 'Активные запросы', text: 'SELECT r.session_id, r.status, r.command, t.text FROM sys.dm_exec_requests r CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) t WHERE r.session_id <> @@SPID' },
     { label: 'Версия', text: 'SELECT @@VERSION AS версия' }
   ],
+  sqlite: [
+    { label: 'Таблицы', text: "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name" },
+    { label: 'Размер файла', text: 'SELECT page_count * page_size AS байт FROM pragma_page_count(), pragma_page_size()' },
+    { label: 'Целостность', text: 'PRAGMA integrity_check' },
+    { label: 'Версия', text: 'SELECT sqlite_version() AS версия' }
+  ],
   redis: [
     { label: 'Сервер', text: 'INFO server' },
     { label: 'Память', text: 'INFO memory' },
@@ -65,11 +72,11 @@ const STARTERS: Record<Kind, { label: string; text: string }[]> = {
 }
 
 /** Кого подставлять в поле пользователя. У Redis имени обычно нет вовсе. */
-const DEFAULT_USER: Record<Kind, string> = { postgres: 'postgres', mysql: 'root', mssql: 'sa', redis: '' }
+const DEFAULT_USER: Record<Kind, string> = { postgres: 'postgres', mysql: 'root', mssql: 'sa', sqlite: '', redis: '' }
 
 /** Подсказки в пустых полях - то же, что подставит бэкенд, если оставить их пустыми. */
-const DEFAULT_PORT: Record<Kind, number> = { postgres: 5432, mysql: 3306, mssql: 1433, redis: 6379 }
-const DEFAULT_DB: Record<Kind, string> = { postgres: 'postgres', mysql: 'mysql', mssql: 'master', redis: '0' }
+const DEFAULT_PORT: Record<Kind, number> = { postgres: 5432, mysql: 3306, mssql: 1433, sqlite: 0, redis: 6379 }
+const DEFAULT_DB: Record<Kind, string> = { postgres: 'postgres', mysql: 'mysql', mssql: 'master', sqlite: '/var/lib/app/data.db', redis: '0' }
 
 export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props): JSX.Element {
   // Что было открыто в прошлый раз на этой же сессии. Читаем один раз при создании
@@ -239,7 +246,7 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
           <Icon name="list" size={15} /> Базы данных
           {connected && (
             <span className="db-badge">
-              {connected.kind} · {connected.host}:{connected.port}
+              {connected.kind} · {connected.kind === 'sqlite' ? connected.host : `${connected.host}:${connected.port}`}
             </span>
           )}
         </span>
@@ -270,9 +277,14 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
                 <option value="postgres">PostgreSQL</option>
                 <option value="mysql">MySQL / MariaDB</option>
                 <option value="mssql">SQL Server</option>
+                <option value="sqlite">SQLite (файл на сервере)</option>
                 <option value="redis">Redis</option>
               </select>
             </label>
+            {/* У SQLite нет ни адреса, ни порта, ни входа: это файл, до которого доходит
+                сама SSH-сессия. Пустые поля только сбивали бы с толку. */}
+            {kind !== 'sqlite' && (
+              <>
             <label>
               Адрес на сервере
               <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="127.0.0.1" />
@@ -293,8 +305,10 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
               Пароль
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
             </label>
+              </>
+            )}
             <label>
-              {kind === 'redis' ? 'Номер базы' : 'База'}
+              {kind === 'redis' ? 'Номер базы' : kind === 'sqlite' ? 'Файл базы на сервере' : 'База'}
               <input
                 value={database}
                 onChange={(e) => setDatabase(e.target.value)}
@@ -303,7 +317,9 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
             </label>
           </div>
           <div className="agent-hint">
-            Подключение внутри SSH-канала. Адрес - такой, каким его видит сервер
+            {kind === 'sqlite'
+              ? 'Запросы выполняет sqlite3 на самом сервере. Нужен путь к существующему файлу - новую базу не создаём.'
+              : 'Подключение внутри SSH-канала. Адрес - такой, каким его видит сервер'}
           </div>
           {error && <div className="db-error">{error}</div>}
           <button className="primary" disabled={busy} onClick={() => void connect()}>

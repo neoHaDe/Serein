@@ -554,7 +554,7 @@ export const api = {
     open: (
       sessionId: string,
       params: {
-        kind: 'postgres' | 'mysql' | 'mssql' | 'redis'
+        kind: 'postgres' | 'mysql' | 'mssql' | 'sqlite' | 'redis'
         host?: string
         port?: number
         user?: string

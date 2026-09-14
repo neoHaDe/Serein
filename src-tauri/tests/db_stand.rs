@@ -506,3 +506,75 @@ fn sql_server_отдаёт_наборы_даты_и_числа() {
         db::close(&id);
     });
 }
+
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn sqlite_читается_через_sqlite3_на_сервере() {
+    // У SQLite нет сетевого протокола - это файл. Запрос идёт через `sqlite3` на самом
+    // сервере, SQL уходит на стандартный вход, а колонки обязаны прийти в своём порядке.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let h = ssh::connect_client(vec![s.by_key(s.debian_port)])
+            .await
+            .expect("подключение к серверу");
+        let (code, _, err) = ssh::exec(
+            &h,
+            "rm -f /tmp/serein-stand.db && sqlite3 /tmp/serein-stand.db \"CREATE TABLE t(b TEXT, a INTEGER); INSERT INTO t VALUES ('привет', 1), ('', NULL);\"",
+            None,
+        )
+        .await
+        .expect("создание базы");
+        assert_eq!(code, 0, "база не создалась: {err}");
+
+        let params = |db: &str| Params {
+            kind: Kind::Sqlite,
+            host: None,
+            port: None,
+            user: None,
+            password: None,
+            database: Some(db.to_string()),
+        };
+        let id = format!("test-{}", uuid::Uuid::new_v4());
+        db::open(id.clone(), "сессия-стенда", &h, params("/tmp/serein-stand.db"))
+            .await
+            .expect("открытие базы");
+
+        let out = db::query(&id, "SELECT b, a FROM t ORDER BY a IS NULL, a; SELECT count(*) AS n FROM t")
+            .await
+            .expect("запрос");
+        let sets = out["sets"].as_array().expect("наборы");
+        assert_eq!(sets.len(), 2, "две выборки - два набора: {out}");
+        let cols: Vec<&str> = sets[0]["columns"]
+            .as_array()
+            .expect("колонки")
+            .iter()
+            .map(|c| c.as_str().expect("имя колонки"))
+            .collect();
+        assert_eq!(cols, vec!["b", "a"], "колонки в порядке запроса, а не по алфавиту");
+        assert_eq!(sets[0]["rows"][0]["b"], "привет", "юникод обязан доехать целым");
+        assert_eq!(sets[0]["rows"][0]["a"], "1");
+        assert_eq!(sets[0]["rows"][1]["b"], "", "пустая строка - не NULL");
+        assert!(sets[0]["rows"][1]["a"].is_null(), "NULL остаётся NULL");
+        assert_eq!(sets[1]["rows"][0]["n"], "2");
+
+        let err = db::query(&id, "SELECT * FROM нет_такой").await.expect_err("ошибка");
+        assert!(err.contains("no such table"), "текст ошибки от sqlite3: {err}");
+        db::close(&id);
+
+        // Опечатка в пути не создаёт пустую базу.
+        let lost = db::open(
+            format!("test-{}", uuid::Uuid::new_v4()),
+            "сессия-стенда",
+            &h,
+            params("/tmp/нет-такой-базы.db"),
+        )
+        .await
+        .expect_err("файла нет");
+        assert!(lost.contains("нет"), "{lost}");
+        let (_, exists, _) = ssh::exec(&h, "test -e /tmp/нет-такой-базы.db && echo есть || echo нет", None)
+            .await
+            .expect("проверка файла");
+        assert_eq!(exists.trim(), "нет", "пустой файл не должен появиться");
+    });
+}
