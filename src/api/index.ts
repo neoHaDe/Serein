@@ -627,8 +627,17 @@ export const api = {
      * но результат каждого хоста приходит событием сразу - ждать самый медленный,
      * чтобы увидеть первый, незачем.
      */
-    exec: (serverIds: string[], command: string): Promise<MultiExecResult[]> =>
-      invoke('multi_exec', { serverIds, command }),
+    exec: (
+      serverIds: string[],
+      command: string,
+      opts?: { concurrency?: number; timeoutSec?: number }
+    ): Promise<MultiExecResult[]> =>
+      invoke('multi_exec', {
+        serverIds,
+        command,
+        concurrency: opts?.concurrency,
+        timeoutSec: opts?.timeoutSec
+      }),
     cancel: (): Promise<void> => invoke('multi_exec_cancel'),
     onResult: (cb: (p: { done: number; total: number; result: MultiExecResult }) => void) =>
       sub<{ done: number; total: number; result: MultiExecResult }>('multi-exec-result', cb)

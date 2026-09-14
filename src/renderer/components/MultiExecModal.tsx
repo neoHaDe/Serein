@@ -1,6 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { MultiExecResult, ServerConfig } from '../../shared/types'
 import { errText } from '../errText'
+import { useSettings } from '../SettingsContext'
+import {
+  CONCURRENCY_PRESETS,
+  DEFAULT_CONCURRENCY,
+  DEFAULT_TIMEOUT_SEC,
+  MAX_CONCURRENCY,
+  MAX_TIMEOUT_SEC,
+  clampConcurrency,
+  clampTimeout,
+  fleetReport,
+  mergeResults,
+  retryIds,
+  stateLabel,
+  summarizeFleet,
+  summaryText
+} from '../fleetReport'
 import { Icon } from './Icon'
 
 const UNGROUPED = ''
@@ -16,12 +32,6 @@ function runnable(s: ServerConfig): boolean {
   return s.connection !== 'serial' && s.connection !== 'telnet' && s.connection !== 'raw'
 }
 
-function stateLabel(r: MultiExecResult): string {
-  if (r.state === 'skipped') return 'пропущен'
-  if (r.state === 'failed') return 'не дошли'
-  return r.code === 0 ? 'готово' : `код ${r.code}`
-}
-
 /**
  * Одна команда на нескольких серверах.
  *
@@ -30,11 +40,21 @@ function stateLabel(r: MultiExecResult): string {
  * и саму команду, и поимённый список хостов - ошибиться выбором проще, чем текстом.
  */
 export function MultiExecModal({ servers, onClose }: Props): JSX.Element {
+  const { settings, update } = useSettings()
+  const concurrency = clampConcurrency(settings.fleetConcurrency ?? DEFAULT_CONCURRENCY)
+  const timeoutSec = clampTimeout(settings.fleetTimeoutSec ?? DEFAULT_TIMEOUT_SEC)
+  const [customConcurrency, setCustomConcurrency] = useState(!CONCURRENCY_PRESETS.includes(concurrency))
+
   const [command, setCommand] = useState('')
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [confirming, setConfirming] = useState(false)
   const [running, setRunning] = useState(false)
   const [results, setResults] = useState<MultiExecResult[]>([])
+  // Команда и время прогона, к которому относятся результаты. Поле ввода могли поменять
+  // после запуска - повтор и отчёт обязаны взять то, что выполнялось на самом деле.
+  const [ranCommand, setRanCommand] = useState('')
+  const [ranAt, setRanAt] = useState<Date | null>(null)
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
   const [error, setError] = useState('')
   const [open, setOpen] = useState<Set<string>>(new Set())
   const commandRef = useRef<HTMLInputElement>(null)
@@ -48,7 +68,8 @@ export function MultiExecModal({ servers, onClose }: Props): JSX.Element {
   useEffect(() => {
     if (!running) return
     const off = window.api.multi.onResult((p) => {
-      setResults((prev) => [...prev, p.result])
+      setResults((prev) => mergeResults(prev, [p.result]))
+      setProgress({ done: p.done, total: p.total })
     })
     return off
   }, [running])
@@ -86,23 +107,45 @@ export function MultiExecModal({ servers, onClose }: Props): JSX.Element {
     })
 
   const chosen = servers.filter((s) => picked.has(s.id))
+  const toRetry = retryIds(results)
 
   const stop = (): void => {
+    // Бэкенд не начинает новых подключений после остановки: оставшиеся хосты придут
+    // пропущенными, поэтому окно ждёт их, а не бросает прогон на полуслове.
     void window.api.multi.cancel()
-    setRunning(false)
   }
 
-  const start = async (): Promise<void> => {
-    setConfirming(false)
+  const run = async (ids: string[], cmd: string): Promise<void> => {
     setRunning(true)
-    setResults([])
     setError('')
+    setProgress({ done: 0, total: ids.length })
     try {
-      await window.api.multi.exec([...picked], command.trim())
+      await window.api.multi.exec(ids, cmd, { concurrency, timeoutSec })
     } catch (e) {
       setError(errText(e))
     } finally {
       setRunning(false)
+    }
+  }
+
+  const start = (): void => {
+    setConfirming(false)
+    setResults([])
+    setRanCommand(command.trim())
+    setRanAt(new Date())
+    void run([...picked], command.trim())
+  }
+
+  const retry = (): void => {
+    if (!confirm(`Повторить «${ranCommand}» на ${toRetry.length} серверах, где команда не удалась?`)) return
+    void run(toRetry, ranCommand)
+  }
+
+  const saveReport = async (): Promise<void> => {
+    try {
+      await window.api.exportText(fleetReport(ranCommand, results, ranAt ?? new Date()), 'fleet-report.txt')
+    } catch (e) {
+      setError(errText(e))
     }
   }
 
@@ -123,6 +166,55 @@ export function MultiExecModal({ servers, onClose }: Props): JSX.Element {
             disabled={running}
           />
         </label>
+
+        <div className="multi-options">
+          <label>
+            Одновременно
+            <select
+              value={customConcurrency ? 'custom' : String(concurrency)}
+              disabled={running}
+              onChange={(e) => {
+                if (e.target.value === 'custom') {
+                  setCustomConcurrency(true)
+                  return
+                }
+                setCustomConcurrency(false)
+                update({ fleetConcurrency: clampConcurrency(Number(e.target.value)) })
+              }}
+            >
+              {CONCURRENCY_PRESETS.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+              <option value="custom">своё число</option>
+            </select>
+          </label>
+          {customConcurrency && (
+            <label>
+              Хостов
+              <input
+                type="number"
+                min={1}
+                max={MAX_CONCURRENCY}
+                value={concurrency}
+                disabled={running}
+                onChange={(e) => update({ fleetConcurrency: clampConcurrency(Number(e.target.value)) })}
+              />
+            </label>
+          )}
+          <label>
+            Ждать хост, с
+            <input
+              type="number"
+              min={1}
+              max={MAX_TIMEOUT_SEC}
+              value={timeoutSec}
+              disabled={running}
+              onChange={(e) => update({ fleetTimeoutSec: clampTimeout(Number(e.target.value)) })}
+            />
+          </label>
+        </div>
 
         <div className="multi-pick">
           {groups.length === 0 && <div className="hint">Нет серверов, на которых можно выполнить команду.</div>}
@@ -181,9 +273,24 @@ export function MultiExecModal({ servers, onClose }: Props): JSX.Element {
 
         {(running || results.length > 0) && (
           <div className="multi-results">
-            <div className="settings-section-title">
-              Результаты {results.length}/{picked.size}
+            <div className="multi-results-head">
+              <div className="settings-section-title">
+                {running && progress ? `Выполняется ${progress.done}/${progress.total}` : 'Результаты'}
+              </div>
+              {!running && results.length > 0 && (
+                <div className="multi-results-actions">
+                  {toRetry.length > 0 && (
+                    <button className="mini" onClick={retry}>
+                      Повторить упавшие ({toRetry.length})
+                    </button>
+                  )}
+                  <button className="mini" onClick={() => void saveReport()}>
+                    Сохранить отчёт
+                  </button>
+                </div>
+              )}
             </div>
+            {results.length > 0 && <div className="multi-summary">{summaryText(summarizeFleet(results))}</div>}
             {results.map((r) => (
               <details key={r.serverId} className={'multi-result ' + r.state}>
                 <summary>
@@ -191,7 +298,7 @@ export function MultiExecModal({ servers, onClose }: Props): JSX.Element {
                   <span className="multi-result-state">{stateLabel(r)}</span>
                   {r.ms !== undefined && <span className="multi-result-ms">{r.ms} мс</span>}
                 </summary>
-                <pre>{r.error ?? [r.stdout, r.stderr].filter(Boolean).join('\n') ?? ''}</pre>
+                <pre>{r.error ?? [r.stdout, r.stderr].filter(Boolean).join('\n')}</pre>
               </details>
             ))}
           </div>
@@ -199,7 +306,7 @@ export function MultiExecModal({ servers, onClose }: Props): JSX.Element {
 
         {confirming && (
           <div className="multi-confirm">
-            Выполнить <code>{command.trim()}</code> на {chosen.length} серверах?
+            Выполнить <code>{command.trim()}</code> на {chosen.length} серверах, по {concurrency} одновременно?
             <div className="multi-confirm-list">{chosen.map((s) => s.name).join(', ')}</div>
           </div>
         )}
@@ -212,7 +319,7 @@ export function MultiExecModal({ servers, onClose }: Props): JSX.Element {
             </button>
           )}
           {confirming ? (
-            <button className="primary" onClick={() => void start()}>
+            <button className="primary" onClick={start}>
               Да, выполнить
             </button>
           ) : (

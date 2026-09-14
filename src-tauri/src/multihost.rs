@@ -26,12 +26,58 @@ use serde_json::{json, Value};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
-/// Сколько хостов обрабатываем одновременно.
+/// Сколько хостов обрабатываем одновременно, если не сказано иное.
 ///
 /// Не «побольше»: каждое соединение - это рукопожатие и аутентификация, а на общем канале
 /// десяток одновременных подключений начинает мешать сам себе. Четыре даёт заметный выигрыш
-/// и остаётся предсказуемым.
-const CONCURRENCY: usize = 4;
+/// и остаётся предсказуемым; на большом парке человек выбирает сам.
+const DEFAULT_CONCURRENCY: usize = 4;
+/// Потолок одновременных хостов. Выше - уже не выигрыш, а десятки рукопожатий разом с одной
+/// машины, на которые срабатывает защита серверов от перебора.
+const MAX_CONCURRENCY: usize = 64;
+const DEFAULT_TIMEOUT_SECS: u64 = 120;
+const MAX_TIMEOUT_SECS: u64 = 3600;
+/// Вывод одного хоста. `journalctl` на двадцати машинах иначе приносил бы в окно сотни
+/// мегабайт; оставляем конец - ошибка обычно там.
+const MAX_HOST_OUTPUT: usize = 256 * 1024;
+
+/// Как вести прогон. Приходит из окна и приводится в пределы здесь, а не на доверии.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RunOptions {
+    pub concurrency: usize,
+    /// Срок на один хост целиком: подключение и команда.
+    pub timeout: std::time::Duration,
+}
+
+impl RunOptions {
+    pub fn new(concurrency: Option<u32>, timeout_secs: Option<u64>) -> Self {
+        Self {
+            concurrency: concurrency
+                .map(|n| n as usize)
+                .unwrap_or(DEFAULT_CONCURRENCY)
+                .clamp(1, MAX_CONCURRENCY),
+            timeout: std::time::Duration::from_secs(
+                timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS).clamp(1, MAX_TIMEOUT_SECS),
+            ),
+        }
+    }
+}
+
+/// Оставляет конец вывода, если он больше предела, и говорит об этом в самом тексте.
+fn cap_output(text: String) -> (String, bool) {
+    if text.len() <= MAX_HOST_OUTPUT {
+        return (text, false);
+    }
+    let mut cut = text.len() - MAX_HOST_OUTPUT;
+    // Режем по границе символа: иначе в окно уедет битый UTF-8.
+    while !text.is_char_boundary(cut) {
+        cut += 1;
+    }
+    (
+        format!("… (начало обрезано, всего {} Б)\n{}", text.len(), &text[cut..]),
+        true,
+    )
+}
 
 /// Хост, к которому не станем подключаться, и почему.
 fn skip_reason(chain: &[Value]) -> Option<String> {
@@ -76,16 +122,17 @@ fn failed(server_id: &str, name: &str, why: String, ms: u128) -> Value {
     })
 }
 
-/// Сколько секунд ждём exec на одном хосте в массовом прогоне.
-const HOST_EXEC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+fn name_of(server_id: &str) -> String {
+    store::servers_list()
+        .into_iter()
+        .find(|s| s.get("id").and_then(|v| v.as_str()) == Some(server_id))
+        .and_then(|s| s.get("name").and_then(|v| v.as_str()).map(|x| x.to_string()))
+        .unwrap_or_else(|| server_id.to_string())
+}
 
 /// Выполнить команду на одном сервере: подключение, exec, разрыв.
-async fn run_one(server_id: String, command: String, cancel: ssh::CancelRx) -> Value {
-    let name = store::servers_list()
-        .into_iter()
-        .find(|s| s.get("id").and_then(|v| v.as_str()) == Some(&server_id))
-        .and_then(|s| s.get("name").and_then(|v| v.as_str()).map(|x| x.to_string()))
-        .unwrap_or_else(|| server_id.clone());
+async fn run_one(server_id: String, command: String, opts: RunOptions, cancel: ssh::CancelRx) -> Value {
+    let name = name_of(&server_id);
 
     let chain = match crate::resolve_chain_for(&server_id) {
         Ok(c) => c,
@@ -101,21 +148,34 @@ async fn run_one(server_id: String, command: String, cancel: ssh::CancelRx) -> V
     }
 
     let started = Instant::now();
-    let handle = match ssh::connect_client(chain).await {
-        Ok(h) => h,
-        Err(e) => return failed(&server_id, &name, e.to_string(), started.elapsed().as_millis()),
+    // Срок - на хост целиком, а не только на команду: хост, который долго подключается, так же
+    // задерживает прогон, как и тот, что долго выполняет.
+    let work = async {
+        let handle = ssh::connect_client(chain).await.map_err(|e| e.to_string())?;
+        ssh::exec_timed(&handle, &command, Some(cancel), opts.timeout).await
     };
-    match ssh::exec_timed(&handle, &command, Some(cancel), HOST_EXEC_TIMEOUT).await {
-        Ok((code, out, err)) => json!({
-            "serverId": server_id,
-            "name": name,
-            "state": "done",
-            "code": code,
-            "stdout": out,
-            "stderr": err,
-            "ms": started.elapsed().as_millis(),
-        }),
-        Err(e) => failed(&server_id, &name, e, started.elapsed().as_millis()),
+    match tokio::time::timeout(opts.timeout, work).await {
+        Ok(Ok((code, out, err))) => {
+            let (stdout, cut_out) = cap_output(out);
+            let (stderr, cut_err) = cap_output(err);
+            json!({
+                "serverId": server_id,
+                "name": name,
+                "state": "done",
+                "code": code,
+                "stdout": stdout,
+                "stderr": stderr,
+                "truncated": cut_out || cut_err,
+                "ms": started.elapsed().as_millis(),
+            })
+        }
+        Ok(Err(e)) => failed(&server_id, &name, e, started.elapsed().as_millis()),
+        Err(_) => failed(
+            &server_id,
+            &name,
+            format!("хост не уложился в {} с", opts.timeout.as_secs()),
+            started.elapsed().as_millis(),
+        ),
     }
 }
 
@@ -126,6 +186,21 @@ pub async fn run(
     app: AppHandle,
     server_ids: Vec<String>,
     command: String,
+    opts: RunOptions,
+    cancel: ssh::CancelRx,
+) -> Vec<Value> {
+    let emit = move |event: Value| {
+        let _ = app.emit("multi-exec-result", event);
+    };
+    run_with(emit, server_ids, command, opts, cancel).await
+}
+
+/// Сам прогон; куда уходят события, решает вызывающий - так его можно проверить без окна.
+async fn run_with(
+    emit: impl Fn(Value),
+    server_ids: Vec<String>,
+    command: String,
+    opts: RunOptions,
     cancel: ssh::CancelRx,
 ) -> Vec<Value> {
     use futures::stream::{FuturesUnordered, StreamExt};
@@ -139,21 +214,35 @@ pub async fn run(
     let mut queue = server_ids.into_iter();
     let mut running = FuturesUnordered::new();
     let mut results: Vec<Value> = Vec::with_capacity(total);
+    let stopped = |cancel: &ssh::CancelRx| *cancel.borrow();
 
-    for _ in 0..CONCURRENCY.min(total) {
+    for _ in 0..opts.concurrency.min(total) {
+        if stopped(&cancel) {
+            break;
+        }
         if let Some(id) = queue.next() {
-            running.push(run_one(id, command.clone(), cancel.clone()));
+            running.push(run_one(id, command.clone(), opts, cancel.clone()));
         }
     }
     while let Some(res) = running.next().await {
-        let _ = app.emit(
-            "multi-exec-result",
-            json!({ "done": results.len() + 1, "total": total, "result": res }),
-        );
+        emit(json!({ "done": results.len() + 1, "total": total, "result": res }));
         results.push(res);
-        if let Some(id) = queue.next() {
-            running.push(run_one(id, command.clone(), cancel.clone()));
+        // Остановленный прогон не начинает новых подключений - начатые доводятся до конца:
+        // их команда уже ушла на сервер, и оборвать её на полуслове хуже, чем дождаться.
+        if stopped(&cancel) {
+            continue;
         }
+        if let Some(id) = queue.next() {
+            running.push(run_one(id, command.clone(), opts, cancel.clone()));
+        }
+    }
+    // Не начатые хосты - в итог, а не в тишину: иначе «18 из 20» выглядело бы как два
+    // потерянных результата, а не как остановка.
+    for id in queue {
+        let name = name_of(&id);
+        let res = skipped(&id, &name, "прогон остановлен - к хосту не подключались".into());
+        emit(json!({ "done": results.len() + 1, "total": total, "result": res }));
+        results.push(res);
     }
     results
 }
@@ -192,12 +281,61 @@ mod tests {
             .expect("рантайм");
         let (_tx, rx) = tokio::sync::watch::channel(false);
         let started = Instant::now();
-        let res = rt.block_on(run_one("нет-такого-сервера".into(), "uptime".into(), rx));
+        let res = rt.block_on(run_one(
+            "нет-такого-сервера".into(),
+            "uptime".into(),
+            RunOptions::new(None, None),
+            rx,
+        ));
         assert_eq!(res["state"], "skipped");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(3),
             "пропуск должен быть мгновенным, без похода в сеть"
         );
+    }
+
+    #[test]
+    fn параметры_прогона_держатся_в_пределах() {
+        assert_eq!(RunOptions::new(None, None).concurrency, 4);
+        assert_eq!(RunOptions::new(None, None).timeout.as_secs(), 120);
+        assert_eq!(RunOptions::new(Some(0), Some(0)).concurrency, 1);
+        assert_eq!(RunOptions::new(Some(0), Some(0)).timeout.as_secs(), 1);
+        assert_eq!(RunOptions::new(Some(1000), Some(99_999)).concurrency, MAX_CONCURRENCY);
+        assert_eq!(RunOptions::new(Some(1000), Some(99_999)).timeout.as_secs(), MAX_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn остановленный_прогон_не_начинает_подключений() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("рантайм");
+        let (_tx, rx) = tokio::sync::watch::channel(true);
+        let events = std::cell::Cell::new(0);
+        let ids: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        let res = rt.block_on(run_with(
+            |_| events.set(events.get() + 1),
+            ids,
+            "uptime".into(),
+            RunOptions::new(Some(1), None),
+            rx,
+        ));
+        assert_eq!(res.len(), 3, "каждый хост попал в итог");
+        assert_eq!(events.get(), 3, "и о каждом окно узнало");
+        for r in &res {
+            assert_eq!(r["state"], "skipped");
+            assert!(r["error"].as_str().unwrap_or("").contains("остановлен"), "{r}");
+        }
+    }
+
+    #[test]
+    fn длинный_вывод_хоста_оставляет_конец() {
+        let long = format!("{}конец", "ж".repeat(MAX_HOST_OUTPUT));
+        let (text, cut) = cap_output(long);
+        assert!(cut);
+        assert!(text.ends_with("конец"), "конец вывода важнее начала");
+        assert!(text.starts_with("… (начало обрезано"));
+        assert_eq!(cap_output("коротко".into()), ("коротко".to_string(), false));
     }
 
     #[test]

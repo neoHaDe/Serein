@@ -577,6 +577,9 @@ export interface AppSettings {
   externalEditor?: string
   /** Общие пороги здоровья серверов. Не заданы - действуют умолчания. */
   healthThresholds?: Partial<HealthThresholds>
+  /** Fleet: сколько хостов одновременно (1-64) и сколько секунд ждать один хост. */
+  fleetConcurrency?: number
+  fleetTimeoutSec?: number
   /** Плотность интерфейса: 'comfortable' (по умолчанию) | 'compact'. */
   density?: 'comfortable' | 'compact'
   /** Отдельные кнопки на панели задач для откреплённых окон. По умолчанию одно приложение. */
@@ -738,4 +741,6 @@ export interface MultiExecResult {
   stderr?: string
   ms?: number
   error?: string
+  /** Вывод больше предела - оставлен конец. */
+  truncated?: boolean
 }

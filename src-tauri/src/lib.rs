@@ -203,9 +203,12 @@ async fn multi_exec(
     state: State<'_, AppState>,
     server_ids: Vec<String>,
     command: String,
+    concurrency: Option<u32>,
+    timeout_sec: Option<u64>,
 ) -> Result<Vec<Value>, String> {
     let cancel = state.ops.begin("multi-exec");
-    let out = multihost::run(app, server_ids, command, cancel).await;
+    let opts = multihost::RunOptions::new(concurrency, timeout_sec);
+    let out = multihost::run(app, server_ids, command, opts, cancel).await;
     state.ops.finish("multi-exec");
     Ok(out)
 }
