@@ -40,6 +40,7 @@ mod serial;
 pub mod sftp;
 pub mod ssh;
 mod tasks;
+mod tray;
 mod ssh_agent;
 mod ssh_algos;
 pub mod store;
@@ -181,6 +182,12 @@ fn app_paths() -> Value {
 /// среда выполнения AppImage).
 /// `package` - Linux из `.deb`: бинарь лежит в `/usr/bin` и принадлежит менеджеру пакетов,
 /// писать туда приложение не может и не должно. Обновление - через пакет.
+/// Выход из приложения. Крестик прячет окна в трей, поэтому выходу нужно своё действие.
+#[tauri::command]
+fn app_quit(app: AppHandle) {
+    app.exit(0);
+}
+
 #[tauri::command]
 fn app_install_kind() -> &'static str {
     #[cfg(windows)]
@@ -2707,11 +2714,25 @@ pub fn run() {
                 return Err(e.into());
             }
             app.manage(AppState::new());
+            if let Err(e) = tray::install(app) {
+                // Без значка крестик просто закрывает приложение - как было до трея.
+                eprintln!("значок в трее не поставлен: {e}");
+            }
             #[cfg(windows)]
             if let Some(w) = app.get_webview_window("main") {
                 disable_browser_accelerators(&w);
             }
             Ok(())
+        })
+        // Крестик главного окна (и Alt+F4) прячет приложение в трей, а не закрывает его: так
+        // один промах мышью не обрывает сессии, туннели и передачи. Подробности - в `tray`.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" && tray::close_to_tray() {
+                    api.prevent_close();
+                    tray::hide_all(window.app_handle());
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             settings_get,
@@ -2868,6 +2889,7 @@ pub fn run() {
             app_platform,
             app_paths,
             app_install_kind,
+            app_quit,
             multi_exec,
             multi_exec_cancel,
             windows_nudge_group,

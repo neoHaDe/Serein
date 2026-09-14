@@ -26,6 +26,8 @@ export interface PaletteActions {
   openProfiles?: () => void
   /** Задачи. */
   openTasks?: () => void
+  /** Выйти из приложения: крестик прячет его в трей. */
+  quitApp?: () => void
 }
 
 /** Пункты командной палитры - чистая сборка, run-колбэки приходят снаружи. */
@@ -100,6 +102,17 @@ export function buildPaletteItems(
       icon: '🗂',
       group: 'Действие',
       run: actions.openProfiles
+    })
+  }
+
+  if (actions.quitApp) {
+    items.push({
+      id: 'act:quit',
+      label: 'Выйти из Serein',
+      hint: 'закрыть приложение и все сессии',
+      icon: '⏻',
+      group: 'Действие',
+      run: actions.quitApp
     })
   }
 

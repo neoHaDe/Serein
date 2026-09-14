@@ -247,6 +247,18 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
         <label className="checkbox-row">
           <input
             type="checkbox"
+            checked={settings.closeToTray ?? platform === 'windows'}
+            onChange={(e) => update({ closeToTray: e.target.checked })}
+          />
+          Сворачивать в трей при закрытии окна
+        </label>
+        <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
+          Сессии и передачи продолжают работать. Выйти - через значок в трее или палитру команд.
+        </div>
+
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
             checked={!!settings.restoreTabsOnStart}
             onChange={(e) => update({ restoreTabsOnStart: e.target.checked })}
           />

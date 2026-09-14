@@ -580,6 +580,8 @@ export interface AppSettings {
   /** Fleet: сколько хостов одновременно (1-64) и сколько секунд ждать один хост. */
   fleetConcurrency?: number
   fleetTimeoutSec?: number
+  /** Крестик главного окна прячет приложение в трей. Не задано - включено на Windows, выключено на Linux. */
+  closeToTray?: boolean
   /** Плотность интерфейса: 'comfortable' (по умолчанию) | 'compact'. */
   density?: 'comfortable' | 'compact'
   /** Отдельные кнопки на панели задач для откреплённых окон. По умолчанию одно приложение. */

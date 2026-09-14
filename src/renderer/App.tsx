@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { ServerConfig } from '../shared/types'
 import { aggregateServerStatuses } from './serverStatus'
@@ -158,7 +159,8 @@ export default function App(): JSX.Element {
         setWorkspace: tabsApi.setWorkspace,
         focusTab: tabsApi.setActiveKey,
         openProfiles: () => setShowProfiles(true),
-        openTasks: () => setShowTasks(true)
+        openTasks: () => setShowTasks(true),
+        quitApp: () => void invoke('app_quit')
       }),
     [ops.servers, tabsApi]
   )
