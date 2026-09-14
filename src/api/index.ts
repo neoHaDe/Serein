@@ -352,6 +352,22 @@ export const api = {
     save: (s: Snippet): Promise<Snippet> => invoke('snippets_save', { s }),
     remove: (id: string): Promise<void> => invoke('snippets_delete', { id })
   },
+  /** Задачи: шаги по порядку на выбранных серверах. */
+  tasks: {
+    list: (): Promise<import('../renderer/taskModel').TaskDef[]> => invoke('tasks_list'),
+    save: (t: import('../renderer/taskModel').TaskDef): Promise<import('../renderer/taskModel').TaskDef> =>
+      invoke('tasks_save', { t }),
+    remove: (id: string): Promise<void> => invoke('tasks_delete', { id }),
+    runs: (): Promise<import('../renderer/taskModel').RunReport[]> => invoke('task_runs_list'),
+    run: (
+      task: import('../renderer/taskModel').TaskDef,
+      runId: string,
+      dryRun: boolean
+    ): Promise<import('../renderer/taskModel').RunReport> => invoke('tasks_run', { task, runId, dryRun }),
+    cancel: (runId: string): Promise<void> => invoke('tasks_cancel', { runId }),
+    onProgress: (cb: (p: import('../renderer/taskModel').ProgressEvent) => void) =>
+      sub<import('../renderer/taskModel').ProgressEvent>('task-progress', cb)
+  },
   /** Именованные наборы вкладок. */
   workspaces: {
     list: (): Promise<import('../shared/types').WorkspaceProfile[]> => invoke('workspaces_list'),

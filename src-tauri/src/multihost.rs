@@ -80,7 +80,7 @@ fn cap_output(text: String) -> (String, bool) {
 }
 
 /// Хост, к которому не станем подключаться, и почему.
-fn skip_reason(chain: &[Value]) -> Option<String> {
+pub(crate) fn skip_reason(chain: &[Value]) -> Option<String> {
     // Проверяем всю цепочку: незнакомый jump-хост опаснее незнакомой цели.
     let known: Vec<String> = knownhosts::list()
         .into_iter()
@@ -122,7 +122,7 @@ fn failed(server_id: &str, name: &str, why: String, ms: u128) -> Value {
     })
 }
 
-fn name_of(server_id: &str) -> String {
+pub(crate) fn name_of(server_id: &str) -> String {
     store::servers_list()
         .into_iter()
         .find(|s| s.get("id").and_then(|v| v.as_str()) == Some(server_id))

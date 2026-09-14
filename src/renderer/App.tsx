@@ -31,6 +31,7 @@ import { allLeaves, findLeaf, type PaneLeaf } from './paneTree'
 import { sshLeafForTools } from './tabs'
 import { MultiExecModal } from './components/MultiExecModal'
 import { WorkspaceProfilesModal } from './components/WorkspaceProfilesModal'
+import { TasksModal } from './components/TasksModal'
 import { ToolsModal } from './components/ToolsModal'
 
 export default function App(): JSX.Element {
@@ -46,6 +47,7 @@ export default function App(): JSX.Element {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [multiExec, setMultiExec] = useState(false)
   const [showProfiles, setShowProfiles] = useState(false)
+  const [showTasks, setShowTasks] = useState(false)
   const [showPuttyImport, setShowPuttyImport] = useState(true)
   const { settings, update } = useSettings()
   useWindowSnap()
@@ -155,7 +157,8 @@ export default function App(): JSX.Element {
         newServer: () => setEditing(null),
         setWorkspace: tabsApi.setWorkspace,
         focusTab: tabsApi.setActiveKey,
-        openProfiles: () => setShowProfiles(true)
+        openProfiles: () => setShowProfiles(true),
+        openTasks: () => setShowTasks(true)
       }),
     [ops.servers, tabsApi]
   )
@@ -185,6 +188,7 @@ export default function App(): JSX.Element {
         onOpenGroups={() => setShowGroups(true)}
         onMultiExec={() => setMultiExec(true)}
         onOpenProfiles={() => setShowProfiles(true)}
+        onOpenTasks={() => setShowTasks(true)}
         onPatch={(id, patch) => void ops.patchServer(id, patch)}
         onDropServer={(id, group, index) => void ops.dropServer(id, group, index)}
         onDropGroup={ops.dropGroup}
@@ -376,6 +380,8 @@ export default function App(): JSX.Element {
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
 
       {multiExec && <MultiExecModal servers={ops.servers} onClose={() => setMultiExec(false)} />}
+
+      {showTasks && <TasksModal servers={ops.servers} onClose={() => setShowTasks(false)} />}
 
       {showProfiles && (
         <WorkspaceProfilesModal

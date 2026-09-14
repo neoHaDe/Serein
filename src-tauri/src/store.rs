@@ -690,6 +690,33 @@ pub fn workspaces_delete(id: &str) -> Result<(), String> {
     delete_item("workspaces.json", id)
 }
 
+// ---------- Задачи ----------
+
+/// Задачи: шаги и серверы. Секретов в них нет - только ссылки на серверы и пути.
+pub fn tasks_list() -> Vec<Value> {
+    list_items("tasks.json")
+}
+pub fn tasks_save(t: Value) -> Result<Value, String> {
+    upsert_item("tasks.json", t)
+}
+pub fn tasks_delete(id: &str) -> Result<(), String> {
+    delete_item("tasks.json", id)
+}
+
+/// История запусков задач, последние сверху не храним - порядок записи, старые отрезаются.
+pub fn task_runs_list() -> Vec<Value> {
+    list_items("task-runs.json")
+}
+pub fn task_runs_add(run: Value, keep: usize) -> Result<(), String> {
+    let mut items = list_items_strict("task-runs.json")?;
+    items.push(run);
+    if items.len() > keep {
+        let extra = items.len() - keep;
+        items.drain(0..extra);
+    }
+    write_value("task-runs.json", &Value::Array(items))
+}
+
 // Заглушка, чтобы избежать предупреждения о неиспользуемом импорте Map в некоторых конфигурациях.
 #[allow(dead_code)]
 fn _unused(_m: Map<String, Value>) {}

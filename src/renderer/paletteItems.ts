@@ -24,6 +24,8 @@ export interface PaletteActions {
   focusTab: (tabKey: string) => void
   /** Именованные наборы вкладок. */
   openProfiles?: () => void
+  /** Задачи. */
+  openTasks?: () => void
 }
 
 /** Пункты командной палитры - чистая сборка, run-колбэки приходят снаружи. */
@@ -80,6 +82,16 @@ export function buildPaletteItems(
     group: 'Действие',
     run: actions.newServer
   })
+  if (actions.openTasks) {
+    items.push({
+      id: 'act:tasks',
+      label: 'Задачи',
+      hint: 'шаги по порядку на выбранных серверах',
+      icon: '📋',
+      group: 'Действие',
+      run: actions.openTasks
+    })
+  }
   if (actions.openProfiles) {
     items.push({
       id: 'act:profiles',

@@ -39,6 +39,7 @@ pub mod scp;
 mod serial;
 pub mod sftp;
 pub mod ssh;
+mod tasks;
 mod ssh_agent;
 mod ssh_algos;
 pub mod store;
@@ -259,6 +260,50 @@ fn snippets_save(s: Value) -> Result<Value, String> {
 #[tauri::command]
 fn snippets_delete(id: String) -> Result<(), String> {
     store::snippets_delete(&id)
+}
+#[tauri::command]
+fn tasks_list() -> Vec<Value> {
+    store::tasks_list()
+}
+/// Сохранение не требует готовой задачи - черновик без серверов тоже сохраняется. Но форма
+/// должна разбираться: иначе сохранили бы то, что потом не запустится вовсе.
+#[tauri::command]
+fn tasks_save(t: Value) -> Result<Value, String> {
+    let parsed: tasks::Task =
+        serde_json::from_value(t.clone()).map_err(|e| format!("Задача не разобралась: {e}"))?;
+    if parsed.name.trim().is_empty() {
+        return Err("У задачи нет названия".into());
+    }
+    store::tasks_save(t)
+}
+#[tauri::command]
+fn tasks_delete(id: String) -> Result<(), String> {
+    store::tasks_delete(&id)
+}
+#[tauri::command]
+fn task_runs_list() -> Vec<Value> {
+    store::task_runs_list()
+}
+/// Запуск или пробный прогон задачи. Ход - событиями `task-progress`, в конце - отчёт.
+#[tauri::command]
+async fn tasks_run(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    task: Value,
+    run_id: String,
+    dry_run: bool,
+) -> Result<Value, String> {
+    let task: tasks::Task =
+        serde_json::from_value(task).map_err(|e| format!("Задача не разобралась: {e}"))?;
+    let key = format!("task:{run_id}");
+    let cancel = state.ops.begin(&key);
+    let out = tasks::run(app, task, run_id, dry_run, cancel).await;
+    state.ops.finish(&key);
+    out
+}
+#[tauri::command]
+fn tasks_cancel(state: State<'_, AppState>, run_id: String) {
+    state.ops.cancel(&format!("task:{run_id}"));
 }
 #[tauri::command]
 fn workspaces_list() -> Vec<Value> {
@@ -2679,6 +2724,12 @@ pub fn run() {
             snippets_save,
             snippets_delete,
             workspaces_list,
+            tasks_list,
+            tasks_save,
+            tasks_delete,
+            task_runs_list,
+            tasks_run,
+            tasks_cancel,
             workspaces_save,
             workspaces_delete,
             layout_get,

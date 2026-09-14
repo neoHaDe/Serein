@@ -55,6 +55,8 @@ interface Props {
   onMultiExec: () => void
   /** Именованные наборы вкладок. */
   onOpenProfiles?: () => void
+  /** Задачи: шаги по порядку на выбранных серверах. */
+  onOpenTasks?: () => void
   /** Точечная правка профиля из списка: избранное и метка среды. */
   onPatch?: (id: string, patch: Partial<ServerConfig>) => void
   /** Перетаскивание: сервер попал в группу на позицию `index` (в конец, если undefined). */
@@ -149,6 +151,7 @@ export function Sidebar({
   onOpenGroups,
   onMultiExec,
   onOpenProfiles,
+  onOpenTasks,
   onPatch,
   onDropServer,
   onDropGroup
@@ -567,6 +570,7 @@ export function Sidebar({
         { label: 'Новый сервер', onClick: onNew },
         { label: 'Новая группа', onClick: onNewGroup },
         { label: 'Выполнить на нескольких…', onClick: onMultiExec, separated: true },
+        ...(onOpenTasks ? [{ label: 'Задачи…', onClick: onOpenTasks }] : []),
         ...(onOpenProfiles ? [{ label: 'Профили рабочего пространства…', onClick: onOpenProfiles }] : []),
         { label: 'Настройки групп', onClick: onOpenGroups }
       ]
@@ -949,6 +953,16 @@ export function Sidebar({
             <button className="icon-btn" title="Утилиты: порт, DNS, TLS, подсеть, хеш, JWT" onClick={onOpenTools}>
               <Icon name="bolt" />
             </button>
+            {onOpenTasks && (
+              <button className="icon-btn" title="Задачи: шаги по порядку на выбранных серверах" onClick={onOpenTasks}>
+                <Icon name="play" />
+              </button>
+            )}
+            {onOpenProfiles && (
+              <button className="icon-btn" title="Профили рабочего пространства" onClick={onOpenProfiles}>
+                <Icon name="folder-open" />
+              </button>
+            )}
             <button className="icon-btn" title="Настройки" onClick={onOpenSettings}>
               <Icon name="settings" />
             </button>
@@ -964,6 +978,18 @@ export function Sidebar({
             <button className="full-btn" onClick={onOpenTools}>
               <Icon name="bolt" /> Утилиты
             </button>
+            {/* Задачи и профили жили только в меню правого клика по списку серверов - а туда
+                никто не заглядывает, и выглядело это так, будто их нет вовсе. */}
+            {onOpenTasks && (
+              <button className="full-btn" onClick={onOpenTasks}>
+                <Icon name="play" /> Задачи
+              </button>
+            )}
+            {onOpenProfiles && (
+              <button className="full-btn" onClick={onOpenProfiles}>
+                <Icon name="folder-open" /> Профили
+              </button>
+            )}
             <button className="full-btn" onClick={onOpenSettings}>
               <Icon name="settings" /> Настройки
             </button>
