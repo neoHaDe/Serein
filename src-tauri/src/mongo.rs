@@ -303,8 +303,19 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
     }
 
     /// Выполняет разобранный запрос.
-    pub async fn run(&mut self, op: Op, max_rows: usize, max_bytes: usize) -> Result<Outcome, String> {
+    ///
+    /// `max_time` уходит серверу как `maxTimeMS` на чтение: остановленный сервером запрос
+    /// не оставляет невидимой работы. Пишущим командам и сырому `runCommand` его не
+    /// добавляем - первые принимают его не во всех версиях, во втором решает человек.
+    pub async fn run(
+        &mut self,
+        op: Op,
+        max_rows: usize,
+        max_bytes: usize,
+        max_time: std::time::Duration,
+    ) -> Result<Outcome, String> {
         let db = self.db.clone();
+        let ms = i64::try_from(max_time.as_millis()).unwrap_or(i64::MAX);
         match op {
             Op::Command { admin, cmd } => {
                 let target = if admin { "admin".to_owned() } else { db };
@@ -318,27 +329,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
                 single(clean(r), 0)
             }
             Op::Find { coll, spec, one } => {
-                let mut cmd = doc! { "find": coll, "filter": spec.filter };
-                if let Some(p) = spec.projection {
-                    cmd.insert("projection", p);
-                }
-                if let Some(s) = spec.sort {
-                    cmd.insert("sort", s);
-                }
-                if let Some(n) = spec.skip {
-                    cmd.insert("skip", n);
-                }
-                if one {
-                    cmd.insert("limit", 1i64);
-                    cmd.insert("singleBatch", true);
-                } else if let Some(n) = spec.limit.filter(|n| *n != 0) {
-                    // Отрицательный предел в mongosh значит «одной пачкой и закрыть курсор».
-                    cmd.insert("limit", n.abs());
-                    if n < 0 {
-                        cmd.insert("singleBatch", true);
-                    }
-                }
-                cmd.insert("batchSize", BATCH);
+                let cmd = find_command(coll, spec, one, ms);
                 self.cursor(&db, cmd, max_rows, max_bytes).await
             }
             Op::Aggregate { coll, pipeline } => {
@@ -346,7 +337,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
                     Some(c) => Bson::String(c),
                     None => Bson::Int32(1),
                 };
-                let cmd = doc! { "aggregate": target, "pipeline": pipeline, "cursor": { "batchSize": BATCH } };
+                let cmd = doc! {
+                    "aggregate": target,
+                    "pipeline": pipeline,
+                    "cursor": { "batchSize": BATCH },
+                    "maxTimeMS": ms,
+                };
                 self.cursor(&db, cmd, max_rows, max_bytes).await
             }
             Op::Count { coll, filter } => {
@@ -356,17 +352,18 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
                     "aggregate": coll,
                     "pipeline": [ { "$match": filter }, { "$group": { "_id": 1, "n": { "$sum": 1 } } } ],
                     "cursor": {},
+                    "maxTimeMS": ms,
                 };
                 let out = self.cursor(&db, cmd, 1, max_bytes).await?;
                 let n = out.docs.first().and_then(|d| number(d, "n")).unwrap_or(0);
                 single(doc! { "количество": n }, 0)
             }
             Op::Estimated { coll } => {
-                let r = self.command(&db, doc! { "count": coll }).await?;
+                let r = self.command(&db, doc! { "count": coll, "maxTimeMS": ms }).await?;
                 single(doc! { "количество": number(&r, "n").unwrap_or(0) }, 0)
             }
             Op::Distinct { coll, key, filter } => {
-                let r = self.command(&db, doc! { "distinct": coll, "key": key, "query": filter }).await?;
+                let r = self.command(&db, doc! { "distinct": coll, "key": key, "query": filter, "maxTimeMS": ms }).await?;
                 let values = match r.get("values") {
                     Some(Bson::Array(v)) => v.clone(),
                     _ => Vec::new(),
@@ -472,6 +469,33 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
             }
         }
     }
+}
+
+/// Команда `find` с условиями и цепочкой.
+fn find_command(coll: String, spec: FindSpec, one: bool, max_time_ms: i64) -> Document {
+    let mut cmd = doc! { "find": coll, "filter": spec.filter };
+    if let Some(p) = spec.projection {
+        cmd.insert("projection", p);
+    }
+    if let Some(s) = spec.sort {
+        cmd.insert("sort", s);
+    }
+    if let Some(n) = spec.skip {
+        cmd.insert("skip", n);
+    }
+    if one {
+        cmd.insert("limit", 1i64);
+        cmd.insert("singleBatch", true);
+    } else if let Some(n) = spec.limit.filter(|n| *n != 0) {
+        // Отрицательный предел в mongosh значит «одной пачкой и закрыть курсор».
+        cmd.insert("limit", n.abs());
+        if n < 0 {
+            cmd.insert("singleBatch", true);
+        }
+    }
+    cmd.insert("batchSize", BATCH);
+    cmd.insert("maxTimeMS", max_time_ms);
+    cmd
 }
 
 /// Сообщение `OP_MSG`: заголовок, флаги и один раздел с телом команды.
@@ -1654,6 +1678,16 @@ mod tests {
         assert_eq!(cell(&Bson::Null), None, "null - это null, а не текст");
         assert_eq!(cell(&Bson::String(String::new())).unwrap(), "", "пустая строка - не null");
         assert_eq!(index_name(&doc! { "a": 1, "b": -1, "t": "text" }), "a_1_b_-1_t_text");
+    }
+
+    #[test]
+    fn чтение_несёт_серверу_предел_времени() {
+        let spec = FindSpec { limit: Some(-5), ..FindSpec::default() };
+        let cmd = find_command("t".into(), spec, false, 28_000);
+        assert_eq!(cmd.keys().next().map(String::as_str), Some("find"), "имя команды - первым");
+        assert_eq!(cmd.get("maxTimeMS"), Some(&Bson::Int64(28_000)));
+        assert_eq!(cmd.get("limit"), Some(&Bson::Int64(5)));
+        assert_eq!(cmd.get("singleBatch"), Some(&Bson::Boolean(true)), "отрицательный предел - одна пачка");
     }
 
     #[test]

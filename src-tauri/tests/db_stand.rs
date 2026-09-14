@@ -709,3 +709,29 @@ fn mongodb_дочитывает_курсор_и_находит_пользова�
         assert!(wrong.contains("18"), "ожидался код 18 (AuthenticationFailed): {wrong}");
     });
 }
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn базы_сами_останавливают_долгий_запрос() {
+    // Предел ставится самой базе, чуть меньше нашего срока: сервер, остановивший запрос сам,
+    // отвечает ошибкой, соединение остаётся рабочим, и невидимой работы на нём не остаётся.
+    // Проверяем, что предел выставлен, а не ждём его истечения: это полминуты на каждую базу.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let pg = open(&s, params(Kind::Postgres, &s.pg_host, "probe", Some("probe"))).await;
+        let out = db::query(&pg, "SHOW statement_timeout").await.expect("postgres");
+        assert_eq!(out["rows"][0]["statement_timeout"], "28s", "{out}");
+        db::close(&pg);
+
+        // У MariaDB и MySQL переменные разные - проверяем каждую на своей базе.
+        let maria = open(&s, params(Kind::Mysql, &s.mariadb_host, "probe", Some("probe"))).await;
+        let out = db::query(&maria, "SELECT @@max_statement_time AS предел").await.expect("mariadb");
+        assert!(out["rows"][0]["предел"].as_str().unwrap_or("").starts_with("28"), "{out}");
+        db::close(&maria);
+
+        let mysql = open(&s, params(Kind::Mysql, &s.mysql_host, "probe", Some("probe"))).await;
+        let out = db::query(&mysql, "SELECT @@max_execution_time AS предел").await.expect("mysql");
+        assert_eq!(out["rows"][0]["предел"], "28000", "{out}");
+        db::close(&mysql);
+    });
+}

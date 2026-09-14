@@ -93,8 +93,18 @@ impl Params {
 type MysqlConn = crate::mysql::Conn<russh::ChannelStream<russh::client::Msg>>;
 type MongoConn = crate::mongo::Conn<russh::ChannelStream<russh::client::Msg>>;
 
+/// PostgreSQL вместе с тем, что нужно для отмены запроса: протокол отменяет запрос
+/// отдельным коротким соединением, и открывать его приходится тем же каналом внутри SSH.
+struct PgLive {
+    client: tokio_postgres::Client,
+    cancel: tokio_postgres::CancelToken,
+    handle: SharedHandle,
+    host: String,
+    port: u16,
+}
+
 enum Live {
-    Postgres(Arc<tokio_postgres::Client>),
+    Postgres(Arc<PgLive>),
     /// Под замком, а не как у PostgreSQL: наш клиент MySQL держит один поток и
     /// разговаривает по нему строго по очереди - запрос, потом ответ.
     Mysql(Arc<AsyncMutex<MysqlConn>>),
@@ -187,17 +197,39 @@ pub async fn open(
             tokio::spawn(async move {
                 let _ = conn.await;
             });
-            Live::Postgres(Arc::new(client))
+            // Предел на стороне сервера - см. SERVER_LIMIT. Прав `SET` не требует, но пул
+            // соединений вроде PgBouncer в режиме транзакций его не удержит - тогда остаётся
+            // один наш срок, как было раньше.
+            let _ = client
+                .simple_query(&format!("SET statement_timeout = {}", SERVER_LIMIT.as_millis()))
+                .await;
+            let cancel = client.cancel_token();
+            Live::Postgres(Arc::new(PgLive {
+                client,
+                cancel,
+                handle: handle.clone(),
+                host: p.host().to_owned(),
+                port: p.port(),
+            }))
         }
         Kind::Mysql => {
             let stream = channel(handle, p.host(), p.port()).await?;
-            let conn = crate::mysql::Conn::connect(
+            let mut conn = crate::mysql::Conn::connect(
                 stream,
                 p.user.as_deref().unwrap_or("root"),
                 p.password.as_deref().unwrap_or(""),
                 p.database.as_deref(),
             )
             .await?;
+            // Предел на стороне сервера - см. SERVER_LIMIT. У MariaDB и MySQL переменные
+            // разные, и каждая неизвестна другой базе: ставим обе, чужая просто вернёт
+            // ошибку. У MySQL предел действует только на SELECT - изменения он не прерывает.
+            let _ = conn
+                .query(&format!("SET SESSION max_statement_time = {}", SERVER_LIMIT.as_secs()))
+                .await;
+            let _ = conn
+                .query(&format!("SET SESSION max_execution_time = {}", SERVER_LIMIT.as_millis()))
+                .await;
             Live::Mysql(Arc::new(AsyncMutex::new(conn)))
         }
         Kind::Redis => {
@@ -294,6 +326,16 @@ const MAX_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CELL: usize = 64 * 1024;
 /// Сколько ждём ответа. Дальше соединение закрывается: продолжать по нему нельзя.
 const QUERY_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Предел, который ставим самой базе, - чуть меньше своего срока.
+///
+/// Сервер, остановивший запрос сам, отвечает ошибкой, и соединение остаётся рабочим. Наш
+/// срок срабатывает, только если сервер не ответил и тогда, - и соединение закрывается. Без
+/// предела на сервере брошенный нами запрос продолжал бы работать там невидимо: PostgreSQL
+/// замечает закрытое соединение, лишь когда пытается отправить результат.
+///
+/// Есть у PostgreSQL, MySQL, MariaDB и у чтения MongoDB. У SQL Server предела на сеанс нет,
+/// у Redis команды не прерываются вовсе, у SQLite запрос живёт в процессе `sqlite3`.
+const SERVER_LIMIT: std::time::Duration = std::time::Duration::from_secs(28);
 
 /// Делает имена колонок различимыми.
 ///
@@ -416,10 +458,14 @@ pub async fn query(id: &str, text: &str) -> Result<Value, String> {
     })
     .ok_or("Соединение с базой закрыто")?;
 
+    let pg = match &live {
+        Live::Postgres(c) => Some(c.clone()),
+        _ => None,
+    };
     let started = std::time::Instant::now();
     let work = async {
         match live {
-            Live::Postgres(c) => pg_query(&c, text).await,
+            Live::Postgres(c) => pg_query(&c.client, text).await,
             Live::Mysql(c) => mysql_query(&c, text).await,
             Live::Mssql(c) => mssql_query(&c, text).await,
             Live::Sqlite(t) => sqlite_query(&t, text).await,
@@ -434,6 +480,11 @@ pub async fn query(id: &str, text: &str) -> Result<Value, String> {
     let mut out = match tokio::time::timeout(QUERY_LIMIT, work).await {
         Ok(r) => r?,
         Err(_) => {
+            // Прежде чем бросить соединение, просим сервер остановить запрос: иначе он
+            // доработал бы там, где его результат уже никто не прочтёт.
+            if let Some(pg) = pg {
+                pg_cancel(&pg).await;
+            }
             close(id);
             return Err(format!(
                 "запрос не ответил за {} с - соединение закрыто, откройте его заново",
@@ -445,6 +496,17 @@ pub async fn query(id: &str, text: &str) -> Result<Value, String> {
         o.insert("ms".into(), json!(started.elapsed().as_millis() as u64));
     }
     Ok(out)
+}
+
+/// Просьба к PostgreSQL остановить текущий запрос. Протокол шлёт её отдельным коротким
+/// соединением - у нас это новый канал внутри той же SSH-сессии. Не вышло - молчим:
+/// соединение всё равно закрывается, а предел на сервере остановит запрос сам.
+async fn pg_cancel(pg: &PgLive) {
+    let attempt = async {
+        let stream = channel(&pg.handle, &pg.host, pg.port).await.ok()?;
+        pg.cancel.cancel_query_raw(stream, tokio_postgres::NoTls).await.ok()
+    };
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), attempt).await;
 }
 
 async fn pg_query(client: &tokio_postgres::Client, sql: &str) -> Result<Value, String> {
@@ -797,7 +859,7 @@ async fn mongo_query(conn: &AsyncMutex<MongoConn>, text: &str) -> Result<Value, 
     let op = crate::mongo::parse(text)?;
     let out = {
         let mut g = conn.lock().await;
-        g.run(op, MAX_ROWS, MAX_BYTES).await?
+        g.run(op, MAX_ROWS, MAX_BYTES, SERVER_LIMIT).await?
     };
     Ok(answer(vec![mongo_set(out)]))
 }
