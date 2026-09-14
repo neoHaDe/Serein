@@ -352,6 +352,13 @@ export const api = {
     save: (s: Snippet): Promise<Snippet> => invoke('snippets_save', { s }),
     remove: (id: string): Promise<void> => invoke('snippets_delete', { id })
   },
+  /** Именованные наборы вкладок. */
+  workspaces: {
+    list: (): Promise<import('../shared/types').WorkspaceProfile[]> => invoke('workspaces_list'),
+    save: (p: import('../shared/types').WorkspaceProfile): Promise<import('../shared/types').WorkspaceProfile> =>
+      invoke('workspaces_save', { p }),
+    remove: (id: string): Promise<void> => invoke('workspaces_delete', { id })
+  },
   keygen: {
     generate: (params: GenerateKeyParams): Promise<GeneratedKey> => invoke('keygen_generate', { params }),
     save: async (

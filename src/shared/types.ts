@@ -685,6 +685,15 @@ export interface SerializedTab {
   workspace?: WorkspaceTool
 }
 
+/** Именованный набор вкладок: «Разработка», «Продакшн». Только раскладка и id серверов. */
+export interface WorkspaceProfile {
+  id?: string
+  name: string
+  tabs: SerializedTab[]
+  /** Когда сохранён, мс. */
+  savedAt: number
+}
+
 /** Откреплённое доп. окно (SFTP / логи Docker). Координаты - физические inner. */
 export interface SavedAuxWindow {
   kind: 'sftp' | 'dockerLogs'

@@ -22,6 +22,8 @@ export interface PaletteActions {
   newServer: () => void
   setWorkspace: (tabKey: string, tool: WorkspaceTool) => void
   focusTab: (tabKey: string) => void
+  /** Именованные наборы вкладок. */
+  openProfiles?: () => void
 }
 
 /** Пункты командной палитры - чистая сборка, run-колбэки приходят снаружи. */
@@ -78,6 +80,16 @@ export function buildPaletteItems(
     group: 'Действие',
     run: actions.newServer
   })
+  if (actions.openProfiles) {
+    items.push({
+      id: 'act:profiles',
+      label: 'Профили рабочего пространства',
+      hint: 'сохранить или открыть набор вкладок',
+      icon: '🗂',
+      group: 'Действие',
+      run: actions.openProfiles
+    })
+  }
 
   const activeTab = tabs.find((t) => t.key === activeKey)
   if (activeTab?.kind === 'terminal') {

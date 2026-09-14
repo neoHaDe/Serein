@@ -53,6 +53,8 @@ interface Props {
   onOpenGroups: () => void
   /** Выполнить одну команду сразу на нескольких серверах. */
   onMultiExec: () => void
+  /** Именованные наборы вкладок. */
+  onOpenProfiles?: () => void
   /** Точечная правка профиля из списка: избранное и метка среды. */
   onPatch?: (id: string, patch: Partial<ServerConfig>) => void
   /** Перетаскивание: сервер попал в группу на позицию `index` (в конец, если undefined). */
@@ -146,6 +148,7 @@ export function Sidebar({
   onNewGroup,
   onOpenGroups,
   onMultiExec,
+  onOpenProfiles,
   onPatch,
   onDropServer,
   onDropGroup
@@ -564,6 +567,7 @@ export function Sidebar({
         { label: 'Новый сервер', onClick: onNew },
         { label: 'Новая группа', onClick: onNewGroup },
         { label: 'Выполнить на нескольких…', onClick: onMultiExec, separated: true },
+        ...(onOpenProfiles ? [{ label: 'Профили рабочего пространства…', onClick: onOpenProfiles }] : []),
         { label: 'Настройки групп', onClick: onOpenGroups }
       ]
     })

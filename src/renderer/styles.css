@@ -5462,3 +5462,45 @@ button.secondary:hover {
   margin-top: 6px;
   font-size: 12px;
 }
+
+/* ---- Профили рабочего пространства ---- */
+.profile-save {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+.profile-save input {
+  flex: 1;
+}
+.profile-list {
+  max-height: 46vh;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+.profile-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 6px;
+  border-top: 1px solid var(--border);
+}
+.profile-main {
+  min-width: 0;
+}
+.profile-name {
+  font-weight: 600;
+}
+.profile-summary {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}

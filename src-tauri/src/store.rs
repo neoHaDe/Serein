@@ -676,6 +676,20 @@ pub fn aux_layout_set(layout: Value) -> Result<(), String> {
     write_value("aux-layout.json", &layout)
 }
 
+// ---------- Профили рабочего пространства ----------
+
+/// Именованные наборы вкладок: «Продакшн», «Логи». Хранят только раскладку и id серверов -
+/// ни паролей, ни ключей, поэтому шифровать здесь нечего.
+pub fn workspaces_list() -> Vec<Value> {
+    list_items("workspaces.json")
+}
+pub fn workspaces_save(p: Value) -> Result<Value, String> {
+    upsert_item("workspaces.json", p)
+}
+pub fn workspaces_delete(id: &str) -> Result<(), String> {
+    delete_item("workspaces.json", id)
+}
+
 // Заглушка, чтобы избежать предупреждения о неиспользуемом импорте Map в некоторых конфигурациях.
 #[allow(dead_code)]
 fn _unused(_m: Map<String, Value>) {}

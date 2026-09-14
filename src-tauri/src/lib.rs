@@ -261,6 +261,18 @@ fn snippets_delete(id: String) -> Result<(), String> {
     store::snippets_delete(&id)
 }
 #[tauri::command]
+fn workspaces_list() -> Vec<Value> {
+    store::workspaces_list()
+}
+#[tauri::command]
+fn workspaces_save(p: Value) -> Result<Value, String> {
+    store::workspaces_save(p)
+}
+#[tauri::command]
+fn workspaces_delete(id: String) -> Result<(), String> {
+    store::workspaces_delete(&id)
+}
+#[tauri::command]
 fn layout_get() -> Value {
     store::layout_get()
 }
@@ -2666,6 +2678,9 @@ pub fn run() {
             snippets_list,
             snippets_save,
             snippets_delete,
+            workspaces_list,
+            workspaces_save,
+            workspaces_delete,
             layout_get,
             layout_set,
             aux_layout_get,

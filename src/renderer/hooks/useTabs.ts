@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { tabFromSaved } from '../tabs'
+import type { SerializedTab } from '../../shared/types'
 import type { AppSettings, SavedAuxWindow, ServerConfig, SessionFailurePhase, WorkspaceTool } from '../../shared/types'
 import {
   markAuxPersistReady,
@@ -82,6 +84,10 @@ export interface TabsApi {
   toggleSftp: (key: string) => void
   detachTab: (key: string) => Promise<void>
   setEditorDirty: (key: string, dirty: boolean) => void
+  /** Текущие вкладки терминалов в сохраняемом виде - для профиля. */
+  snapshotTabs: () => SerializedTab[]
+  /** Открыть вкладки профиля рядом с текущими или вместо них. `false` - человек передумал. */
+  openProfile: (saved: SerializedTab[], replace: boolean) => boolean
   connectedSessions: { sessionId: string; title: string }[]
 }
 
@@ -585,6 +591,42 @@ export function useTabs({
     [tabs]
   )
 
+  const snapshotTabs = useCallback(() => tabsForLayoutPersist(tabsRef.current), [])
+
+  const openProfile = useCallback(
+    (saved: SerializedTab[], replace: boolean) => {
+      if (replace) {
+        // Вместо текущих - значит закрыть текущие со всеми сессиями. Несохранённую правку
+        // файла молча не выбрасываем: один вопрос на все такие вкладки.
+        const dirty = tabsRef.current.filter((t) => t.kind === 'editor' && t.editorDirty)
+        if (
+          dirty.length &&
+          !confirm(
+            `Во вкладках ${dirty.map((t) => `«${t.title}»`).join(', ')} есть несохранённые изменения. Закрыть без сохранения?`
+          )
+        ) {
+          return false
+        }
+        for (const t of tabsRef.current) {
+          for (const l of allLeaves(t.root)) {
+            if (l.sessionId) window.api.session.close(l.sessionId)
+            reconnect.clear(l.id)
+          }
+        }
+      }
+      const opened = saved.map((st) => tabFromSaved(st, true))
+      setTabs((prev) => (replace ? opened : [...prev, ...opened]))
+      if (opened.length) {
+        setActiveKey(opened[opened.length - 1].key)
+        if (opened.some((t) => allLeaves(t.root).some((l) => l.kind === 'ssh'))) onRestoredSshTabs()
+      } else if (replace) {
+        setActiveKey(null)
+      }
+      return true
+    },
+    [reconnect, onRestoredSshTabs]
+  )
+
   return {
     tabs,
     activeKey,
@@ -611,6 +653,8 @@ export function useTabs({
     toggleSftp,
     detachTab,
     setEditorDirty,
-    connectedSessions
+    connectedSessions,
+    snapshotTabs,
+    openProfile
   }
 }
