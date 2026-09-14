@@ -42,9 +42,9 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: npm
@@ -76,7 +76,7 @@ jobs:
       matrix:
         os: [ubuntu-22.04, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Системные библиотеки Tauri
         if: runner.os == 'Linux'
@@ -92,9 +92,9 @@ jobs:
       # Версия задана явно и совпадает с `rust-toolchain.toml`. С `@stable` действие ставило
       # одну версию, а rustup по файлу подтягивал другую — ключ кэша при этом плыл, и кэш
       # попадал лишь частично («full match: false»), то есть почти всё пересобиралось заново.
-      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d # 1.96.0
 
-      - uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: |
             src-tauri
@@ -133,7 +133,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Системные библиотеки Tauri
         run: |
@@ -145,9 +145,9 @@ jobs:
             libssl-dev \
             libudev-dev
 
-      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d # 1.96.0
 
-      - uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: |
             src-tauri
@@ -225,7 +225,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # Единственная часть проверки, которая устаревает сама по себе: база уязвимостей
       # пополняется, даже когда в коде ничего не меняется. Поэтому отдельной джобой,
@@ -233,7 +233,7 @@ jobs:
       #
       # Ставим сам cargo-audit, а не готовое действие: тому нужны права на запись
       # в issues и checks, а нам достаточно упасть с ненулевым кодом.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2
         with:
           tool: cargo-audit
 

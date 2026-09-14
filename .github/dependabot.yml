@@ -1,0 +1,10 @@
+# Действия в CI закреплены по SHA коммита: тег можно перевесить на другой код, коммит - нет.
+# Обновлять их руками никто не будет, поэтому раз в месяц Dependabot предлагает новые SHA
+# отдельным запросом на слияние, и перед принятием его видно глазами.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3

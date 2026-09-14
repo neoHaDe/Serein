@@ -89,6 +89,22 @@ only request the app makes without you asking for it.
   reasoning in `.github/workflows/ci.yml`. The crate arrives through `russh` and is needed for
   ordinary `id_rsa` keys; the advisory concerns RSA decryption timing, while SSH uses RSA for
   signatures. It is not hidden behind a blanket ignore, and any new advisory still fails CI.
+- `cargo audit` also reports warnings that are not vulnerabilities, and they do not fail CI. They
+  are listed here so that "no vulnerabilities" is never read as "no findings". Reviewed
+  2026-09-15, next review with each release:
+  - `glib` 0.18.5, `RUSTSEC-2024-0429` (unsound `VariantStrIter`) and `proc-macro-error`
+    (unmaintained, used by `glib-macros`): arrive through GTK on Linux only (`tauri`, `tray-icon`,
+    `drag`). Serein never calls `glib` itself and has no `Variant` code; the fix needs
+    `gtk-rs` 0.19+, which waits on Tauri moving off GTK 3 bindings.
+  - `unic-*` (unmaintained): build-time URL-pattern parsing inside `tauri-utils`, no user input.
+  - `serial` 0.4 (unmaintained): pulled by `portable-pty` for its unused serial backend; Serein's
+    COM-port support uses `serialport`.
+  - `atomic-polyfill` (unmaintained, RDP helper): `heapless` inside smart-card code of
+    `sspi`/IronRDP; smart-card login is not used.
+- Yanked crate versions are not allowed to stay: `serialport` 4.10.0 and `wnaf` 0.14.0 were
+  replaced with 4.10.1 and 0.14.1 as soon as they were noticed.
+- GitHub Actions in CI are pinned to commit SHAs, not tags: a tag can be moved to other code, a
+  commit cannot. Dependabot proposes updates monthly as reviewable pull requests.
 - Legacy mode (`sshLegacyAlgos`) deliberately offers old algorithms — `ssh-rsa`, CBC ciphers,
   `hmac-sha1`, DH group1 — because otherwise old network hardware cannot be reached at all. They
   are appended at the end of each list, so a modern server still negotiates a strong set, and
