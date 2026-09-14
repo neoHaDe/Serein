@@ -26,6 +26,7 @@ mod os_secrets;
 mod ownership;
 mod paths;
 pub mod platform;
+pub mod profile_lock;
 mod proxycmd;
 mod pty;
 pub mod rdp;
@@ -2601,6 +2602,18 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            // Один процесс на профиль - раньше всего, что профиль читает или пишет: миграция
+            // схемы ниже уже пишет. Почему это нужно - в `profile_lock`.
+            if let Err(busy) = profile_lock::hold(&store::config_dir()) {
+                use tauri_plugin_dialog::DialogExt;
+                let _ = app
+                    .dialog()
+                    .message(&busy)
+                    .title("Serein уже запущен")
+                    .blocking_show();
+                // Осознанный отказ, а не сбой: выходим тихо, без паники в журнале.
+                std::process::exit(0);
+            }
             // Схему профиля приводим к текущей до того, как что-либо его прочитает.
             // Ошибка здесь означает профиль от более новой версии: продолжать нельзя -
             // первая же запись выбросит поля, которых мы не знаем.
