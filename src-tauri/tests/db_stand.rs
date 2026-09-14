@@ -578,3 +578,134 @@ fn sqlite_читается_через_sqlite3_на_сервере() {
         assert_eq!(exists.trim(), "нет", "пустой файл не должен появиться");
     });
 }
+
+
+fn mongo_params(s: &Stand, user: &str, password: &str) -> Params {
+    Params {
+        kind: Kind::Mongo,
+        host: Some(s.mongo_host.clone()),
+        port: None,
+        user: Some(user.to_string()),
+        password: Some(password.to_string()),
+        database: Some("probe".to_string()),
+    }
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn mongodb_отвечает_через_ssh_канал() {
+    // Порт MongoDB наружу не опубликован, а вход по паролю включён: проверяется и канал
+    // внутри SSH-сессии, и свой вход SCRAM.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let id = open(&s, mongo_params(&s, "probe", "probe-pass")).await;
+        db::query(&id, "db.stand_items.deleteMany({})").await.expect("очистка");
+        let put = db::query(
+            &id,
+            "db.stand_items.insertMany([{ b: 'привет', a: 1, вложенный: { x: [1, 2] } }, { b: '', a: null }])",
+        )
+        .await
+        .expect("вставка");
+        assert_eq!(put["affected"], 2, "{put}");
+
+        let out = db::query(&id, "db.stand_items.find({}, { _id: 0 }).sort({ a: -1 })")
+            .await
+            .expect("выборка");
+        let cols: Vec<&str> = out["columns"]
+            .as_array()
+            .expect("колонки")
+            .iter()
+            .map(|c| c.as_str().expect("имя колонки"))
+            .collect();
+        assert_eq!(cols, vec!["b", "a", "вложенный"], "поля в порядке документа, а не по алфавиту");
+        let rows = out["rows"].as_array().expect("строки");
+        assert_eq!(rows[0]["b"], "привет", "юникод обязан доехать целым");
+        assert_eq!(rows[0]["a"], "1");
+        assert_eq!(rows[0]["вложенный"], "{ x: [ 1, 2 ] }");
+        assert_eq!(rows[1]["b"], "", "пустая строка - не null");
+        assert!(rows[1]["a"].is_null(), "null остаётся null");
+
+        let n = db::query(&id, "db.stand_items.countDocuments({ a: { $gte: 1 } })")
+            .await
+            .expect("подсчёт");
+        assert_eq!(n["rows"][0]["количество"], "1");
+
+        db::query(
+            &id,
+            "db.stand_items.insertOne({ _id: ObjectId('650000000000000000000001'), когда: ISODate('2026-09-13T10:20:30Z') })",
+        )
+        .await
+        .expect("вставка с датой");
+        let one = db::query(&id, "db.stand_items.findOne({ _id: ObjectId('650000000000000000000001') })")
+            .await
+            .expect("поиск по _id");
+        assert_eq!(one["rows"][0]["_id"], "ObjectId('650000000000000000000001')");
+        assert!(
+            one["rows"][0]["когда"].as_str().unwrap_or("").starts_with("2026-09-13T10:20:30"),
+            "дата - датой: {one}"
+        );
+
+        // Код ошибки в тексте: по нему ошибку и ищут.
+        let err = db::query(&id, "db.runCommand({ нет_такой_команды: 1 })").await.expect_err("ошибка");
+        assert!(err.contains("59"), "ожидался код 59: {err}");
+        db::query(&id, "db.runCommand({ ping: 1 })").await.expect("соединение цело после ошибки");
+        db::close(&id);
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn mongodb_дочитывает_курсор_и_находит_пользователя_базы() {
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let id = open(&s, mongo_params(&s, "probe", "probe-pass")).await;
+        db::query(&id, "db.stand_many.deleteMany({})").await.expect("очистка");
+        let docs: Vec<String> = (0..1200).map(|i| format!("{{ n: {i} }}")).collect();
+        db::query(&id, &format!("db.stand_many.insertMany([{}])", docs.join(", ")))
+            .await
+            .expect("вставка");
+        // Первая пачка курсора меньше 1200: остальное приходит через getMore.
+        let all = db::query(&id, "db.stand_many.find().sort({ n: 1 })").await.expect("выборка");
+        assert_eq!(all["rows"].as_array().expect("строки").len(), 1200, "курсор дочитан до конца");
+        assert_eq!(all["truncated"], false);
+        assert_eq!(all["rows"][1199]["n"], "1199");
+
+        // Учётки приложений живут в своей базе, а не в admin. Одна - со старым SCRAM-SHA-1:
+        // у него своя подготовка пароля, и на обычной учётке её не проверить.
+        for (user, mechanisms) in [("stand_app", "['SCRAM-SHA-256']"), ("stand_old", "['SCRAM-SHA-1']")] {
+            let made = db::query(
+                &id,
+                &format!(
+                    "db.runCommand({{ createUser: '{user}', pwd: 'app-pass', roles: [{{ role: 'readWrite', db: 'probe' }}], mechanisms: {mechanisms} }})"
+                ),
+            )
+            .await;
+            if let Err(e) = made {
+                assert!(e.contains("51003"), "создание пользователя {user}: {e}");
+            }
+        }
+        db::close(&id);
+
+        for user in ["stand_app", "stand_old"] {
+            let app = open(&s, mongo_params(&s, user, "app-pass")).await;
+            let n = db::query(&app, "db.stand_many.estimatedDocumentCount()")
+                .await
+                .expect("запрос пользователя базы");
+            assert_eq!(n["rows"][0]["количество"], "1200", "{user}");
+            db::close(&app);
+        }
+
+        let h = ssh::connect_client(vec![s.by_key(s.debian_port)])
+            .await
+            .expect("подключение к серверу");
+        let wrong = db::open(
+            format!("test-{}", uuid::Uuid::new_v4()),
+            "сессия-стенда",
+            &h,
+            mongo_params(&s, "probe", "не-тот"),
+        )
+        .await
+        .expect_err("неверный пароль");
+        assert!(wrong.contains("18"), "ожидался код 18 (AuthenticationFailed): {wrong}");
+    });
+}

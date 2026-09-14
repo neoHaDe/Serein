@@ -141,6 +141,23 @@ services:
       timeout: 5s
       retries: 60
 
+  # MongoDB. Порт наружу не публикуется, как и у остальных баз. Вход по паролю включён
+  # намеренно: без него проверялось бы одно рукопожатие, а своё здесь - именно вход SCRAM.
+  #
+  # Готовность спрашиваем по сетевому адресу контейнера, а не по петле: при первом
+  # запуске образ поднимает временный сервер только на петле, заводит пользователя и
+  # перезапускается. Проверка по петле прошла бы раньше, чем сервер станет виден соседям.
+  mongo:
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: probe
+      MONGO_INITDB_ROOT_PASSWORD: probe-pass
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --host \"$$(hostname -i | cut -d' ' -f1)\" -u probe -p probe-pass --authenticationDatabase admin --quiet --eval \"db.adminCommand('ping').ok\" | grep -q 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
   alpine:
     build:
       context: .

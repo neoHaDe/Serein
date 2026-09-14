@@ -1,4 +1,4 @@
-//! Базы данных рядом с сервером: PostgreSQL, MySQL/MariaDB, SQL Server, SQLite и Redis через уже открытую
+//! Базы данных рядом с сервером: PostgreSQL, MySQL/MariaDB, SQL Server, SQLite, MongoDB и Redis через уже открытую
 //! SSH-сессию.
 //!
 //! Смысл ровно в слове «через». Базу почти никогда не выставляют в сеть: она слушает
@@ -11,6 +11,7 @@
 //! в сеть по адресу. Без этого канал внутрь не отдать, и пришлось бы возвращаться к пробросу.
 //! У MySQL такого клиента не нашлось вовсе, поэтому его протокол разобран у нас - см.
 //! [`crate::mysql`], там же объяснено, почему выбран этот путь, а не проброс порта.
+//! С MongoDB то же самое - см. [`crate::mongo`].
 
 use crate::ssh::SharedHandle;
 use serde_json::{json, Map, Value};
@@ -29,6 +30,8 @@ pub enum Kind {
     Mssql,
     /// SQLite: файл на сервере, запросы через `sqlite3` там же.
     Sqlite,
+    /// MongoDB: свой протокол поверх канала, см. [`crate::mongo`].
+    Mongo,
     Redis,
 }
 
@@ -41,6 +44,7 @@ impl Kind {
             Kind::Mssql => 1433,
             // У SQLite порта нет: это файл, а не служба.
             Kind::Sqlite => 0,
+            Kind::Mongo => 27017,
             Kind::Redis => 6379,
         }
     }
@@ -51,6 +55,7 @@ impl Kind {
             Kind::Mysql => "mysql",
             Kind::Mssql => "mssql",
             Kind::Sqlite => "sqlite",
+            Kind::Mongo => "mongo",
             Kind::Redis => "redis",
         }
     }
@@ -86,6 +91,7 @@ impl Params {
 }
 
 type MysqlConn = crate::mysql::Conn<russh::ChannelStream<russh::client::Msg>>;
+type MongoConn = crate::mongo::Conn<russh::ChannelStream<russh::client::Msg>>;
 
 enum Live {
     Postgres(Arc<tokio_postgres::Client>),
@@ -97,6 +103,8 @@ enum Live {
     Mssql(Arc<AsyncMutex<MssqlClient>>),
     /// У SQLite держать открытым нечего: каждый запрос - отдельный запуск `sqlite3`.
     Sqlite(Arc<SqliteTarget>),
+    /// Под замком: один поток, запрос и ответ строго по очереди, как у MySQL.
+    Mongo(Arc<AsyncMutex<MongoConn>>),
     Redis(Arc<AsyncMutex<redis::aio::MultiplexedConnection>>),
 }
 
@@ -240,6 +248,17 @@ pub async fn open(
                 .await
                 .map_err(|e| mssql_err(&e))?;
             Live::Mssql(Arc::new(AsyncMutex::new(client)))
+        }
+        Kind::Mongo => {
+            let stream = channel(handle, p.host(), p.port()).await?;
+            let conn = crate::mongo::Conn::connect(
+                stream,
+                p.user.as_deref().unwrap_or(""),
+                p.password.as_deref().unwrap_or(""),
+                p.database.as_deref().unwrap_or(""),
+            )
+            .await?;
+            Live::Mongo(Arc::new(AsyncMutex::new(conn)))
         }
         Kind::Sqlite => Live::Sqlite(Arc::new(sqlite_open(handle, &p).await?)),
     };
@@ -391,6 +410,7 @@ pub async fn query(id: &str, text: &str) -> Result<Value, String> {
         Some(Live::Mysql(c)) => Some(Live::Mysql(c.clone())),
         Some(Live::Mssql(c)) => Some(Live::Mssql(c.clone())),
         Some(Live::Sqlite(t)) => Some(Live::Sqlite(t.clone())),
+        Some(Live::Mongo(c)) => Some(Live::Mongo(c.clone())),
         Some(Live::Redis(c)) => Some(Live::Redis(c.clone())),
         None => None,
     })
@@ -403,6 +423,7 @@ pub async fn query(id: &str, text: &str) -> Result<Value, String> {
             Live::Mysql(c) => mysql_query(&c, text).await,
             Live::Mssql(c) => mssql_query(&c, text).await,
             Live::Sqlite(t) => sqlite_query(&t, text).await,
+            Live::Mongo(c) => mongo_query(&c, text).await,
             Live::Redis(c) => redis_query(&c, text).await,
         }
     };
@@ -769,6 +790,65 @@ fn parse_sqlite_json(out: &str, capped: bool) -> Result<Value, String> {
     Ok(v)
 }
 
+/// Запрос к MongoDB. Документы разной формы сводятся в одну таблицу: колонки - все поля
+/// верхнего уровня в порядке первого появления.
+async fn mongo_query(conn: &AsyncMutex<MongoConn>, text: &str) -> Result<Value, String> {
+    // Разбор до замка: ошибка в тексте запроса не должна ждать чужого долгого запроса.
+    let op = crate::mongo::parse(text)?;
+    let out = {
+        let mut g = conn.lock().await;
+        g.run(op, MAX_ROWS, MAX_BYTES).await?
+    };
+    Ok(answer(vec![mongo_set(out)]))
+}
+
+/// Колонок не больше этого. Коллекция, где у каждого документа свои поля, иначе дала бы
+/// таблицу в тысячи столбцов, в которой ничего не разглядеть.
+const MONGO_MAX_COLUMNS: usize = 300;
+
+fn mongo_set(out: crate::mongo::Outcome) -> ResultSet {
+    let mut names: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut too_wide = false;
+    for d in &out.docs {
+        for k in d.keys() {
+            if seen.contains(k.as_str()) {
+                continue;
+            }
+            if names.len() >= MONGO_MAX_COLUMNS {
+                too_wide = true;
+                break;
+            }
+            seen.insert(k.clone());
+            names.push(k.clone());
+        }
+    }
+    let mut set = ResultSet::new(names);
+    set.affected = out.affected;
+    for d in &out.docs {
+        let mut obj = Map::new();
+        let mut size = 0usize;
+        for name in &set.columns {
+            // Поля нет или оно null - в таблице одно и то же: пустая ячейка.
+            let cell = match d.get(name).and_then(crate::mongo::cell) {
+                Some(v) => {
+                    size += v.len();
+                    set.budget.cell(&v)
+                }
+                None => Value::Null,
+            };
+            obj.insert(name.clone(), cell);
+        }
+        if !set.budget.push(Value::Object(obj), size) {
+            break;
+        }
+    }
+    if out.cut || too_wide {
+        set.budget.truncated = true;
+    }
+    set
+}
+
 async fn redis_query(
     conn: &AsyncMutex<redis::aio::MultiplexedConnection>,
     line: &str,
@@ -913,6 +993,20 @@ fn redis_err(e: &redis::RedisError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn документы_mongodb_сводятся_в_таблицу() {
+        let out = crate::mongo::Outcome {
+            docs: vec![bson::doc! { "b": 1, "a": "x" }, bson::doc! { "c": bson::Bson::Null, "a": "" }],
+            cut: false,
+            affected: 0,
+        };
+        let v = answer(vec![mongo_set(out)]);
+        assert_eq!(v["columns"], json!(["b", "a", "c"]), "поля в порядке первого появления");
+        assert_eq!(v["rows"][0]["b"], "1");
+        assert!(v["rows"][1]["b"].is_null(), "поля нет - ячейка пустая");
+        assert_eq!(v["rows"][1]["a"], "", "пустая строка - не null");
+    }
 
     #[test]
     fn ответ_sqlite3_разбирается_с_порядком_колонок() {

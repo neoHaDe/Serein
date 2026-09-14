@@ -20,6 +20,7 @@ pub mod localname;
 pub mod metrics;
 pub mod monitor;
 mod multihost;
+pub mod mongo;
 pub mod mysql;
 mod os_secrets;
 mod ownership;

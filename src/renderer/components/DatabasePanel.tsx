@@ -19,7 +19,7 @@ import { forget, isGone, recall, remember, update } from '../dbMemory'
  * поэтому при появлении на пустом месте панель переспрашивает приложение.
  */
 
-type Kind = 'postgres' | 'mysql' | 'mssql' | 'sqlite' | 'redis'
+type Kind = 'postgres' | 'mysql' | 'mssql' | 'sqlite' | 'mongo' | 'redis'
 
 interface Props {
   sessionId: string
@@ -34,6 +34,7 @@ const HINT: Record<Kind, string> = {
   mysql: 'SHOW FULL PROCESSLIST;',
   mssql: 'SELECT TOP 20 session_id, status, command FROM sys.dm_exec_requests;',
   sqlite: "SELECT name FROM sqlite_master WHERE type = 'table';",
+  mongo: 'db.users.find({ age: { $gt: 30 } }).sort({ name: 1 }).limit(20)',
   redis: 'INFO server'
 }
 
@@ -63,6 +64,12 @@ const STARTERS: Record<Kind, { label: string; text: string }[]> = {
     { label: 'Целостность', text: 'PRAGMA integrity_check' },
     { label: 'Версия', text: 'SELECT sqlite_version() AS версия' }
   ],
+  mongo: [
+    { label: 'Коллекции', text: 'show collections' },
+    { label: 'Базы', text: 'show dbs' },
+    { label: 'Размер базы', text: 'db.stats()' },
+    { label: 'Версия', text: 'db.version()' }
+  ],
   redis: [
     { label: 'Сервер', text: 'INFO server' },
     { label: 'Память', text: 'INFO memory' },
@@ -72,11 +79,11 @@ const STARTERS: Record<Kind, { label: string; text: string }[]> = {
 }
 
 /** Кого подставлять в поле пользователя. У Redis имени обычно нет вовсе. */
-const DEFAULT_USER: Record<Kind, string> = { postgres: 'postgres', mysql: 'root', mssql: 'sa', sqlite: '', redis: '' }
+const DEFAULT_USER: Record<Kind, string> = { postgres: 'postgres', mysql: 'root', mssql: 'sa', sqlite: '', mongo: '', redis: '' }
 
 /** Подсказки в пустых полях - то же, что подставит бэкенд, если оставить их пустыми. */
-const DEFAULT_PORT: Record<Kind, number> = { postgres: 5432, mysql: 3306, mssql: 1433, sqlite: 0, redis: 6379 }
-const DEFAULT_DB: Record<Kind, string> = { postgres: 'postgres', mysql: 'mysql', mssql: 'master', sqlite: '/var/lib/app/data.db', redis: '0' }
+const DEFAULT_PORT: Record<Kind, number> = { postgres: 5432, mysql: 3306, mssql: 1433, sqlite: 0, mongo: 27017, redis: 6379 }
+const DEFAULT_DB: Record<Kind, string> = { postgres: 'postgres', mysql: 'mysql', mssql: 'master', sqlite: '/var/lib/app/data.db', mongo: 'test', redis: '0' }
 
 export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props): JSX.Element {
   // Что было открыто в прошлый раз на этой же сессии. Читаем один раз при создании
@@ -278,6 +285,7 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
                 <option value="mysql">MySQL / MariaDB</option>
                 <option value="mssql">SQL Server</option>
                 <option value="sqlite">SQLite (файл на сервере)</option>
+                <option value="mongo">MongoDB</option>
                 <option value="redis">Redis</option>
               </select>
             </label>
@@ -319,7 +327,9 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
           <div className="agent-hint">
             {kind === 'sqlite'
               ? 'Запросы выполняет sqlite3 на самом сервере. Нужен путь к существующему файлу - новую базу не создаём.'
-              : 'Подключение внутри SSH-канала. Адрес - такой, каким его видит сервер'}
+              : kind === 'mongo'
+                ? 'Подключение внутри SSH-канала. Пользователь ищется в admin, затем в указанной базе. Запросы - как в mongosh: db.коллекция.find(...), show dbs, use база'
+                : 'Подключение внутри SSH-канала. Адрес - такой, каким его видит сервер'}
           </div>
           {error && <div className="db-error">{error}</div>}
           <button className="primary" disabled={busy} onClick={() => void connect()}>

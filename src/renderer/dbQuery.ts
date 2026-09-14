@@ -93,6 +93,13 @@ export function needsConfirm(sql: string): string | null {
   if (/^\s*(flushall|flushdb)\b/i.test(text)) {
     return 'Команда стирает базу целиком.'
   }
+  // MongoDB: удаление коллекции или базы и изменение всех документов пустым фильтром.
+  if (/\.(drop|dropDatabase)\s*\(\s*\)/.test(text) || /^\s*\{\s*["']?(drop|dropDatabase)["']?\s*:/.test(text)) {
+    return 'Команда удаляет коллекцию или базу целиком. Это необратимо.'
+  }
+  if (/\.(deleteMany|updateMany)\s*\(\s*\{\s*\}/.test(text)) {
+    return 'Пустой фильтр затронет все документы коллекции.'
+  }
   return null
 }
 

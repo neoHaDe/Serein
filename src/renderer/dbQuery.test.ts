@@ -70,6 +70,20 @@ describe('предупреждение перед выполнением', () =>
     expect(needsConfirm('FLUSHALL')).toMatch(/целиком/)
     expect(needsConfirm('flushdb')).toMatch(/целиком/)
   })
+
+  it('MongoDB: удаление коллекции и изменение всех документов предупреждают', () => {
+    expect(needsConfirm('db.users.drop()')).toMatch(/необратимо/)
+    expect(needsConfirm('db.dropDatabase()')).toMatch(/необратимо/)
+    expect(needsConfirm('{ "dropDatabase": 1 }')).toMatch(/необратимо/)
+    expect(needsConfirm('db.users.deleteMany({})')).toMatch(/все документы/)
+    expect(needsConfirm('db.users.updateMany({ }, { $set: { a: 1 } })')).toMatch(/все документы/)
+  })
+
+  it('MongoDB: запросы с условием и индексы не требуют подтверждения', () => {
+    expect(needsConfirm('db.users.find({})')).toBeNull()
+    expect(needsConfirm('db.users.deleteMany({ age: { $lt: 18 } })')).toBeNull()
+    expect(needsConfirm("db.users.dropIndex('age_1')")).toBeNull()
+  })
 })
 
 describe('показ значений', () => {
