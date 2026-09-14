@@ -8,7 +8,7 @@
 
 SSH, SFTP and SCP with an editor, serial consoles, telnet and raw TCP.
 Tabs and split panes, port forwards, resource monitoring, a Docker panel
-and a local terminal - in an installer of about **7.8 MB**.
+and a local terminal - in an installer of about **8.0 MB**.
 
 Free, open source, Apache 2.0. Windows x64 and Linux x64, **v1.4.0**.
 
@@ -38,7 +38,7 @@ the PTY live in a single Rust binary.
 
 | | **Serein (Tauri)** | Typical Electron client |
 | --- | :---: | :---: |
-| Installer size | **≈ 7.4 MB** | ≈ 85 MB |
+| Installer size | **≈ 8.0 MB** | ≈ 85 MB |
 | Idle RAM | **≈ 100 MB** | 150–250 MB |
 | SSH engine | pure Rust [`russh`](https://github.com/Eugeny/russh) | libssh2 / native |
 | Runtime | system WebView2 | full Chromium |
@@ -46,7 +46,7 @@ the PTY live in a single Rust binary.
 Measured on 1.3.1 with no session open: about 100 MB private across the tree of seven
 processes, and 70 MB on a fresh profile. Adding up Working Set in Task Manager gives about
 480 MB - the same memory counted once per WebView2 process that shares it. The Electron
-figures are public measurements normalised to the same metric; size is the 1.3.1 installer.
+figures are public measurements normalised to the same metric; size is the 1.4.0 installer.
 
 ---
 

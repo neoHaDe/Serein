@@ -139,4 +139,9 @@ deleted since are dropped, and the list says how many.
 ### Checksums
 
 ```
+aacf5b1aecbb4336c88be9271812ee914c74ae8ae9568e1c5d862a317f34335b Serein_1.4.0_x64-setup.exe
+ad3375d1a9230681dcc07cb50bf35dd05366c8d474dd65aae053de9b77808812 Serein_1.4.0_x64-portable.zip
+9531ea12cad0b615e387266ce6d1c948ac4d22ba8b215b892f5c0012eaef7207 Serein_1.4.0_amd64.deb
+24bbba72d40786f760e150196d81a961efc27a2561d1ca0d45f78f99d175a41e Serein_1.4.0_amd64.AppImage
+dad2b283c2c120a5a8431002645c495a07ad49d6e4d6dd5d6395739ffc9b0eb0 Serein-1.4.0-1.x86_64.rpm
 ```

@@ -27,15 +27,19 @@ if ! cargo cyclonedx --help >/dev/null 2>&1; then
 fi
 
 echo "Rust…"
-cargo cyclonedx --manifest-path src-tauri/Cargo.toml --format json --spec-version 1.5 >/dev/null
-# cargo-cyclonedx кладёт файл рядом с манифестом; переносим под понятным именем.
-find src-tauri -maxdepth 1 -name '*.cdx.json' -exec mv {} "$out/serein-$version-rust.cdx.json" \;
+# Имя файла задаём сами. Без этого cargo-cyclonedx 0.5 называет его по-своему, `find` по
+# `*.cdx.json` ничего не находил, и Rust-состав молча не попадал в релиз - при зелёном
+# выходе скрипта. Поэтому ещё и проверяем, что файл действительно появился.
+cargo cyclonedx --manifest-path src-tauri/Cargo.toml --format json --spec-version 1.5 \
+  --override-filename serein-rust-sbom >/dev/null
+mv src-tauri/serein-rust-sbom.json "$out/serein-$version-rust.cdx.json"
 
 echo "Rust: помощник RDP…"
 # Помощник - отдельная рабочая область со своим замком зависимостей, и в дерево
 # приложения он не попадает. В поставку попадает, поэтому и в состав должен.
-cargo cyclonedx --manifest-path rdp-helper/Cargo.toml --format json --spec-version 1.5 >/dev/null
-find rdp-helper -maxdepth 1 -name '*.cdx.json' -exec mv {} "$out/serein-$version-rdp-helper.cdx.json" \;
+cargo cyclonedx --manifest-path rdp-helper/Cargo.toml --format json --spec-version 1.5 \
+  --override-filename serein-rdp-helper-sbom >/dev/null
+mv rdp-helper/serein-rdp-helper-sbom.json "$out/serein-$version-rdp-helper.cdx.json"
 
 echo "npm…"
 # Версия закреплена, а не `@latest`: состав SBOM должен зависеть только от наших
@@ -46,6 +50,10 @@ npx --yes @cyclonedx/cyclonedx-npm@4.0.0 \
   --spec-version 1.5 \
   --output-format JSON \
   --output-file "$out/serein-$version-npm.cdx.json" >/dev/null
+
+for part in rust rdp-helper npm; do
+  [ -s "$out/serein-$version-$part.cdx.json" ] || { echo "нет SBOM: $part" >&2; exit 1; }
+done
 
 echo "готово:"
 ls -la "$out"
