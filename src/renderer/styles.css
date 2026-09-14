@@ -2878,7 +2878,7 @@ button.secondary:hover {
   text-overflow: ellipsis;
 }
 .docker-table {
-  --docker-grid: minmax(140px, 1.5fr) 92px 72px minmax(120px, 1.3fr) minmax(96px, 1fr);
+  --docker-grid: minmax(140px, 1.5fr) 92px 72px 64px 84px minmax(120px, 1.3fr) minmax(96px, 1fr);
   flex: 1;
   min-height: 0;
 }
@@ -2887,6 +2887,30 @@ button.secondary:hover {
 }
 .docker-row-head {
   user-select: none;
+}
+/* Заголовок, по которому сортируют щелчком: и таблица процессов, и сетка контейнеров. */
+.ws-th-sort {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.ws-th-sort:hover,
+.ws-th-sort.on {
+  color: var(--text);
+}
+.ws-sort-arrow {
+  display: inline-block;
+  width: 10px;
+  margin-left: 3px;
+  font-size: 9px;
+}
+.docker-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.ws-count {
+  white-space: nowrap;
+  font-size: 11px;
 }
 .docker-th {
   display: flex;

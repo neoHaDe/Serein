@@ -112,6 +112,36 @@ pub fn action_cmd(id: &str, action: &str) -> Option<String> {
     Some(format!("docker {verb} {}", safe_id(id)))
 }
 
+/// Замер всех работающих контейнеров одним вызовом - для колонок CPU и памяти в списке.
+pub const STATS_ALL_CMD: &str = "docker stats --no-stream --format \"{{json .}}\"";
+
+/// Замеры по контейнерам. Ключ - короткий id, первые 12 знаков: так контейнер называет
+/// `docker stats`, а список отдаёт полный.
+pub fn parse_stats_all(code: i32, stdout: &str, stderr: &str) -> Value {
+    if code != 0 {
+        let err = stderr.trim();
+        let msg = if err.is_empty() { "docker stats завершился с ошибкой" } else { err };
+        return json!({ "ok": false, "error": msg });
+    }
+    let mut stats = serde_json::Map::new();
+    for line in stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let Ok(p) = serde_json::from_str::<Value>(line) else { continue };
+        let id: String = p.get("ID").and_then(|v| v.as_str()).unwrap_or("").chars().take(12).collect();
+        if id.is_empty() {
+            continue;
+        }
+        stats.insert(
+            id,
+            json!({
+                "cpuPct": p.get("CPUPerc").and_then(|v| v.as_str()).unwrap_or(""),
+                "memUsage": p.get("MemUsage").and_then(|v| v.as_str()).unwrap_or(""),
+                "memPct": p.get("MemPerc").and_then(|v| v.as_str()).unwrap_or(""),
+            }),
+        );
+    }
+    json!({ "ok": true, "stats": stats })
+}
+
 pub fn stats_cmd(id: &str) -> String {
     format!(
         "docker stats --no-stream --format \"{{{{json .}}}}\" {}",
@@ -239,6 +269,23 @@ operable program or batch file.",
         assert!(v["ok"].as_bool().unwrap());
         assert_eq!(v["stats"]["cpuPct"], "13.45%");
         assert_eq!(v["stats"]["memUsage"], "482MiB / 2GiB");
+    }
+
+    #[test]
+    fn замеры_всех_контейнеров_раскладываются_по_короткому_id() {
+        let out = concat!(
+            r#"{"ID":"abc123def456","Name":"web","CPUPerc":"13.45%","MemUsage":"482MiB / 2GiB","MemPerc":"23.50%"}"#,
+            "\n\n",
+            "не json\n",
+            r#"{"ID":"0123456789abcdef","Name":"db","CPUPerc":"0.10%","MemUsage":"1.2GiB / 2GiB","MemPerc":"60.00%"}"#,
+        );
+        let v = parse_stats_all(0, out, "");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["stats"]["abc123def456"]["cpuPct"], "13.45%");
+        assert_eq!(v["stats"]["0123456789ab"]["memUsage"], "1.2GiB / 2GiB", "ключ - первые 12 знаков");
+        assert_eq!(v["stats"].as_object().unwrap().len(), 2, "мусорная строка пропущена");
+        assert_eq!(parse_stats_all(0, "", "")["stats"], json!({}), "нет работающих - пусто, не ошибка");
+        assert_eq!(parse_stats_all(1, "", "boom")["error"], "boom");
     }
 
     #[test]

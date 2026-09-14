@@ -231,7 +231,7 @@ pub mod cmd {
     /// в таблице колонка называется «память, %», и без знаменателя её не посчитать.
     pub const PS_WINDOWS: &str = concat!(
         "\"MT`t$((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize)\"; ",
-        "Get-Process | Sort-Object -Property CPU -Descending | Select-Object -First 80 ",
+        "Get-Process | Sort-Object -Property CPU -Descending | Select-Object -First 2000 ",
         "Id, ProcessName, CPU, WorkingSet | ",
         "ForEach-Object { \"$($_.Id)`t$($_.ProcessName)`t$($_.CPU)`t$($_.WorkingSet)\" }"
     );
@@ -280,7 +280,7 @@ pub mod cmd {
     /// килобайтах сам по себе ничего не говорит.
     pub const PS_BUSYBOX: &str = concat!(
         "awk '/^MemTotal:/{print \"MT\\t\" $2}' /proc/meminfo 2>/dev/null; ",
-        "ps -o pid,user,rss,stat,args 2>/dev/null | head -n 120"
+        "ps -o pid,user,rss,stat,args 2>/dev/null | head -n 2000"
     );
 
     /// Службы на BusyBox: systemd там нет, зато у Alpine и у роутеров есть OpenRC.

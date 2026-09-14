@@ -1602,6 +1602,14 @@ async fn docker_logs(
     Ok(json!({ "ok": true, "logs": out }))
 }
 
+/// CPU и память всех работающих контейнеров одним вызовом - для колонок списка.
+#[tauri::command]
+async fn docker_stats_all(state: State<'_, AppState>, id: String) -> Result<Value, String> {
+    let s = state.ssh(&id).ok_or("Сессия не подключена")?;
+    let (code, out, err) = ssh::exec(&s.handle, docker::STATS_ALL_CMD, Some(s.cancel.subscribe())).await?;
+    Ok(docker::parse_stats_all(code, &out, &err))
+}
+
 #[tauri::command]
 async fn docker_stats(
     state: State<'_, AppState>,
@@ -2821,6 +2829,7 @@ pub fn run() {
             docker_action,
             docker_logs,
             docker_stats,
+            docker_stats_all,
             docker_logs_cancel,
             docker_container_files,
             docker_compose_list,

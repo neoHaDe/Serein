@@ -40,6 +40,7 @@ import type {
   DockerListResult,
   DockerAction,
   DockerStatsResult,
+  DockerStatsAllResult,
   DockerLogsChunk,
   DockerContainerFilesResult,
   DockerComposeListResult,
@@ -288,6 +289,7 @@ export const api = {
       invoke('docker_action', { id, containerId, action }),
     stats: (id: string, containerId: string): Promise<DockerStatsResult> =>
       invoke('docker_stats', { id, containerId }),
+    statsAll: (id: string): Promise<DockerStatsAllResult> => invoke('docker_stats_all', { id }),
     logs: (id: string, containerId: string): Promise<{ ok: boolean; logs?: string; error?: string }> =>
       invoke('docker_logs', { id, containerId }),
     cancelLogs: (id: string, containerId?: string): Promise<void> =>

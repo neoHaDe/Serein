@@ -13,6 +13,8 @@ import { DockerLogView, openDetachedLogsWindow, useLogsPanelResize } from './doc
 import { useCtrlWheelZoom } from '../useCtrlWheelZoom'
 import { WsDetachButton } from './WsDetachButton'
 import { openDetachedWorkspace } from './workspaceWindow'
+import { matchesQuery, nextSort, parseBytes, parsePercent, saveSort, sortRows, loadSort } from '../tableSort'
+import { SortHeader } from './SortHeader'
 
 interface Props {
   /** SSH-сессия, на которой выполняем docker-команды и shell. */
@@ -82,16 +84,27 @@ function healthLabel(h: DockerHealth): string {
   return 'starting'
 }
 
+/** Поиск по списку: несколько слов через пробел, каждое - в любом из полей. */
 function matchContainerFilter(c: DockerContainer, q: string): boolean {
-  const f = q.trim().toLowerCase()
-  if (!f) return true
-  return (
-    c.name.toLowerCase().includes(f) ||
-    c.id.toLowerCase().includes(f) ||
-    c.state.toLowerCase().includes(f) ||
-    c.status.toLowerCase().includes(f) ||
-    (c.image ?? '').toLowerCase().includes(f)
-  )
+  return matchesQuery([c.name, c.id, c.state, c.status, c.image, c.ports], q)
+}
+
+type DockerSortKey = 'name' | 'id' | 'state' | 'cpu' | 'mem' | 'status' | 'ports'
+const DOCKER_COLUMNS: { key: DockerSortKey; label: string }[] = [
+  { key: 'name', label: 'Имя' },
+  { key: 'id', label: 'ID' },
+  { key: 'state', label: 'State' },
+  { key: 'cpu', label: 'CPU' },
+  { key: 'mem', label: 'MEM' },
+  { key: 'status', label: 'Status' },
+  { key: 'ports', label: 'Ports' }
+]
+const DOCKER_SORT_KEYS = DOCKER_COLUMNS.map((c) => c.key)
+const DOCKER_SORT_STORAGE = 'serein.sort.docker'
+
+/** Замер `docker stats` для контейнера: там короткий id, в списке - полный. */
+function statsOf(all: Record<string, DockerContainerStats>, c: DockerContainer): DockerContainerStats | undefined {
+  return all[c.id.slice(0, 12)]
 }
 
 function joinContainerPath(base: string, name: string): string {
@@ -673,6 +686,11 @@ export function DockerPanel({
   const [propsFor, setPropsFor] = useState<DockerContainer | null>(null)
   const [mainTab, setMainTab] = useState<'containers' | 'compose'>('containers')
   const [filter, setFilter] = useState('')
+  const [sort, setSort] = useState(() =>
+    loadSort<DockerSortKey>(DOCKER_SORT_STORAGE, DOCKER_SORT_KEYS, { key: 'name', dir: 'asc' })
+  )
+  const [allStats, setAllStats] = useState<Record<string, DockerContainerStats>>({})
+  const [allStatsLoading, setAllStatsLoading] = useState(false)
   const [detailPane, setDetailPane] = useState<'logs' | 'files'>('logs')
   const [filesPath, setFilesPath] = useState('/')
   const [filesEntries, setFilesEntries] = useState<DockerContainerFileEntry[]>([])
@@ -684,6 +702,15 @@ export function DockerPanel({
   const { zoom, ref: zoomRef, reset } = useCtrlWheelZoom('serein.logs.zoom')
   const LOADING = 'Загрузка логов…'
 
+  // CPU и память всех работающих контейнеров - одним `docker stats`. Отвечает он секунду-две,
+  // поэтому список показывается сразу, а цифры подтягиваются следом.
+  const reloadAllStats = useCallback(async () => {
+    setAllStatsLoading(true)
+    const res = await window.api.docker.statsAll(sessionId).catch(() => null)
+    setAllStatsLoading(false)
+    setAllStats(res?.ok && res.stats ? res.stats : {})
+  }, [sessionId])
+
   const reload = useCallback(async () => {
     setLoading(true)
     const res = await window.api.docker.list(sessionId)
@@ -692,13 +719,14 @@ export function DockerPanel({
       const list = res.containers ?? []
       setContainers(list)
       setError(null)
+      void reloadAllStats()
       if (selected) {
         const next = list.find((x) => x.id === selected.id)
         if (next) setSelected(next)
         else setSelected(null)
       }
     } else setError(res.error ?? 'Ошибка')
-  }, [sessionId, selected])
+  }, [sessionId, selected, reloadAllStats])
 
   const reloadStats = useCallback(async (c: DockerContainer) => {
     if (!running(c.state, c.status)) {
@@ -904,6 +932,25 @@ export function DockerPanel({
   }
 
   const filteredContainers = containers.filter((c) => matchContainerFilter(c, filter))
+  const sortedContainers = sortRows(filteredContainers, sort, (c, key) => {
+    const st = statsOf(allStats, c)
+    switch (key) {
+      case 'cpu':
+        return parsePercent(st?.cpuPct)
+      case 'mem':
+        return parseBytes(st?.memUsage)
+      case 'ports':
+        return c.ports
+      default:
+        return c[key]
+    }
+  })
+  const onSortContainers = (key: DockerSortKey): void => {
+    // Числа сначала по убыванию: по CPU и памяти щёлкают, чтобы увидеть самых прожорливых.
+    const next = nextSort(sort, key, key === 'cpu' || key === 'mem' ? 'desc' : 'asc')
+    setSort(next)
+    saveSort(DOCKER_SORT_STORAGE, next)
+  }
 
   const headTitle = logsFor
     ? `Логи: ${logsFor.name}`
@@ -1019,17 +1066,25 @@ export function DockerPanel({
                   />
                 </div>
                 <div className="sftp-row sftp-row-head docker-row-head">
-                  <span className="docker-th">Имя</span>
-                  <span className="docker-th">ID</span>
-                  <span className="docker-th">State</span>
-                  <span className="docker-th">Status</span>
-                  <span className="docker-th">Ports</span>
+                  {DOCKER_COLUMNS.map((col) => (
+                    <SortHeader
+                      key={col.key}
+                      as="span"
+                      className="docker-th"
+                      label={col.label}
+                      sortKey={col.key}
+                      sort={sort}
+                      onSort={onSortContainers}
+                    />
+                  ))}
                 </div>
                 {filteredContainers.length === 0 ? (
                   <div className="ws-empty">{containers.length === 0 ? 'Контейнеров нет.' : 'Ничего не найдено.'}</div>
                 ) : (
-                  filteredContainers.map((c) => {
+                  sortedContainers.map((c) => {
                     const health = dockerHealth(c.status)
+                    const st = statsOf(allStats, c)
+                    const pending = allStatsLoading && running(c.state, c.status) ? '…' : '—'
                     return (
                     <div
                       key={c.id}
@@ -1050,6 +1105,12 @@ export function DockerPanel({
                       </span>
                       <span className="mono" title={c.id}>{c.id}</span>
                       <span className={`docker-state is-${dockerStateTone(c.state, c.status)}`}>{c.state}</span>
+                      <span className="mono docker-num" title={st?.cpuPct}>
+                        {st?.cpuPct || pending}
+                      </span>
+                      <span className="mono docker-num" title={st?.memUsage}>
+                        {st?.memUsage ? st.memUsage.split(' / ')[0] : pending}
+                      </span>
                       <span className="docker-status" title={c.status}>
                         {c.status}
                         {health && <span className={`docker-health-badge is-${health}`}>{healthLabel(health)}</span>}

@@ -357,6 +357,12 @@ export interface DockerStatsResult {
   stats?: DockerContainerStats
   error?: string
 }
+/** Замеры всех работающих контейнеров; ключ - первые 12 знаков id. */
+export interface DockerStatsAllResult {
+  ok: boolean
+  stats?: Record<string, DockerContainerStats>
+  error?: string
+}
 export interface DockerListResult {
   ok: boolean
   containers?: DockerContainer[]

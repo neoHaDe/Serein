@@ -2,7 +2,10 @@
 
 use serde_json::{json, Value};
 
-pub const PS_CMD: &str = "ps -eo pid=,user=,pcpu=,pmem=,stat=,comm= --sort=-pcpu 2>/dev/null | head -n 80";
+/// Процессы. Предел 2000, а не первые 80 по процессору: сортирует окно, и обрезанный по
+/// процессору список «по памяти» упорядочил бы не всех - процесс с гигабайтами при нулевой
+/// загрузке в таблицу просто не попадал.
+pub const PS_CMD: &str = "ps -eo pid=,user=,pcpu=,pmem=,stat=,comm= --sort=-pcpu 2>/dev/null | head -n 2000";
 pub const SERVICES_CMD: &str =
     "systemctl list-units --type=service --all --no-legend --no-pager --plain 2>/dev/null | head -n 120";
 /// Журнал хоста.

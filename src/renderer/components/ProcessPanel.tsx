@@ -4,6 +4,45 @@ import { Icon } from './Icon'
 import { WsDetachButton } from './WsDetachButton'
 import { openDetachedWorkspace } from './workspaceWindow'
 import { metricView } from '../processMetric'
+import { loadSort, matchesQuery, nextSort, saveSort, sortRows, type SortDir } from '../tableSort'
+import { SortHeader } from './SortHeader'
+
+type ProcessKey = 'pid' | 'user' | 'cpu' | 'mem' | 'stat' | 'cmd'
+
+const COLUMNS: { key: ProcessKey; label: string; firstDir: SortDir }[] = [
+  { key: 'pid', label: 'PID', firstDir: 'asc' },
+  { key: 'user', label: 'User', firstDir: 'asc' },
+  // Числа сначала по убыванию: щёлкают по CPU и памяти, чтобы увидеть самых прожорливых.
+  { key: 'cpu', label: 'CPU', firstDir: 'desc' },
+  { key: 'mem', label: 'MEM', firstDir: 'desc' },
+  { key: 'stat', label: 'STAT', firstDir: 'asc' },
+  { key: 'cmd', label: 'CMD', firstDir: 'asc' }
+]
+const KEYS = COLUMNS.map((c) => c.key)
+const SORT_STORAGE = 'serein.sort.processes'
+/**
+ * Столько процессов отдаёт сервер, см. `PS_CMD` в `workspace.rs`. Раньше приходили первые 80
+ * по процессору, и сортировка по памяти упорядочила бы только их: процесс с гигабайтами при
+ * нулевой загрузке в таблицу не попадал вовсе.
+ */
+const PROCESS_CAP = 2000
+
+function processCell(r: WorkspaceProcess, key: ProcessKey): number | string | null {
+  switch (key) {
+    case 'pid':
+      return r.pid
+    case 'user':
+      return r.user
+    case 'cpu':
+      return r.cpu
+    case 'mem':
+      return r.mem
+    case 'stat':
+      return r.stat
+    case 'cmd':
+      return r.cmd
+  }
+}
 
 /** Ячейка с долей в процентах. Что именно показывать - решает `processMetric.ts`. */
 function MetricCell({ value, kind }: { value: number | null; kind?: 'mem' }): JSX.Element {
@@ -43,6 +82,7 @@ export function ProcessPanel({
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('')
   const [busy, setBusy] = useState<number | null>(null)
+  const [sort, setSort] = useState(() => loadSort<ProcessKey>(SORT_STORAGE, KEYS, { key: 'cpu', dir: 'desc' }))
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -59,16 +99,22 @@ export function ProcessPanel({
     void reload()
   }, [reload])
 
-  const filtered = useMemo(() => {
-    const q = filter.trim().toLowerCase()
-    if (!q) return rows
-    return rows.filter(
-      (r) =>
-        r.cmd.toLowerCase().includes(q) ||
-        r.user.toLowerCase().includes(q) ||
-        String(r.pid).includes(q)
-    )
-  }, [rows, filter])
+  const shown = useMemo(
+    () =>
+      sortRows(
+        rows.filter((r) => matchesQuery([r.pid, r.user, r.stat, r.cmd], filter)),
+        sort,
+        processCell
+      ),
+    [rows, filter, sort]
+  )
+
+  const onSort = (key: ProcessKey): void => {
+    const col = COLUMNS.find((c) => c.key === key)
+    const next = nextSort(sort, key, col?.firstDir ?? 'asc')
+    setSort(next)
+    saveSort(SORT_STORAGE, next)
+  }
 
   const kill = async (row: WorkspaceProcess): Promise<void> => {
     if (!confirm(`Завершить процесс ${row.pid} (${row.cmd})?`)) return
@@ -99,10 +145,18 @@ export function ProcessPanel({
       <div className="ws-toolbar">
         <input
           className="search"
-          placeholder="Фильтр: имя, user, pid…"
+          placeholder="Поиск: имя, пользователь, PID, состояние - можно несколько слов"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setFilter('')
+          }}
         />
+        {!loading && rows.length > 0 && (
+          <span className="hint ws-count">
+            {shown.length === rows.length ? rows.length : `${shown.length} из ${rows.length}`}
+          </span>
+        )}
       </div>
       {error && (
         <div className="sftp-error" onClick={() => setError(null)}>
@@ -110,30 +164,32 @@ export function ProcessPanel({
         </div>
       )}
       {note && <div className="agent-hint">{note}</div>}
+      {!loading && rows.length >= PROCESS_CAP && (
+        <div className="agent-hint">
+          Показаны первые {PROCESS_CAP} процессов по загрузке процессора - остальные на сервере есть, но сюда не пришли.
+        </div>
+      )}
       {loading && <div className="hint" style={{ padding: '10px 12px' }}>Загрузка…</div>}
       {!loading && (
         <div className="ws-table-wrap">
           <table className="ws-table">
             <thead>
               <tr>
-                <th>PID</th>
-                <th>User</th>
-                <th>CPU</th>
-                <th>MEM</th>
-                <th>STAT</th>
-                <th>CMD</th>
+                {COLUMNS.map((c) => (
+                  <SortHeader key={c.key} as="th" label={c.label} sortKey={c.key} sort={sort} onSort={onSort} />
+                ))}
                 <th />
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 && (
+              {shown.length === 0 && (
                 <tr>
                   <td colSpan={7} className="hint" style={{ padding: '12px' }}>
                     Ничего не найдено.
                   </td>
                 </tr>
               )}
-              {filtered.map((r) => (
+              {shown.map((r) => (
                 <tr key={r.pid}>
                   <td className="mono">{r.pid}</td>
                   <td>{r.user}</td>
