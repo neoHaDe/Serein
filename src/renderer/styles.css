@@ -5381,3 +5381,84 @@ button.secondary:hover {
   padding: 1px 5px;
   border-radius: var(--r-sm);
 }
+
+/* ---- Сравнение папок ---- */
+.sftp-subhead-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sync-roots {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.sync-roots span {
+  color: var(--muted);
+  margin-right: 8px;
+}
+.sync-roots code {
+  word-break: break-all;
+}
+.sync-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.sync-count {
+  padding: 2px 8px;
+  border-radius: var(--r-sm);
+  background: rgba(var(--fg-rgb), 0.06);
+}
+/* Цветом - то, что будет залито, и то, что требует внимания. */
+.sync-count.changed,
+.sync-count.new,
+.sync-row.changed .sync-kind,
+.sync-row.new .sync-kind {
+  color: var(--green);
+}
+.sync-count.remoteNewer,
+.sync-row.remoteNewer .sync-kind {
+  color: var(--warn);
+}
+.sync-list {
+  max-height: 36vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 4px;
+}
+.sync-row {
+  display: grid;
+  grid-template-columns: 130px 1fr auto;
+  gap: 8px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+.sync-row.same,
+.sync-row.remoteOnly {
+  color: var(--muted);
+}
+.sync-rel {
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+.sync-size {
+  font-family: var(--font-mono);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.sync-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+.sync-refused {
+  margin-top: 6px;
+  font-size: 12px;
+}

@@ -11,6 +11,7 @@ mod docker_compose;
 mod dpapi;
 mod error;
 pub mod filediff;
+mod foldersync;
 mod importers;
 mod keygen;
 mod knownhosts;
@@ -1700,6 +1701,18 @@ async fn sftp_list(
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     remote_fs::list(&s.remote_fs, &s.handle, &path).await
 }
+/// Сравнивает свою папку с папкой на сервере. Ничего не пишет - это пробный прогон
+/// синхронизации; заливка изменённого идёт обычной очередью передач.
+#[tauri::command]
+async fn sftp_compare(
+    state: State<'_, AppState>,
+    session_id: String,
+    local_dir: String,
+    remote_dir: String,
+) -> Result<Value, String> {
+    let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    foldersync::compare(&s.remote_fs, &s.handle, &local_dir, &remote_dir, s.alive.clone()).await
+}
 #[tauri::command]
 async fn sftp_mkdir(
     state: State<'_, AppState>,
@@ -2700,6 +2713,7 @@ pub fn run() {
             docker_compose_logs_cancel,
             sftp_list,
             sftp_mkdir,
+            sftp_compare,
             sftp_remove,
             sftp_rename,
             sftp_chmod,

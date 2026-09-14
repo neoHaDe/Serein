@@ -197,6 +197,13 @@ export const api = {
       return { saved: true, path: dir }
     },
     mkdir: (sessionId: string, path: string): Promise<void> => invoke('sftp_mkdir', { sessionId, path }),
+    /** Сравнить свою папку с папкой на сервере. Ничего не пишет. */
+    compare: (
+      sessionId: string,
+      localDir: string,
+      remoteDir: string
+    ): Promise<import('../renderer/folderSync').SyncPlan> =>
+      invoke('sftp_compare', { sessionId, localDir, remoteDir }),
     remove: (sessionId: string, path: string, isDir: boolean): Promise<void> =>
       invoke('sftp_remove', { sessionId, path, isDir }),
     rename: (sessionId: string, from: string, to: string): Promise<void> =>

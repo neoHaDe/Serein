@@ -9,6 +9,7 @@ import { reattachSftp } from '../reattach'
 import { useCtrlWheelZoom } from '../useCtrlWheelZoom'
 import { AuxDrag, WindowSysButtons } from './WindowChrome'
 import { AuxReattachButton } from './AuxReattachButton'
+import { FolderSyncModal } from './FolderSyncModal'
 import { useSettings } from '../SettingsContext'
 import {
   SFTP_COL_LABEL,
@@ -299,6 +300,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
   const [localPath, setLocalPath] = useState('')
   const [localEntries, setLocalEntries] = useState<LocalEntry[]>([])
   const [localDragOver, setLocalDragOver] = useState(false)
+  const [syncOpen, setSyncOpen] = useState(false)
 
   const [transfers, setTransfers] = useState<TransferItem[]>([])
   const rateRef = useRef(new Map<string, { t: number; b: number; bps: number }>())
@@ -1069,7 +1071,18 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
           onDragLeave={() => setLocalDragOver(false)}
           onDrop={onLocalDrop}
         >
-          <div className="sftp-subhead">Этот компьютер</div>
+          <div className="sftp-subhead sftp-subhead-row">
+            Этот компьютер
+            {/* Сравниваются именно эти две папки: открытая здесь и открытая на сервере. */}
+            <button
+              className="mini"
+              title="Сравнить эту папку с папкой на сервере и залить изменённое"
+              disabled={!localPath || !path}
+              onClick={() => setSyncOpen(true)}
+            >
+              Сравнить с сервером
+            </button>
+          </div>
           <div className="sftp-path">
             <button className="mini" title="Вверх" onClick={() => window.api.localfs.parent(localPath).then(loadLocal)}>
               ↑
@@ -1605,6 +1618,14 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
           title={propsRowsFor(propsOpen.pane, propsOpen.names).title}
           rows={propsRowsFor(propsOpen.pane, propsOpen.names).rows}
           onClose={() => setPropsOpen(null)}
+        />
+      )}
+      {syncOpen && (
+        <FolderSyncModal
+          sessionId={sessionId}
+          localDir={localPath}
+          remoteDir={path}
+          onClose={() => setSyncOpen(false)}
         />
       )}
         </>,
