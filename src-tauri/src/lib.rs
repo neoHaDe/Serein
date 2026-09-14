@@ -795,6 +795,13 @@ async fn db_query(id: String, text: String) -> Result<Value, String> {
     db::query(&id, &text).await
 }
 
+/// Останавливает выполняющийся запрос. PostgreSQL отменяет его, не закрывая соединение;
+/// у остальных баз соединение закрывается - ответ по нему остался недочитанным.
+#[tauri::command]
+async fn db_cancel(id: String) -> bool {
+    db::cancel(&id)
+}
+
 /// Закрытие идёт асинхронной командой не для красоты: деструктор SSH-канала обращается
 /// к рантайму Tokio, и с главного потока это роняло всё приложение целиком.
 #[tauri::command]
@@ -2741,6 +2748,7 @@ pub fn run() {
             db_query,
             db_close,
             db_current,
+            db_cancel,
             session_sysinfo,
             vault_status,
             vault_unlock,

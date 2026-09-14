@@ -582,6 +582,8 @@ export const api = {
       shown?: number
     }> => invoke('db_query', { id, text }),
     close: (id: string): Promise<void> => invoke('db_close', { id }),
+    /** Остановить выполняющийся запрос. `false` - соединения уже нет. */
+    cancel: (id: string): Promise<boolean> => invoke('db_cancel', { id }),
     /**
      * Уже открытая база этой сессии, если она есть.
      *

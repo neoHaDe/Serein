@@ -135,6 +135,9 @@ struct Open {
     /// у неё нет. Спросить она может только приложение.
     info: Value,
     live: Live,
+    /// Просьба остановить запрос, который сейчас выполняется. Отдельно от `live`: запрос
+    /// держит свою копию соединения, и убрать соединение из карты его не остановит.
+    stop: Arc<tokio::sync::Notify>,
 }
 
 static SESSIONS: Mutex<Option<HashMap<String, Open>>> = Mutex::new(None);
@@ -305,7 +308,12 @@ pub async fn open(
     with_sessions(|m| {
         m.insert(
             id.clone(),
-            Open { session_id: session_id.to_string(), info: info.clone(), live },
+            Open {
+                session_id: session_id.to_string(),
+                info: info.clone(),
+                live,
+                stop: Arc::new(tokio::sync::Notify::new()),
+            },
         )
     });
     Ok(info)
@@ -445,6 +453,27 @@ impl Budget {
     }
 }
 
+/// Запрос остановлен по просьбе, соединение цело.
+const STOPPED: &str = "Запрос остановлен";
+/// Запрос остановлен по просьбе, но соединение пришлось закрыть. Слова «соединение с базой
+/// закрыто» панель узнаёт и возвращается к форме подключения.
+const STOPPED_CLOSED: &str =
+    "Запрос остановлен - соединение с базой закрыто: его ответ остался недочитанным. Подключитесь заново";
+
+/// Останавливает запрос, который выполняется на этом соединении прямо сейчас.
+///
+/// Будит только тех, кто уже ждёт: запрос, начатый после нажатия, остановка не заденет.
+/// Иначе запоздалый щелчок отменил бы следующий, ни в чём не повинный запрос.
+pub fn cancel(id: &str) -> bool {
+    match with_sessions(|m| m.get(id).map(|o| o.stop.clone())) {
+        Some(stop) => {
+            stop.notify_waiters();
+            true
+        }
+        None => false,
+    }
+}
+
 /// Выполняет запрос и возвращает таблицу: колонки, строки и сколько это заняло.
 pub async fn query(id: &str, text: &str) -> Result<Value, String> {
     let live = with_sessions(|m| match m.get(id).map(|o| &o.live) {
@@ -457,6 +486,7 @@ pub async fn query(id: &str, text: &str) -> Result<Value, String> {
         None => None,
     })
     .ok_or("Соединение с базой закрыто")?;
+    let stop = with_sessions(|m| m.get(id).map(|o| o.stop.clone())).ok_or("Соединение с базой закрыто")?;
 
     let pg = match &live {
         Live::Postgres(c) => Some(c.clone()),
@@ -476,20 +506,43 @@ pub async fn query(id: &str, text: &str) -> Result<Value, String> {
     // Срок на запрос, и по его истечении соединение закрывается. Это не перестраховка:
     // брошенный на середине запрос оставляет протокол в неизвестном состоянии, и
     // следующий запрос по тому же соединению прочтёт хвост предыдущего - выглядеть это
-    // будет как «база вернула ерунду».
-    let mut out = match tokio::time::timeout(QUERY_LIMIT, work).await {
-        Ok(r) => r?,
-        Err(_) => {
+    // будет как «база вернула ерунду». По той же причине закрывается и остановка по кнопке.
+    tokio::pin!(work);
+    let limit = tokio::time::sleep(QUERY_LIMIT);
+    tokio::pin!(limit);
+    let mut out = tokio::select! {
+        r = &mut work => r?,
+        _ = &mut limit => {
             // Прежде чем бросить соединение, просим сервер остановить запрос: иначе он
             // доработал бы там, где его результат уже никто не прочтёт.
-            if let Some(pg) = pg {
-                pg_cancel(&pg).await;
+            if let Some(pg) = &pg {
+                pg_cancel(pg).await;
             }
             close(id);
             return Err(format!(
-                "запрос не ответил за {} с - соединение закрыто, откройте его заново",
+                "Запрос не ответил за {} с - соединение с базой закрыто, подключитесь заново",
                 QUERY_LIMIT.as_secs()
             ));
+        }
+        _ = stop.notified() => {
+            // PostgreSQL останавливает запрос, не трогая соединение: сервер отвечает ошибкой
+            // 57014, её и дожидаемся. Остальные базы так не умеют, и соединение с
+            // недочитанным ответом приходится закрыть.
+            let Some(pg) = &pg else {
+                close(id);
+                return Err(STOPPED_CLOSED.into());
+            };
+            pg_cancel(pg).await;
+            match tokio::time::timeout(std::time::Duration::from_secs(5), &mut work).await {
+                // Запрос успел закончиться сам - результат честный, отдаём его.
+                Ok(Ok(v)) => v,
+                Ok(Err(e)) if e.starts_with("57014") => return Err(STOPPED.into()),
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    close(id);
+                    return Err(STOPPED_CLOSED.into());
+                }
+            }
         }
     };
     if let Some(o) = out.as_object_mut() {

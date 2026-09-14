@@ -4973,6 +4973,21 @@ button.secondary:hover {
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
+.db-pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.db-run {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 /* NULL - это не пустая ячейка: значение отсутствует, и видно это должно быть сразу. */
 .db-null {
   color: var(--muted);

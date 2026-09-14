@@ -735,3 +735,38 @@ fn базы_сами_останавливают_долгий_запрос() {
         db::close(&mysql);
     });
 }
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn запрос_останавливается_по_просьбе() {
+    // PostgreSQL отменяет запрос, не трогая соединение. MariaDB так не умеет: соединение с
+    // недочитанным ответом закрывается, и об этом сказано словами.
+    let s = Stand::from_env();
+    rt().block_on(async {
+        let pg = open(&s, params(Kind::Postgres, &s.pg_host, "probe", Some("probe"))).await;
+        let started = std::time::Instant::now();
+        let running = {
+            let id = pg.clone();
+            tokio::spawn(async move { db::query(&id, "SELECT pg_sleep(20)").await })
+        };
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        assert!(db::cancel(&pg), "соединение есть");
+        let err = running.await.expect("задача").expect_err("запрос остановлен");
+        assert_eq!(err, "Запрос остановлен");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "остановка не ждёт конца запроса");
+        let after = db::query(&pg, "SELECT 1 AS n").await.expect("соединение цело после отмены");
+        assert_eq!(after["rows"][0]["n"], "1");
+        db::close(&pg);
+
+        let maria = open(&s, params(Kind::Mysql, &s.mariadb_host, "probe", Some("probe"))).await;
+        let running = {
+            let id = maria.clone();
+            tokio::spawn(async move { db::query(&id, "SELECT SLEEP(20)").await })
+        };
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        assert!(db::cancel(&maria));
+        let err = running.await.expect("задача").expect_err("запрос остановлен");
+        assert!(err.contains("соединение с базой закрыто"), "{err}");
+        assert!(db::query(&maria, "SELECT 1").await.is_err(), "соединение закрыто");
+    });
+}

@@ -130,3 +130,24 @@ export function cellText(v: unknown): string {
 export function isNull(v: unknown): boolean {
   return v === null || v === undefined
 }
+
+/** Строк на странице таблицы результата. */
+export const PAGE_SIZE = 200
+
+/**
+ * Границы страницы таблицы.
+ *
+ * Таблица рисует одну страницу: пять тысяч строк разом - это десятки тысяч ячеек в
+ * документе, и панель подтормаживала на каждой перерисовке. Номер приводится в пределы:
+ * после переключения на набор покороче прежний номер страницы не должен показать пустоту.
+ */
+export function pageBounds(
+  total: number,
+  page: number,
+  size = PAGE_SIZE
+): { page: number; pages: number; start: number; end: number } {
+  const pages = Math.max(1, Math.ceil(total / size))
+  const p = Math.min(Math.max(0, page), pages - 1)
+  const start = p * size
+  return { page: p, pages, start, end: Math.min(total, start + size) }
+}

@@ -3,7 +3,7 @@ import { Icon } from './Icon'
 import { WsDetachButton } from './WsDetachButton'
 import { openDetachedWorkspace } from './workspaceWindow'
 import { errText } from '../errText'
-import { cellText, isNull, needsConfirm, summarize, type QueryResult } from '../dbQuery'
+import { cellText, isNull, needsConfirm, pageBounds, summarize, type QueryResult } from '../dbQuery'
 import { forget, isGone, recall, remember, update } from '../dbMemory'
 
 /**
@@ -112,6 +112,10 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
   // выбран первый набор со строками, а он и нужен чаще всего.
   const [setIndex, setSetIndex] = useState(0)
   const shownSet = result?.sets?.[setIndex] ?? result ?? { columns: [], rows: [], affected: 0 }
+  const [page, setPage] = useState(0)
+  const bounds = pageBounds(shownSet.rows.length, page)
+  // Остановка уже попрошена: вторая просьба ничего не добавит, а кнопка должна это показать.
+  const [stopping, setStopping] = useState(false)
 
   /**
    * Подхватывает соединение, о котором панель не знает.
@@ -160,12 +164,12 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
    * жил внутри неё. Держаться за такое соединение значит показывать таблицу, за которой
    * ничего нет, поэтому возвращаемся к форме и говорим почему.
    */
-  const connectionGone = useCallback(() => {
+  const connectionGone = useCallback((reason?: string) => {
     idRef.current = null
     forget(sessionId)
     setConnected(null)
     setResult(null)
-    setError('Соединение с базой закрылось вместе с сессией - подключитесь заново')
+    setError(reason ?? 'Соединение с базой закрылось вместе с сессией - подключитесь заново')
   }, [sessionId])
 
   const connect = async (): Promise<void> => {
@@ -215,13 +219,16 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
       const out = await window.api.db.query(id, query)
       setResult(out)
       setSetIndex(out.shown ?? 0)
+      setPage(0)
       // Помним именно содержимое поля, а не выполненный запрос: заготовки из списка
       // текст в поле не меняют, и подменять его при возвращении было бы неожиданно.
       update(sessionId, { result: out })
     } catch (e) {
       const msg = errText(e)
       if (isGone(msg)) {
-        connectionGone()
+        // Соединение закрыли мы сами - по сроку или по остановке, - и тогда причина уже
+        // сказана в тексте ошибки. «Закрылось вместе с сессией» здесь было бы неправдой.
+        connectionGone(msg === 'Соединение с базой закрыто' ? undefined : msg)
         return
       }
       setError(msg)
@@ -229,7 +236,15 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
       update(sessionId, { result: null })
     } finally {
       setBusy(false)
+      setStopping(false)
     }
+  }
+
+  const stop = async (): Promise<void> => {
+    const id = idRef.current
+    if (!id || stopping) return
+    setStopping(true)
+    await window.api.db.cancel(id)
   }
 
   const detach = async (): Promise<void> => {
@@ -359,9 +374,18 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
               }}
               onKeyDown={onKeyDown}
             />
-            <button className="primary" disabled={busy} onClick={() => void run()}>
-              {busy ? 'Выполняется…' : 'Выполнить (Ctrl+Enter)'}
-            </button>
+            <div className="db-run">
+              <button className="primary" disabled={busy} onClick={() => void run()}>
+                {busy ? 'Выполняется…' : 'Выполнить (Ctrl+Enter)'}
+              </button>
+              {/* Остановка нужна именно пока ждём: без неё зависший запрос держал панель
+                  до срока в 30 секунд, и сделать было ничего нельзя. */}
+              {busy && (
+                <button disabled={stopping} onClick={() => void stop()}>
+                  {stopping ? 'Останавливаю…' : 'Остановить'}
+                </button>
+              )}
+            </div>
           </div>
 
           {error && <div className="db-error">{error}</div>}
@@ -378,7 +402,10 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
                       key={i}
                       className={'mini' + (i === setIndex ? ' on' : '')}
                       title={`${s.rows.length} строк, изменено ${s.affected}`}
-                      onClick={() => setSetIndex(i)}
+                      onClick={() => {
+                        setSetIndex(i)
+                        setPage(0)
+                      }}
                     >
                       набор {i + 1}
                     </button>
@@ -395,8 +422,8 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
                     </tr>
                   </thead>
                   <tbody>
-                    {shownSet.rows.map((row, i) => (
-                      <tr key={i}>
+                    {shownSet.rows.slice(bounds.start, bounds.end).map((row, i) => (
+                      <tr key={bounds.start + i}>
                         {shownSet.columns.map((c) => (
                           <td key={c} className={isNull(row[c]) ? 'db-null' : undefined}>
                             {cellText(row[c])}
@@ -414,6 +441,23 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
                   </tbody>
                 </table>
               </div>
+              {bounds.pages > 1 && (
+                <div className="db-pager">
+                  <button className="mini" disabled={bounds.page === 0} onClick={() => setPage(bounds.page - 1)}>
+                    ‹
+                  </button>
+                  <span>
+                    {bounds.start + 1}–{bounds.end} из {shownSet.rows.length}
+                  </span>
+                  <button
+                    className="mini"
+                    disabled={bounds.page >= bounds.pages - 1}
+                    onClick={() => setPage(bounds.page + 1)}
+                  >
+                    ›
+                  </button>
+                </div>
+              )}
               <div className="db-summary">{summarize({ ...result, ...shownSet })}</div>
             </div>
           )}

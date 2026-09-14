@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { cellText, isNull, needsConfirm, summarize } from './dbQuery'
+import { cellText, isNull, needsConfirm, pageBounds, summarize } from './dbQuery'
 
 const result = (rows: number, affected = 0, ms = 12): Parameters<typeof summarize>[0] => ({
   columns: ['a'],
@@ -98,5 +98,16 @@ describe('показ значений', () => {
   it('нестроковые значения показываются как есть', () => {
     expect(cellText(42)).toBe('42')
     expect(cellText(true)).toBe('true')
+  })
+})
+
+describe('страницы таблицы', () => {
+  it('делит строки на страницы и держит номер в пределах', () => {
+    expect(pageBounds(0, 0)).toEqual({ page: 0, pages: 1, start: 0, end: 0 })
+    expect(pageBounds(450, 1)).toEqual({ page: 1, pages: 3, start: 200, end: 400 })
+    expect(pageBounds(450, 2).end).toBe(450)
+    // Переключились на набор короче - прежний номер страницы не должен дать пустоту.
+    expect(pageBounds(150, 5)).toEqual({ page: 0, pages: 1, start: 0, end: 150 })
+    expect(pageBounds(10, -3).page).toBe(0)
   })
 })
