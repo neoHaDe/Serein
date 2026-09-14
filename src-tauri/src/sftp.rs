@@ -565,8 +565,15 @@ const MAX_PREVIEW: u64 = 8 * 1024 * 1024;
 /// Их отсутствие - не теория: `/proc` и `/sys` полны ссылок на самих себя, а каталог с
 /// сотней тысяч файлов приложение просто съедал, собирая весь список в память до первой
 /// переданной строки. Глубина и число - две разные ловушки, поэтому предела два.
-const MAX_WALK_DEPTH: usize = 64;
-const MAX_WALK_ENTRIES: usize = 50_000;
+pub(crate) const MAX_WALK_DEPTH: usize = 64;
+pub(crate) const MAX_WALK_ENTRIES: usize = 50_000;
+
+/// Отказ обхода по пределу - одними словами для SFTP и SCP.
+pub(crate) fn walk_too_big() -> String {
+    format!(
+        "дерево слишком большое: глубже {MAX_WALK_DEPTH} или больше {MAX_WALK_ENTRIES} файлов - выберите папку поменьше"
+    )
+}
 
 /// Читает не больше `limit` байт, сколько бы сервер ни отдавал.
 ///
@@ -1110,7 +1117,7 @@ pub async fn upload_path(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "file".into());
     let mut files: Vec<(String, String, String, u64)> = Vec::new();
-    collect_local(&local, &join_remote(remote_dir, &root_name), &root_name, &mut files).await?;
+    collect_local(&local, &join_remote(remote_dir, &root_name), &root_name, &mut files, Some(alive.as_ref())).await?;
 
     let sftp = open(handle.as_ref()).await?;
     let mut parents: Vec<String> = files
@@ -1213,6 +1220,16 @@ pub async fn plan_download(
     remote: &str,
     local_dir: &str,
 ) -> Result<DownloadPlan, String> {
+    plan_download_while(handle, remote, local_dir, None).await
+}
+
+/// То же, но обход останавливается, как только сессия закрылась.
+pub async fn plan_download_while(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    remote: &str,
+    local_dir: &str,
+    alive: Option<&AtomicBool>,
+) -> Result<DownloadPlan, String> {
     check_remote_path(remote)?;
     let sftp = open(handle).await?;
     let root_name = Path::new(remote)
@@ -1230,6 +1247,7 @@ pub async fn plan_download(
         &root_name,
         &mut jobs,
         &mut refused,
+        alive,
     )
     .await?;
     drop(sftp);
@@ -1257,7 +1275,7 @@ pub async fn download_path(
     hub: TransferHub,
 ) -> Result<(), String> {
     gone(Some(&alive), None)?;
-    let plan = plan_download(handle.as_ref(), remote, local_dir).await?;
+    let plan = plan_download_while(handle.as_ref(), remote, local_dir, Some(alive.as_ref())).await?;
     let files = plan.jobs;
 
     // Отказ виден в списке передач, а не только в журнале: молча недокачанная папка
@@ -1364,14 +1382,19 @@ async fn ensure_remote_dir(sftp: &SftpSession, dir: &str) -> Result<(), String> 
     Ok(())
 }
 
-// Рекурсивный обход локальной ФС (boxed - рекурсия в async).
-fn collect_local<'a>(
+// Рекурсивный обход локальной ФС (boxed - рекурсия в async). Общий для SFTP и SCP: у SCP
+// был свой обход без пределов, который заходил в ссылки на каталоги и закручивался на них.
+//
+// `alive` проверяется на каждом элементе: дерево на десятки тысяч файлов обходится долго,
+// и дожидаться его конца после закрытия сессии незачем.
+pub(crate) fn collect_local<'a>(
     local: &'a str,
     remote: &'a str,
     rel: &'a str,
     out: &'a mut Vec<(String, String, String, u64)>,
+    alive: Option<&'a AtomicBool>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
-    collect_local_at(local, remote, rel, out, 0)
+    collect_local_at(local, remote, rel, out, alive, 0)
 }
 
 fn collect_local_at<'a>(
@@ -1379,14 +1402,14 @@ fn collect_local_at<'a>(
     remote: &'a str,
     rel: &'a str,
     out: &'a mut Vec<(String, String, String, u64)>,
+    alive: Option<&'a AtomicBool>,
     depth: usize,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
     Box::pin(async move {
         if depth > MAX_WALK_DEPTH || out.len() >= MAX_WALK_ENTRIES {
-            return Err(format!(
-                "дерево слишком большое: глубже {MAX_WALK_DEPTH} или больше {MAX_WALK_ENTRIES} файлов - выберите папку поменьше"
-            ));
+            return Err(walk_too_big());
         }
+        gone(alive, None)?;
         // Политика ссылок: на файл - забираем содержимое, на каталог - не ходим вовсе.
         // Ссылка на каталог уводит обход туда, куда человек не показывал, а ссылка на
         // родителя закручивает его навсегда; ссылка же на файл (`latest.log`) - обычное
@@ -1409,7 +1432,7 @@ fn collect_local_at<'a>(
                 let lp = format!("{local}/{name}");
                 let rp = format!("{remote}/{name}");
                 let r = format!("{rel}/{name}");
-                collect_local_at(&lp, &rp, &r, out, depth + 1).await?;
+                collect_local_at(&lp, &rp, &r, out, alive, depth + 1).await?;
             }
         } else {
             out.push((local.to_string(), remote.to_string(), rel.to_string(), meta.len()));
@@ -1429,8 +1452,9 @@ fn collect_remote<'a>(
     rel: &'a str,
     out: &'a mut Vec<(String, String, String, u64)>,
     refused: &'a mut Vec<(String, String)>,
+    alive: Option<&'a AtomicBool>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
-    collect_remote_at(sftp, remote, local, rel, out, refused, 0)
+    collect_remote_at(sftp, remote, local, rel, out, refused, alive, 0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1441,14 +1465,14 @@ fn collect_remote_at<'a>(
     rel: &'a str,
     out: &'a mut Vec<(String, String, String, u64)>,
     refused: &'a mut Vec<(String, String)>,
+    alive: Option<&'a AtomicBool>,
     depth: usize,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
     Box::pin(async move {
         if depth > MAX_WALK_DEPTH || out.len() >= MAX_WALK_ENTRIES {
-            return Err(format!(
-                "дерево слишком большое: глубже {MAX_WALK_DEPTH} или больше {MAX_WALK_ENTRIES} файлов - выберите папку поменьше"
-            ));
+            return Err(walk_too_big());
         }
+        gone(alive, None)?;
         // Политика ссылок: ссылку на файл забираем как файл, в ссылку на каталог не
         // заходим. На сервере `/proc` и `/sys` полны ссылок на самих себя, и обход по ним
         // не заканчивается никогда; ссылка же на файл - обычное дело, терять её незачем.
@@ -1485,7 +1509,7 @@ fn collect_remote_at<'a>(
                 let rp = format!("{remote}/{name}");
                 let lp = format!("{local}/{name}");
                 let r = format!("{rel}/{name}");
-                collect_remote_at(sftp, &rp, &lp, &r, out, refused, depth + 1).await?;
+                collect_remote_at(sftp, &rp, &lp, &r, out, refused, alive, depth + 1).await?;
             }
         } else {
             out.push((local.to_string(), remote.to_string(), rel.to_string(), meta.size.unwrap_or(0)));
@@ -1549,5 +1573,33 @@ mod tests {
     fn control_chars_rejected() {
         assert!(check_remote_path("/srv/site\nrm -rf /").is_err());
         assert!(check_remote_path("/srv/\u{0}etc").is_err());
+    }
+}
+
+#[cfg(test)]
+mod walk_tests {
+    use super::*;
+
+    #[test]
+    fn обход_останавливается_когда_сессия_закрыта() {
+        let dir = std::env::temp_dir().join(format!("serein-walk-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub").join("a.txt"), "x").unwrap();
+        let root = dir.to_string_lossy().replace('\\', "/");
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+
+        let closed = AtomicBool::new(false);
+        let mut out = Vec::new();
+        let err = rt
+            .block_on(collect_local(&root, "/r", "root", &mut out, Some(&closed)))
+            .unwrap_err();
+        assert_eq!(err, "Сессия закрыта");
+        assert!(out.is_empty(), "после закрытия сессии обход ничего не набирает");
+
+        let open = AtomicBool::new(true);
+        rt.block_on(collect_local(&root, "/r", "root", &mut out, Some(&open))).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].2, "root/sub/a.txt");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

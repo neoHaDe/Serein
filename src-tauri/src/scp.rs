@@ -495,33 +495,6 @@ pub async fn name_conflicts(
         .collect())
 }
 
-async fn collect_local(
-    local: &str,
-    remote: &str,
-    rel: &str,
-    out: &mut Vec<(String, String, String, u64)>,
-) -> Result<(), String> {
-    let meta = tokio::fs::metadata(local).await.map_err(|e| e.to_string())?;
-    if meta.is_dir() {
-        let mut rd = tokio::fs::read_dir(local).await.map_err(|e| e.to_string())?;
-        while let Some(entry) = rd.next_entry().await.map_err(|e| e.to_string())? {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let lp = format!("{local}/{name}");
-            let rp = join_remote(remote, &name);
-            let r = format!("{rel}/{name}");
-            Box::pin(collect_local(&lp, &rp, &r, out)).await?;
-        }
-    } else {
-        out.push((
-            local.to_string(),
-            remote.to_string(),
-            rel.to_string(),
-            meta.len(),
-        ));
-    }
-    Ok(())
-}
-
 pub async fn upload_path(
     app: AppHandle,
     handle: SharedHandle,
@@ -541,7 +514,8 @@ pub async fn upload_path(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "file".into());
     let mut files: Vec<(String, String, String, u64)> = Vec::new();
-    collect_local(&local, &join_remote(remote_dir, &root_name), &root_name, &mut files).await?;
+    crate::sftp::collect_local(&local, &join_remote(remote_dir, &root_name), &root_name, &mut files, Some(alive.as_ref()))
+        .await?;
     for (lp, rp, rel, size) in files {
         if !alive.load(Ordering::Relaxed) {
             return Err(CANCELLED.into());
@@ -573,32 +547,77 @@ pub async fn upload_path(
     Ok(())
 }
 
-async fn collect_remote_list(
+/// Обходит удалённое дерево через `ls`: задания на скачивание и то, что скачано не будет.
+///
+/// Пределы и отказы - те же, что у SFTP. Раньше здесь не было ни предела глубины и числа
+/// файлов, ни отчёта о пропущенном: небезопасные имена и ссылки исчезали из скачанной папки
+/// молча, и она выглядела скачанной целиком.
+pub async fn walk_remote(
     handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
     remote: &str,
-    local: &str,
+    local_root: &str,
     rel: &str,
-    out: &mut Vec<(String, String, String, u64)>,
-) -> Result<(), String> {
-    let listed = list(handle, remote).await?;
-    let abs = listed["path"].as_str().unwrap_or(remote);
-    for entry in listed["entries"].as_array().unwrap_or(&vec![]).clone() {
-        let name = entry["name"].as_str().unwrap_or("").to_string();
-        // Имя с сервера - не путь. Что бывает иначе, объяснено в `localname`.
-        if crate::localname::safe_component(&name).is_err() {
-            continue;
+    alive: Option<&AtomicBool>,
+) -> Result<(Vec<(String, String, String, u64)>, Vec<(String, String)>), String> {
+    let mut jobs = Vec::new();
+    let mut refused = Vec::new();
+    collect_remote_list(handle, remote, local_root, rel, &mut jobs, &mut refused, alive, 0).await?;
+    Ok((jobs, refused))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_remote_list<'a>(
+    handle: &'a tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    remote: &'a str,
+    local: &'a str,
+    rel: &'a str,
+    out: &'a mut Vec<(String, String, String, u64)>,
+    refused: &'a mut Vec<(String, String)>,
+    alive: Option<&'a AtomicBool>,
+    depth: usize,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
+    Box::pin(async move {
+        if depth > crate::sftp::MAX_WALK_DEPTH {
+            return Err(crate::sftp::walk_too_big());
         }
-        let rp = join_remote(abs, &name);
-        let lp = format!("{local}/{name}");
-        let r = format!("{rel}/{name}");
-        if entry["type"] == json!("dir") {
-            Box::pin(collect_remote_list(handle, &rp, &lp, &r, out)).await?;
-        } else if entry["type"] == json!("file") {
-            let size = entry["size"].as_u64().unwrap_or(0);
-            out.push((lp, rp, r, size));
+        let listed = list(handle, remote).await?;
+        let abs = listed["path"].as_str().unwrap_or(remote).to_owned();
+        let entries = listed["entries"].as_array().cloned().unwrap_or_default();
+        for entry in entries {
+            if alive.is_some_and(|a| !a.load(Ordering::Relaxed)) {
+                return Err("Сессия закрыта".into());
+            }
+            if out.len() >= crate::sftp::MAX_WALK_ENTRIES {
+                return Err(crate::sftp::walk_too_big());
+            }
+            let name = entry["name"].as_str().unwrap_or("").to_string();
+            if name.is_empty() || name == "." || name == ".." {
+                continue;
+            }
+            let r = format!("{rel}/{name}");
+            // Имя с сервера - не путь. Что бывает иначе, объяснено в `localname`.
+            if let Err(why) = crate::localname::safe_component(&name) {
+                refused.push((r, why));
+                continue;
+            }
+            let rp = join_remote(&abs, &name);
+            let lp = format!("{local}/{name}");
+            match entry["type"].as_str() {
+                Some("dir") => {
+                    collect_remote_list(handle, &rp, &lp, &r, out, refused, alive, depth + 1).await?
+                }
+                Some("file") => out.push((lp, rp, r, entry["size"].as_u64().unwrap_or(0))),
+                // `ls` не говорит, куда ведёт ссылка - на файл или на каталог, а заходить в
+                // каталог по ссылке нельзя: так обход уходит в `/proc` и по кругу.
+                Some("link") => refused.push((
+                    r,
+                    "это ссылка - по SCP не разобрать, файл за ней или каталог; скачайте её отдельно".to_owned(),
+                )),
+                _ => {}
+            }
         }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Когда файл правили последний раз, в миллисекундах.
@@ -650,6 +669,7 @@ pub async fn download_path(
     check_remote_path(remote)?;
     let local_dir = local_dir.replace('\\', "/");
     let mut jobs: Vec<(String, String, String, u64)> = Vec::new();
+    let mut refused: Vec<(String, String)> = Vec::new();
     if remote_is_dir(handle.as_ref(), remote).await? {
         let base = Path::new(remote)
             .file_name()
@@ -657,7 +677,7 @@ pub async fn download_path(
             .unwrap_or_else(|| "download".into());
         crate::localname::safe_component(&base).map_err(|why| format!("не могу сохранить: {why}"))?;
         let local_root = format!("{local_dir}/{base}");
-        collect_remote_list(handle.as_ref(), remote, &local_root, &base, &mut jobs).await?;
+        (jobs, refused) = walk_remote(handle.as_ref(), remote, &local_root, &base, Some(alive.as_ref())).await?;
     } else {
         let name = Path::new(remote)
             .file_name()
@@ -674,6 +694,15 @@ pub async fn download_path(
         return Err(format!(
             "путь «{lp}» выходит за пределы папки скачивания - ничего не сохранено"
         ));
+    }
+    // Отказ виден в списке передач, как и у SFTP: молча недокачанная папка выглядит как
+    // скачанная целиком.
+    for (rel, why) in refused {
+        let id = uuid::Uuid::new_v4().to_string();
+        emit_transfer(
+            &app, &id, session_id, "download", "", remote, &rel, 0, 0, "error",
+            Some(&format!("не сохранено: {why}")),
+        );
     }
     for (lp, rp, rel, size) in jobs {
         if !alive.load(Ordering::Relaxed) {

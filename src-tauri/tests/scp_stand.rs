@@ -11,6 +11,7 @@ mod common;
 use common::{rt, Stand};
 
 use serein_lib::remote_fs::{self, SessionFs};
+use serein_lib::scp;
 use serein_lib::ssh;
 use std::sync::{Arc, Mutex};
 
@@ -143,5 +144,32 @@ fn время_правки_читается_и_без_подсистемы_sftp(
         assert!(t > 1_600_000_000_000, "время похоже на миллисекунды эпохи: {t}");
 
         remote_fs::remove(&fs, &h, &dir, true).await.expect("уборка");
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn обход_scp_не_заходит_в_ссылки_и_сообщает_о_них() {
+    // Ссылка на родительский каталог раньше закручивала обход SCP, а пропущенное не
+    // попадало никуда. Теперь в ссылку не заходим и говорим об этом в списке отказов.
+    let s = Stand::from_env();
+    let dir = scratch("обход");
+    rt().block_on(async {
+        let (h, _) = connect(&s).await;
+        let cmd = format!(
+            "rm -rf '{dir}' && mkdir -p '{dir}/sub' && echo x > '{dir}/sub/f.txt' && ln -s '{dir}' '{dir}/sub/loop'"
+        );
+        let (code, _, err) = ssh::exec(&h, &cmd, None).await.expect("дерево на сервере");
+        assert_eq!(code, 0, "дерево не создалось: {err}");
+
+        let (jobs, refused) = scp::walk_remote(&h, &dir, "/local/обход", "обход", None)
+            .await
+            .expect("обход");
+        assert_eq!(jobs.len(), 1, "один настоящий файл: {jobs:?}");
+        assert_eq!(jobs[0].2, "обход/sub/f.txt");
+        assert!(
+            refused.iter().any(|(r, why)| r == "обход/sub/loop" && why.contains("ссылка")),
+            "ссылка названа в отказах: {refused:?}"
+        );
     });
 }
