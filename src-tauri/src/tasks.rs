@@ -36,6 +36,12 @@ const RETRY_DELAY: Duration = Duration::from_secs(3);
 const MAX_ATTEMPTS: u32 = 60;
 /// Проверки пробного прогона - короткие: они только спрашивают, а не делают.
 const PROBE_LIMIT: Duration = Duration::from_secs(20);
+/// Сколько после «Стоп» ждём, пока работа доделает свою остановку: передача убирает свои
+/// временные файлы. Дальше работа бросается.
+const STOP_GRACE: Duration = Duration::from_secs(2);
+/// Срок проверки шага в пробном прогоне: обход огромной папки или зависший сервер не должны
+/// держать пробный прогон бесконечно.
+const PLAN_LIMIT: Duration = Duration::from_secs(120);
 /// Вывод шага в окне. Остаётся конец - ошибка обычно там.
 const MAX_STEP_OUTPUT: usize = 64 * 1024;
 /// Вывод шага в истории: история хранит сотни шагов, и мегабайты в ней не нужны.
@@ -406,6 +412,28 @@ async fn pause_or_stop(h: &Host, d: Duration) -> bool {
     }
 }
 
+/// Ждёт работу или остановку задачи. `None` - остановили.
+///
+/// Раньше остановка проверялась между файлами и шагами, и «Стоп» посреди большого файла или
+/// подключения к молчащему серверу ждал их конца. Теперь работа после остановки получает
+/// `STOP_GRACE`, чтобы убрать за собой, и бросается.
+async fn or_stop<F: std::future::Future>(cancel: &ssh::CancelRx, work: F) -> Option<F::Output> {
+    tokio::pin!(work);
+    let mut rx = cancel.clone();
+    tokio::select! {
+        out = &mut work => Some(out),
+        _ = async {
+            // Закрытый канал остановки - не остановка: просто ждать её больше неоткуда.
+            if rx.wait_for(|v| *v).await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        } => {
+            let _ = tokio::time::timeout(STOP_GRACE, &mut work).await;
+            None
+        }
+    }
+}
+
 async fn exec_ok(h: &Host, cmd: &str, limit: Duration) -> Result<String, String> {
     let (code, out, err) = ssh::exec_timed(&h.handle, cmd, Some(h.cancel.clone()), limit).await?;
     let text = [out.trim_end(), err.trim_end()]
@@ -456,7 +484,7 @@ async fn put_all(h: &Host, files: &[(String, String, u64)]) -> Result<u64, Strin
         if h.stopped() {
             return Err("задача остановлена".into());
         }
-        remote_fs::put_file(&h.fs, &h.handle, lp, rp)
+        remote_fs::put_file_while(&h.fs, &h.handle, lp, rp, &h.alive)
             .await
             .map_err(|e| format!("{rp}: {e}"))?;
         bytes += size;
@@ -484,7 +512,7 @@ async fn put_sync(h: &Host, files: &[SyncFile]) -> Result<(u64, Vec<String>), St
             moved.push(rp.clone());
             continue;
         }
-        remote_fs::put_file(&h.fs, &h.handle, lp, rp)
+        remote_fs::put_file_while(&h.fs, &h.handle, lp, rp, &h.alive)
             .await
             .map_err(|e| format!("{rp}: {e}"))?;
         bytes += size;
@@ -651,7 +679,7 @@ async fn run_action(h: &Host, action: &Action, limit: Duration) -> Result<String
                 if let Some(parent) = Path::new(lp).parent() {
                     std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
                 }
-                remote_fs::download_file(&h.fs, &h.handle, rp, lp)
+                remote_fs::download_file_while(&h.fs, &h.handle, rp, lp, &h.alive)
                     .await
                     .map_err(|e| format!("{rp}: {e}"))?;
                 bytes += size;
@@ -765,10 +793,11 @@ async fn run_step(h: &Host, step: &Step) -> (bool, String, u32) {
         if h.stopped() {
             return (false, "задача остановлена".into(), n - 1);
         }
-        match tokio::time::timeout(limit, run_action(h, &step.action, limit)).await {
-            Ok(Ok(out)) => return (true, tail(out, MAX_STEP_OUTPUT), n),
-            Ok(Err(e)) => last = e,
-            Err(_) => last = format!("шаг не уложился в {} с", limit.as_secs()),
+        match or_stop(&h.cancel, tokio::time::timeout(limit, run_action(h, &step.action, limit))).await {
+            None => return (false, "задача остановлена".into(), n),
+            Some(Ok(Ok(out))) => return (true, tail(out, MAX_STEP_OUTPUT), n),
+            Some(Ok(Err(e))) => last = e,
+            Some(Err(_)) => last = format!("шаг не уложился в {} с", limit.as_secs()),
         }
         if n < attempts && pause_or_stop(h, RETRY_DELAY).await {
             return (false, "задача остановлена".into(), n);
@@ -843,9 +872,10 @@ async fn run_server(ctx: &RunCtx<'_>, server_id: String) -> Value {
         return finish("cancelled", Some("задача остановлена до подключения".into()), Vec::new());
     }
     emit(None, "connecting", None);
-    let handle = match ssh::connect_client(chain).await {
-        Ok(h) => h,
-        Err(e) => return finish("failed", Some(e.to_string()), Vec::new()),
+    let handle = match or_stop(&ctx.cancel, ssh::connect_client(chain)).await {
+        Some(Ok(h)) => h,
+        Some(Err(e)) => return finish("failed", Some(e.to_string()), Vec::new()),
+        None => return finish("cancelled", Some("задача остановлена во время подключения".into()), Vec::new()),
     };
     let key = format!("task:{}:{server_id}", ctx.run_id);
     let (kind, _) = platform::of_session(&key, &handle).await;
@@ -858,6 +888,17 @@ async fn run_server(ctx: &RunCtx<'_>, server_id: String) -> Value {
         multi: ctx.multi,
         alive: Arc::new(AtomicBool::new(true)),
         cancel: ctx.cancel.clone(),
+    };
+    // Остановка сразу опускает `alive`: на него смотрят обходы папок и передачи, и они бросают
+    // работу на ближайшем куске, а не после текущего файла.
+    let stop_watch = {
+        let alive = host.alive.clone();
+        let mut rx = ctx.cancel.clone();
+        tokio::spawn(async move {
+            if rx.wait_for(|v| *v).await.is_ok() {
+                alive.store(false, Ordering::Relaxed);
+            }
+        })
     };
 
     let mut failed = false;
@@ -872,11 +913,21 @@ async fn run_server(ctx: &RunCtx<'_>, server_id: String) -> Value {
         }
         if ctx.dry_run {
             emit(Some(i), "running", None);
-            let (state, mut out) = match plan_action(&host, &step.action).await {
-                Ok(text) => ("planned", text),
-                Err(e) => {
+            let checked = or_stop(&host.cancel, tokio::time::timeout(PLAN_LIMIT, plan_action(&host, &step.action))).await;
+            let (state, mut out) = match checked {
+                None => {
+                    emit(Some(i), "cancelled", None);
+                    steps.push(step_json(i, step, "cancelled", "задача остановлена", t.elapsed().as_millis(), 0));
+                    continue;
+                }
+                Some(Ok(Ok(text))) => ("planned", text),
+                Some(Ok(Err(e))) => {
                     problems += 1;
                     ("problem", e)
+                }
+                Some(Err(_)) => {
+                    problems += 1;
+                    ("problem", format!("проверка не уложилась в {} с", PLAN_LIMIT.as_secs()))
                 }
             };
             match step.when {
@@ -911,6 +962,7 @@ async fn run_server(ctx: &RunCtx<'_>, server_id: String) -> Value {
         }
     }
     host.alive.store(false, Ordering::Relaxed);
+    stop_watch.abort();
     platform::forget(&key);
 
     let state = if host.stopped() {
@@ -1134,5 +1186,52 @@ mod tests {
         }
         assert!(*events.lock().unwrap() >= 2, "окно узнало о каждом сервере");
         assert_eq!(report["cancelled"], true);
+    }
+}
+
+#[cfg(test)]
+mod stop_tests {
+    use super::*;
+    use tokio::sync::watch;
+
+    #[tokio::test]
+    async fn стоп_прерывает_долгую_работу_не_дожидаясь_её() {
+        let (tx, rx) = watch::channel(false);
+        let started = Instant::now();
+        let work = async {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            1
+        };
+        let stopper = async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            tx.send(true).unwrap();
+        };
+        let (out, ()) = tokio::join!(or_stop(&rx, work), stopper);
+        assert_eq!(out, None);
+        assert!(started.elapsed() < STOP_GRACE + Duration::from_secs(1), "{:?}", started.elapsed());
+    }
+
+    #[tokio::test]
+    async fn после_стопа_работа_успевает_убрать_за_собой() {
+        let (tx, rx) = watch::channel(false);
+        let cleaned = Arc::new(AtomicBool::new(false));
+        let flag = cleaned.clone();
+        let mut seen = rx.clone();
+        let work = async move {
+            let _ = seen.wait_for(|v| *v).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            flag.store(true, Ordering::Relaxed);
+        };
+        tx.send(true).unwrap();
+        assert_eq!(or_stop(&rx, work).await, None);
+        assert!(cleaned.load(Ordering::Relaxed), "уборка после остановки не брошена");
+    }
+
+    #[tokio::test]
+    async fn без_стопа_результат_приходит_как_есть() {
+        let (tx, rx) = watch::channel(false);
+        assert_eq!(or_stop(&rx, async { 5 }).await, Some(5));
+        drop(tx);
+        assert_eq!(or_stop(&rx, async { 6 }).await, Some(6), "закрытый канал - не остановка");
     }
 }

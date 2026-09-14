@@ -19,6 +19,14 @@ describe('итог запроса', () => {
     expect(summarize(result(21))).toBe('21 строка · 12 мс')
   })
 
+  it('считает строки показанного набора, а не пустые верхние поля', () => {
+    const sets = [
+      { columns: ['a'], rows: [], affected: 3 },
+      { columns: ['b'], rows: [{ b: 1 }, { b: 2 }], affected: 0 }
+    ]
+    expect(summarize({ ...result(0), sets, shown: 1 })).toBe('2 строки · 12 мс')
+  })
+
   it('числа от 11 до 14 - исключение, а не правило', () => {
     // Наивное «n % 10» даёт «11 строка» и «12 строки».
     expect(summarize(result(11))).toBe('11 строк · 12 мс')

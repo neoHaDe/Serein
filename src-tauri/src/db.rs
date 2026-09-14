@@ -332,6 +332,8 @@ const MAX_ROWS: usize = 5_000;
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 /// Одна ячейка. Столбец с картинкой или документом показывать целиком незачем.
 const MAX_CELL: usize = 64 * 1024;
+/// Наборов в одном ответе. Пакет из тысяч мелких SELECT иначе держал бы тысячи наборов.
+const MAX_SETS: usize = 100;
 /// Сколько ждём ответа. Дальше соединение закрывается: продолжать по нему нельзя.
 const QUERY_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Предел, который ставим самой базе, - чуть меньше своего срока.
@@ -393,23 +395,45 @@ impl ResultSet {
 /// переключиться. Прежний разбор запоминал колонки первой строки и применял их ко всем
 /// следующим наборам - на `SELECT 1 AS a, 2 AS b; SELECT 3 AS c` это означало обращение к
 /// колонке, которой в строке нет, а закреплённая библиотека на таком обращении паникует.
-fn answer(sets: Vec<ResultSet>) -> Value {
+fn answer(sets: Vec<ResultSet>, quota: &Quota) -> Value {
     let affected: u64 = sets.iter().map(|s| s.affected).sum();
-    let truncated = sets.iter().any(|s| s.budget.truncated);
+    let truncated = quota.sets_dropped > 0 || sets.iter().any(|s| s.budget.truncated);
     let sets: Vec<Value> = sets.into_iter().map(ResultSet::json).collect();
     let shown = sets
         .iter()
         .position(|s| !s["rows"].as_array().map(|r| r.is_empty()).unwrap_or(true))
         .unwrap_or(0);
-    let head = sets.get(shown).cloned().unwrap_or_else(|| json!({}));
+    // Строки показанного набора лежат только в `sets`: копия в верхних полях удваивала бы
+    // самый тяжёлый набор ответа по дороге в окно.
+    let columns = sets.get(shown).and_then(|s| s.get("columns")).cloned().unwrap_or_else(|| json!([]));
     json!({
-        "columns": head.get("columns").cloned().unwrap_or_else(|| json!([])),
-        "rows": head.get("rows").cloned().unwrap_or_else(|| json!([])),
+        "columns": columns,
+        "rows": [],
         "affected": affected,
         "truncated": truncated,
         "sets": sets,
         "shown": shown,
     })
+}
+
+/// Общий счёт ответа: сколько строк и байт уже взяли все наборы и сколько наборов отброшено.
+///
+/// Пределы действуют на ответ целиком, а не на набор: иначе сотня операторов `SELECT` подряд
+/// приносила бы сто пределов разом.
+#[derive(Default)]
+struct Quota {
+    rows: usize,
+    bytes: usize,
+    sets_dropped: usize,
+}
+
+/// Кладёт готовый набор в ответ, пока наборов не слишком много.
+fn keep(sets: &mut Vec<ResultSet>, set: ResultSet, quota: &mut Quota) {
+    if sets.len() < MAX_SETS {
+        sets.push(set);
+    } else {
+        quota.sets_dropped += 1;
+    }
 }
 
 /// Складывает строки, пока они укладываются в пределы.
@@ -418,13 +442,12 @@ fn answer(sets: Vec<ResultSet>) -> Value {
 /// панели значит одно, а в соседней другое.
 struct Budget {
     rows: Vec<Value>,
-    bytes: usize,
     truncated: bool,
 }
 
 impl Budget {
     fn new() -> Self {
-        Self { rows: Vec::new(), bytes: 0, truncated: false }
+        Self { rows: Vec::new(), truncated: false }
     }
 
     /// Обрезает слишком длинное значение, сообщая об этом в самом значении.
@@ -442,12 +465,13 @@ impl Budget {
     }
 
     /// `false` - место кончилось, дальше складывать нечего.
-    fn push(&mut self, row: Value, size: usize) -> bool {
-        if self.rows.len() >= MAX_ROWS || self.bytes.saturating_add(size) > MAX_BYTES {
+    fn push(&mut self, quota: &mut Quota, row: Value, size: usize) -> bool {
+        if quota.rows >= MAX_ROWS || quota.bytes.saturating_add(size) > MAX_BYTES {
             self.truncated = true;
             return false;
         }
-        self.bytes += size;
+        quota.rows += 1;
+        quota.bytes += size;
         self.rows.push(row);
         true
     }
@@ -568,6 +592,7 @@ async fn pg_query(client: &tokio_postgres::Client, sql: &str) -> Result<Value, S
     let msgs = client.simple_query(sql).await.map_err(|e| pg_err(&e))?;
 
     let mut sets: Vec<ResultSet> = Vec::new();
+    let mut quota = Quota::default();
     let mut current: Option<ResultSet> = None;
 
     for m in msgs {
@@ -575,7 +600,7 @@ async fn pg_query(client: &tokio_postgres::Client, sql: &str) -> Result<Value, S
             // Описание колонок начинает новый набор - это и есть граница между выборками.
             tokio_postgres::SimpleQueryMessage::RowDescription(cols) => {
                 if let Some(done) = current.take() {
-                    sets.push(done);
+                    keep(&mut sets, done, &mut quota);
                 }
                 current = Some(ResultSet::new(unique_names(cols.iter().map(|c| c.name()))));
             }
@@ -602,7 +627,7 @@ async fn pg_query(client: &tokio_postgres::Client, sql: &str) -> Result<Value, S
                     };
                     obj.insert(name.clone(), cell);
                 }
-                if !set.budget.push(Value::Object(obj), size) {
+                if !set.budget.push(&mut quota, Value::Object(obj), size) {
                     // Место кончилось - остальные строки этого набора не берём, но
                     // следующие наборы разобрать обязаны.
                     continue;
@@ -611,15 +636,15 @@ async fn pg_query(client: &tokio_postgres::Client, sql: &str) -> Result<Value, S
             tokio_postgres::SimpleQueryMessage::CommandComplete(n) => {
                 let mut set = current.take().unwrap_or_else(|| ResultSet::new(Vec::new()));
                 set.affected = n;
-                sets.push(set);
+                keep(&mut sets, set, &mut quota);
             }
             _ => {}
         }
     }
     if let Some(done) = current.take() {
-        sets.push(done);
+        keep(&mut sets, done, &mut quota);
     }
-    Ok(answer(sets))
+    Ok(answer(sets, &quota))
 }
 
 async fn mysql_query(conn: &AsyncMutex<MysqlConn>, sql: &str) -> Result<Value, String> {
@@ -628,6 +653,7 @@ async fn mysql_query(conn: &AsyncMutex<MysqlConn>, sql: &str) -> Result<Value, S
         g.query(sql).await?
     };
     let mut sets: Vec<ResultSet> = Vec::new();
+    let mut quota = Quota::default();
     for out in outs {
         let mut set = ResultSet::new(unique_names(out.columns.iter().map(String::as_str)));
         set.affected = out.affected;
@@ -645,13 +671,13 @@ async fn mysql_query(conn: &AsyncMutex<MysqlConn>, sql: &str) -> Result<Value, S
                 };
                 obj.insert(name.clone(), value);
             }
-            if !set.budget.push(Value::Object(obj), size) {
+            if !set.budget.push(&mut quota, Value::Object(obj), size) {
                 break;
             }
         }
-        sets.push(set);
+        keep(&mut sets, set, &mut quota);
     }
-    Ok(answer(sets))
+    Ok(answer(sets, &quota))
 }
 
 /// Запрос к SQL Server. Граница набора - описание колонок, как у PostgreSQL; строки
@@ -664,12 +690,13 @@ async fn mssql_query(conn: &AsyncMutex<MssqlClient>, sql: &str) -> Result<Value,
     let mut g = conn.lock().await;
     let mut stream = g.simple_query(sql).await.map_err(|e| mssql_err(&e))?;
     let mut sets: Vec<ResultSet> = Vec::new();
+    let mut quota = Quota::default();
     let mut current: Option<ResultSet> = None;
     while let Some(item) = stream.try_next().await.map_err(|e| mssql_err(&e))? {
         match item {
             tiberius::QueryItem::Metadata(meta) => {
                 if let Some(done) = current.take() {
-                    sets.push(done);
+                    keep(&mut sets, done, &mut quota);
                 }
                 current = Some(ResultSet::new(unique_names(
                     meta.columns().iter().map(|c| c.name()),
@@ -694,14 +721,14 @@ async fn mssql_query(conn: &AsyncMutex<MssqlClient>, sql: &str) -> Result<Value,
                     obj.insert(name.clone(), cell);
                 }
                 // Место кончилось - строку не берём, но поток дочитываем.
-                let _ = set.budget.push(Value::Object(obj), size);
+                let _ = set.budget.push(&mut quota, Value::Object(obj), size);
             }
         }
     }
     if let Some(done) = current.take() {
-        sets.push(done);
+        keep(&mut sets, done, &mut quota);
     }
-    Ok(answer(sets))
+    Ok(answer(sets, &quota))
 }
 
 /// Значение ячейки SQL Server текстом. `None` - это NULL.
@@ -838,7 +865,7 @@ impl<'de> serde::Deserialize<'de> for OrderedRow {
     }
 }
 
-fn sqlite_set(rows: Vec<OrderedRow>) -> ResultSet {
+fn sqlite_set(rows: Vec<OrderedRow>, quota: &mut Quota) -> ResultSet {
     let names: Vec<String> = rows
         .first()
         .map(|r| r.0.iter().map(|(k, _)| k.clone()).collect())
@@ -862,7 +889,7 @@ fn sqlite_set(rows: Vec<OrderedRow>) -> ResultSet {
             };
             obj.insert(name.clone(), cell);
         }
-        if !set.budget.push(Value::Object(obj), size) {
+        if !set.budget.push(quota, Value::Object(obj), size) {
             break;
         }
     }
@@ -876,13 +903,17 @@ fn sqlite_set(rows: Vec<OrderedRow>) -> ResultSet {
 /// последней законченной: половина таблицы честнее, чем пустая таблица с ошибкой разбора.
 fn parse_sqlite_json(out: &str, capped: bool) -> Result<Value, String> {
     let mut sets = Vec::new();
+    let mut quota = Quota::default();
     let mut truncated = capped;
     let mut stream = serde_json::Deserializer::from_str(out).into_iter::<Vec<OrderedRow>>();
     loop {
         let start = stream.byte_offset();
         match stream.next() {
             None => break,
-            Some(Ok(rows)) => sets.push(sqlite_set(rows)),
+            Some(Ok(rows)) => {
+                let set = sqlite_set(rows, &mut quota);
+                keep(&mut sets, set, &mut quota);
+            }
             Some(Err(e)) => {
                 if !capped {
                     return Err(format!("SQLite вернул непонятный ответ: {e}"));
@@ -890,7 +921,8 @@ fn parse_sqlite_json(out: &str, capped: bool) -> Result<Value, String> {
                 let rest = &out[start..];
                 if let Some(cut) = rest.rfind("},\n{") {
                     if let Ok(rows) = serde_json::from_str::<Vec<OrderedRow>>(&format!("{}]", &rest[..cut + 1])) {
-                        sets.push(sqlite_set(rows));
+                        let set = sqlite_set(rows, &mut quota);
+                        keep(&mut sets, set, &mut quota);
                     }
                 }
                 truncated = true;
@@ -898,7 +930,7 @@ fn parse_sqlite_json(out: &str, capped: bool) -> Result<Value, String> {
             }
         }
     }
-    let mut v = answer(sets);
+    let mut v = answer(sets, &quota);
     if truncated {
         v["truncated"] = json!(true);
     }
@@ -914,14 +946,16 @@ async fn mongo_query(conn: &AsyncMutex<MongoConn>, text: &str) -> Result<Value, 
         let mut g = conn.lock().await;
         g.run(op, MAX_ROWS, MAX_BYTES, SERVER_LIMIT).await?
     };
-    Ok(answer(vec![mongo_set(out)]))
+    let mut quota = Quota::default();
+    let set = mongo_set(out, &mut quota);
+    Ok(answer(vec![set], &quota))
 }
 
 /// Колонок не больше этого. Коллекция, где у каждого документа свои поля, иначе дала бы
 /// таблицу в тысячи столбцов, в которой ничего не разглядеть.
 const MONGO_MAX_COLUMNS: usize = 300;
 
-fn mongo_set(out: crate::mongo::Outcome) -> ResultSet {
+fn mongo_set(out: crate::mongo::Outcome, quota: &mut Quota) -> ResultSet {
     let mut names: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut too_wide = false;
@@ -954,7 +988,7 @@ fn mongo_set(out: crate::mongo::Outcome) -> ResultSet {
             };
             obj.insert(name.clone(), cell);
         }
-        if !set.budget.push(Value::Object(obj), size) {
+        if !set.budget.push(quota, Value::Object(obj), size) {
             break;
         }
     }
@@ -981,15 +1015,16 @@ async fn redis_query(
         cmd.query_async(&mut *g).await.map_err(|e| redis_err(&e))?
     };
     let mut set = ResultSet::new(vec!["значение".to_owned()]);
+    let mut quota = Quota::default();
     for row in redis_rows(value) {
         let text = row["значение"].as_str().unwrap_or("").to_owned();
         let size = text.len();
         let cell = if text.is_empty() { row["значение"].clone() } else { set.budget.cell(&text) };
-        if !set.budget.push(json!({ "значение": cell }), size) {
+        if !set.budget.push(&mut quota, json!({ "значение": cell }), size) {
             break;
         }
     }
-    Ok(answer(vec![set]))
+    Ok(answer(vec![set], &quota))
 }
 
 /// Ответ Redis - дерево, а таблица плоская. Разворачиваем список в строки, всё остальное
@@ -1116,11 +1151,11 @@ mod tests {
             cut: false,
             affected: 0,
         };
-        let v = answer(vec![mongo_set(out)]);
+        let v = answer(vec![mongo_set(out, &mut Quota::default())], &Quota::default());
         assert_eq!(v["columns"], json!(["b", "a", "c"]), "поля в порядке первого появления");
-        assert_eq!(v["rows"][0]["b"], "1");
-        assert!(v["rows"][1]["b"].is_null(), "поля нет - ячейка пустая");
-        assert_eq!(v["rows"][1]["a"], "", "пустая строка - не null");
+        assert_eq!(v["sets"][0]["rows"][0]["b"], "1");
+        assert!(v["sets"][0]["rows"][1]["b"].is_null(), "поля нет - ячейка пустая");
+        assert_eq!(v["sets"][0]["rows"][1]["a"], "", "пустая строка - не null");
     }
 
     #[test]
@@ -1165,10 +1200,10 @@ mod tests {
         let mut пустой = ResultSet::new(vec!["a".into()]);
         пустой.affected = 3;
         let mut со_строками = ResultSet::new(vec!["c".into()]);
-        со_строками.budget.push(json!({ "c": 3 }), 1);
+        со_строками.budget.push(&mut Quota::default(), json!({ "c": 3 }), 1);
         со_строками.affected = 1;
 
-        let ответ = answer(vec![пустой, со_строками]);
+        let ответ = answer(vec![пустой, со_строками], &Quota::default());
         assert_eq!(ответ["shown"], 1, "показать надо набор со строками");
         assert_eq!(ответ["columns"][0], "c");
         assert_eq!(ответ["sets"].as_array().unwrap().len(), 2, "остальные наборы не выбрасываются");
@@ -1176,18 +1211,40 @@ mod tests {
     }
 
     #[test]
+    fn предел_действует_на_ответ_целиком_а_не_на_набор() {
+        // Сотня мелких SELECT подряд раньше приносила сотню пределов разом.
+        let mut quota = Quota::default();
+        let mut sets = Vec::new();
+        for _ in 0..MAX_SETS + 5 {
+            let mut set = ResultSet::new(vec!["i".into()]);
+            for i in 0..100 {
+                set.budget.push(&mut quota, json!({ "i": i }), 1);
+            }
+            keep(&mut sets, set, &mut quota);
+        }
+        let total: usize = sets.iter().map(|s| s.budget.rows.len()).sum();
+        assert_eq!(total, MAX_ROWS, "строк во всех наборах вместе - не больше предела");
+        assert_eq!(sets.len(), MAX_SETS, "лишние наборы не держатся");
+        let v = answer(sets, &quota);
+        assert_eq!(v["truncated"], true, "об отброшенном надо сказать");
+        assert_eq!(v["rows"], json!([]), "строки показанного набора вверху не повторяются");
+        assert_eq!(v["sets"][0]["rows"].as_array().unwrap().len(), 100);
+    }
+
+    #[test]
     fn выборка_обрезается_по_строкам_объёму_и_ячейке() {
         // Без этих пределов `SELECT * FROM logs` на живой базе приезжает целиком: в память,
         // в JSON, в таблицу - и приложение встаёт на машине, где база отвечала мгновенно.
         let mut по_строкам = Budget::new();
+        let mut q = Quota::default();
         for i in 0..MAX_ROWS {
-            assert!(по_строкам.push(json!({ "i": i }), 1), "строка {i} должна поместиться");
+            assert!(по_строкам.push(&mut q, json!({ "i": i }), 1), "строка {i} должна поместиться");
         }
-        assert!(!по_строкам.push(json!({ "i": "лишняя" }), 1), "предел строк обязан сработать");
+        assert!(!по_строкам.push(&mut q, json!({ "i": "лишняя" }), 1), "предел строк обязан сработать");
         assert!(по_строкам.truncated, "об обрезке надо сказать");
 
         let mut по_объёму = Budget::new();
-        assert!(!по_объёму.push(json!({ "a": 1 }), MAX_BYTES + 1), "предел объёма обязан сработать");
+        assert!(!по_объёму.push(&mut Quota::default(), json!({ "a": 1 }), MAX_BYTES + 1), "предел объёма обязан сработать");
         assert!(по_объёму.truncated);
 
         let mut по_ячейке = Budget::new();

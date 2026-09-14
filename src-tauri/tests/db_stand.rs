@@ -12,6 +12,11 @@ use common::{rt, Stand};
 use serein_lib::db::{self, Kind, Params};
 use serein_lib::ssh;
 
+/// Показанный набор ответа: строки лежат в `sets`, верхние поля их не повторяют.
+fn shown(v: &serde_json::Value) -> &serde_json::Value {
+    &v["sets"][v["shown"].as_u64().unwrap_or(0) as usize]
+}
+
 fn params(kind: Kind, host: &str, user: &str, db: Option<&str>) -> Params {
     Params {
         kind,
@@ -46,7 +51,7 @@ fn postgres_отвечает_через_ssh_канал() {
         let cols: Vec<&str> = out["columns"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
         assert_eq!(cols, vec!["число", "текст"], "колонки пришли не те");
 
-        let rows = out["rows"].as_array().unwrap();
+        let rows = shown(&out)["rows"].as_array().unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["число"], "1");
         // Юникод в значениях обязан доехать целым: между нами SSH-канал и своя упаковка.
@@ -67,7 +72,7 @@ fn postgres_различает_null_и_пустую_строку() {
         let out = db::query(&id, "SELECT NULL::text AS пусто, '' AS строка")
             .await
             .expect("запрос");
-        let row = &out["rows"].as_array().unwrap()[0];
+        let row = &shown(&out)["rows"].as_array().unwrap()[0];
         assert!(row["пусто"].is_null(), "NULL превратился в {:?}", row["пусто"]);
         assert_eq!(row["строка"], "");
         db::close(&id);
@@ -116,13 +121,13 @@ fn redis_читает_и_пишет_через_ssh_канал() {
         let id = open(&s, params(Kind::Redis, &s.redis_host, "", None)).await;
 
         let out = db::query(&id, "PING").await.expect("PING");
-        assert_eq!(out["rows"][0]["значение"], "PONG");
+        assert_eq!(shown(&out)["rows"][0]["значение"], "PONG");
 
         // Значение с пробелами — тот случай, ради которого команда режется с оглядкой на
         // кавычки: иначе на сервер уедет только первое слово.
         db::query(&id, r#"SET проба "два слова""#).await.expect("SET");
         let got = db::query(&id, "GET проба").await.expect("GET");
-        assert_eq!(got["rows"][0]["значение"], "два слова");
+        assert_eq!(shown(&got)["rows"][0]["значение"], "два слова");
 
         db::query(&id, "DEL проба").await.expect("DEL");
         db::close(&id);
@@ -139,7 +144,7 @@ fn redis_разворачивает_список_в_строки() {
         db::query(&id, "RPUSH список раз два три").await.expect("RPUSH");
 
         let out = db::query(&id, "LRANGE список 0 -1").await.expect("LRANGE");
-        let rows = out["rows"].as_array().unwrap();
+        let rows = shown(&out)["rows"].as_array().unwrap();
         assert_eq!(rows.len(), 3, "список не развёрнут в строки: {rows:?}");
         assert_eq!(rows[0]["значение"], "раз");
         assert_eq!(rows[2]["значение"], "три");
@@ -193,7 +198,7 @@ async fn проверить_mysql(s: &Stand, host: &str) {
         .map(|c| c.as_str().unwrap())
         .collect();
     assert_eq!(cols, vec!["число", "текст"], "колонки пришли не те");
-    let rows = out["rows"].as_array().unwrap();
+    let rows = shown(&out)["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["число"], "1");
     // Юникод и в именах колонок, и в значениях: между нами SSH-канал и своя упаковка.
@@ -201,8 +206,8 @@ async fn проверить_mysql(s: &Stand, host: &str) {
 
     // NULL обязан отличаться от пустой строки — иначе по таблице нельзя судить о данных.
     let out = db::query(&id, "SELECT NULL AS пусто, '' AS строка").await.expect("запрос");
-    assert!(out["rows"][0]["пусто"].is_null(), "NULL приехал не как NULL");
-    assert_eq!(out["rows"][0]["строка"], "");
+    assert!(shown(&out)["rows"][0]["пусто"].is_null(), "NULL приехал не как NULL");
+    assert_eq!(shown(&out)["rows"][0]["строка"], "");
 
     // Запрос без выборки сообщает про изменённые строки, а не про пустую таблицу.
     db::query(&id, "CREATE TEMPORARY TABLE проба (id INT)").await.expect("создание таблицы");
@@ -255,7 +260,7 @@ fn длинный_ответ_mysql_не_рвётся_на_границе_пак�
         let out = db::query(&id, "SELECT REPEAT('я', 400000) AS длинное")
             .await
             .expect("запрос");
-        let v = out["rows"][0]["длинное"].as_str().expect("значение");
+        let v = shown(&out)["rows"][0]["длинное"].as_str().expect("значение");
         // Склейка проверяется не длиной показанного, а тем, что мы знаем полную длину:
         // значение обрезается для показа (иначе таблица получила бы мегабайты в одной
         // ячейке), но в пометке стоит настоящий размер - 400000 символов по два байта.
@@ -270,7 +275,7 @@ fn длинный_ответ_mysql_не_рвётся_на_границе_пак�
         // И главное: соединение после большого ответа осталось исправным. Разъехавшаяся
         // склейка проявилась бы именно здесь - следующий запрос прочёл бы хвост прошлого.
         let after = db::query(&id, "SELECT 7 AS сверка").await.expect("запрос после большого ответа");
-        assert_eq!(after["rows"][0]["сверка"], "7");
+        assert_eq!(shown(&after)["rows"][0]["сверка"], "7");
         db::close(&id);
     });
 }
@@ -311,12 +316,12 @@ fn хранимая_процедура_не_разъезжает_соедине�
             .expect("создание процедуры");
 
         let out = db::query(&id, "CALL проба_двух()").await.expect("вызов");
-        assert_eq!(out["rows"][0]["первый"], "1");
+        assert_eq!(shown(&out)["rows"][0]["первый"], "1");
 
         // Вот здесь и вылезал бы хвост: следующий запрос обязан вернуть своё.
         let out = db::query(&id, "SELECT 42 AS после").await.expect("запрос после вызова");
         assert_eq!(out["columns"][0], "после", "колонки приехали от прошлого запроса");
-        assert_eq!(out["rows"][0]["после"], "42");
+        assert_eq!(shown(&out)["rows"][0]["после"], "42");
 
         db::query(&id, "DROP PROCEDURE проба_двух").await.expect("уборка");
         db::close(&id);
@@ -429,8 +434,8 @@ fn несколько_выборок_в_одном_запросе_не_смеш�
         let dup = db::query(&id, "SELECT 1 AS a, 2 AS a").await.expect("одинаковые имена");
         let cols: Vec<&str> = dup["columns"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
         assert_eq!(cols, vec!["a", "a#2"]);
-        assert_eq!(dup["rows"][0]["a"], "1");
-        assert_eq!(dup["rows"][0]["a#2"], "2");
+        assert_eq!(shown(&dup)["rows"][0]["a"], "1");
+        assert_eq!(shown(&dup)["rows"][0]["a#2"], "2");
 
         db::close(&id);
     });
@@ -463,7 +468,7 @@ fn sql_server_отвечает_через_ssh_канал() {
         )
         .await
         .expect("запрос");
-        let row = &out["rows"][0];
+        let row = &shown(&out)["rows"][0];
         assert_eq!(row["число"], "1");
         assert_eq!(row["текст"], "привет", "юникод обязан доехать целым");
         assert!(row["пусто"].is_null(), "NULL остаётся NULL");
@@ -502,7 +507,7 @@ fn sql_server_отдаёт_наборы_даты_и_числа() {
 
         // Соединение исправно после нескольких наборов: поток дочитан до конца.
         let again = db::query(&id, "SELECT 7 AS сверка").await.expect("повторный запрос");
-        assert_eq!(again["rows"][0]["сверка"], "7");
+        assert_eq!(shown(&again)["rows"][0]["сверка"], "7");
         db::close(&id);
     });
 }
@@ -618,7 +623,7 @@ fn mongodb_отвечает_через_ssh_канал() {
             .map(|c| c.as_str().expect("имя колонки"))
             .collect();
         assert_eq!(cols, vec!["b", "a", "вложенный"], "поля в порядке документа, а не по алфавиту");
-        let rows = out["rows"].as_array().expect("строки");
+        let rows = shown(&out)["rows"].as_array().expect("строки");
         assert_eq!(rows[0]["b"], "привет", "юникод обязан доехать целым");
         assert_eq!(rows[0]["a"], "1");
         assert_eq!(rows[0]["вложенный"], "{ x: [ 1, 2 ] }");
@@ -628,7 +633,7 @@ fn mongodb_отвечает_через_ssh_канал() {
         let n = db::query(&id, "db.stand_items.countDocuments({ a: { $gte: 1 } })")
             .await
             .expect("подсчёт");
-        assert_eq!(n["rows"][0]["количество"], "1");
+        assert_eq!(shown(&n)["rows"][0]["количество"], "1");
 
         db::query(
             &id,
@@ -639,9 +644,9 @@ fn mongodb_отвечает_через_ssh_канал() {
         let one = db::query(&id, "db.stand_items.findOne({ _id: ObjectId('650000000000000000000001') })")
             .await
             .expect("поиск по _id");
-        assert_eq!(one["rows"][0]["_id"], "ObjectId('650000000000000000000001')");
+        assert_eq!(shown(&one)["rows"][0]["_id"], "ObjectId('650000000000000000000001')");
         assert!(
-            one["rows"][0]["когда"].as_str().unwrap_or("").starts_with("2026-09-13T10:20:30"),
+            shown(&one)["rows"][0]["когда"].as_str().unwrap_or("").starts_with("2026-09-13T10:20:30"),
             "дата - датой: {one}"
         );
 
@@ -666,9 +671,9 @@ fn mongodb_дочитывает_курсор_и_находит_пользова�
             .expect("вставка");
         // Первая пачка курсора меньше 1200: остальное приходит через getMore.
         let all = db::query(&id, "db.stand_many.find().sort({ n: 1 })").await.expect("выборка");
-        assert_eq!(all["rows"].as_array().expect("строки").len(), 1200, "курсор дочитан до конца");
+        assert_eq!(shown(&all)["rows"].as_array().expect("строки").len(), 1200, "курсор дочитан до конца");
         assert_eq!(all["truncated"], false);
-        assert_eq!(all["rows"][1199]["n"], "1199");
+        assert_eq!(shown(&all)["rows"][1199]["n"], "1199");
 
         // Учётки приложений живут в своей базе, а не в admin. Одна - со старым SCRAM-SHA-1:
         // у него своя подготовка пароля, и на обычной учётке её не проверить.
@@ -691,7 +696,7 @@ fn mongodb_дочитывает_курсор_и_находит_пользова�
             let n = db::query(&app, "db.stand_many.estimatedDocumentCount()")
                 .await
                 .expect("запрос пользователя базы");
-            assert_eq!(n["rows"][0]["количество"], "1200", "{user}");
+            assert_eq!(shown(&n)["rows"][0]["количество"], "1200", "{user}");
             db::close(&app);
         }
 
@@ -720,18 +725,18 @@ fn базы_сами_останавливают_долгий_запрос() {
     rt().block_on(async {
         let pg = open(&s, params(Kind::Postgres, &s.pg_host, "probe", Some("probe"))).await;
         let out = db::query(&pg, "SHOW statement_timeout").await.expect("postgres");
-        assert_eq!(out["rows"][0]["statement_timeout"], "28s", "{out}");
+        assert_eq!(shown(&out)["rows"][0]["statement_timeout"], "28s", "{out}");
         db::close(&pg);
 
         // У MariaDB и MySQL переменные разные - проверяем каждую на своей базе.
         let maria = open(&s, params(Kind::Mysql, &s.mariadb_host, "probe", Some("probe"))).await;
         let out = db::query(&maria, "SELECT @@max_statement_time AS предел").await.expect("mariadb");
-        assert!(out["rows"][0]["предел"].as_str().unwrap_or("").starts_with("28"), "{out}");
+        assert!(shown(&out)["rows"][0]["предел"].as_str().unwrap_or("").starts_with("28"), "{out}");
         db::close(&maria);
 
         let mysql = open(&s, params(Kind::Mysql, &s.mysql_host, "probe", Some("probe"))).await;
         let out = db::query(&mysql, "SELECT @@max_execution_time AS предел").await.expect("mysql");
-        assert_eq!(out["rows"][0]["предел"], "28000", "{out}");
+        assert_eq!(shown(&out)["rows"][0]["предел"], "28000", "{out}");
         db::close(&mysql);
     });
 }
@@ -755,7 +760,7 @@ fn запрос_останавливается_по_просьбе() {
         assert_eq!(err, "Запрос остановлен");
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "остановка не ждёт конца запроса");
         let after = db::query(&pg, "SELECT 1 AS n").await.expect("соединение цело после отмены");
-        assert_eq!(after["rows"][0]["n"], "1");
+        assert_eq!(shown(&after)["rows"][0]["n"], "1");
         db::close(&pg);
 
         let maria = open(&s, params(Kind::Mysql, &s.mariadb_host, "probe", Some("probe"))).await;

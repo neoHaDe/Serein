@@ -42,8 +42,10 @@ export interface QuerySet {
 export function summarize(r: QueryResult): string {
   const time = `${r.ms} мс`
   const cut = r.truncated ? ' · показано не всё, предел выборки' : ''
-  if (r.rows.length > 0) {
-    return `${r.rows.length} ${plural(r.rows.length, 'строка', 'строки', 'строк')} · ${time}${cut}`
+  // Строки показанного набора приходят только в `sets`; верхние `rows` - у старых сохранённых ответов.
+  const rows = (r.sets?.[r.shown ?? 0] ?? r).rows.length
+  if (rows > 0) {
+    return `${rows} ${plural(rows, 'строка', 'строки', 'строк')} · ${time}${cut}`
   }
   if (r.affected > 0) {
     return `изменено ${r.affected} ${plural(r.affected, 'строка', 'строки', 'строк')} · ${time}`

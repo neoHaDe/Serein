@@ -459,18 +459,39 @@ pub async fn list(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, pa
 
 /// Скачивает один удалённый файл в локальный путь (без событий) - для внешнего редактора.
 pub async fn download_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str, local: &str) -> Result<(), String> {
+    download_file_while(handle, remote, local, None).await
+}
+
+/// То же, но передача бросается, как только `alive` опущен; недокачанный файл убирается.
+pub async fn download_file_while(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    remote: &str,
+    local: &str,
+    alive: Option<&AtomicBool>,
+) -> Result<(), String> {
     check_remote_path(remote)?;
     let sftp = open(handle).await?;
-    copy_remote_to_local_inner(handle, &sftp, None, "", "", remote, local, "", 0, None, None).await?;
+    copy_remote_to_local_inner(handle, &sftp, None, "", "", remote, local, "", 0, alive, None).await?;
     Ok(())
 }
 
 /// Заливает один локальный файл на удалённый путь (без событий).
 pub async fn put_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, local: &str, remote: &str) -> Result<(), String> {
+    put_file_while(handle, local, remote, None).await
+}
+
+/// То же, но передача бросается, как только `alive` опущен. SFTP пишет прямо в целевой файл,
+/// поэтому брошенная заливка оставляет его недолитым - как и обрыв связи.
+pub async fn put_file_while(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    local: &str,
+    remote: &str,
+    alive: Option<&AtomicBool>,
+) -> Result<(), String> {
     check_remote_path(remote)?;
     let sftp = open(handle).await?;
     let size = tokio::fs::metadata(local).await.map(|m| m.len()).unwrap_or(0);
-    copy_local_to_remote_inner(&sftp, None, "", "", local, remote, "", size, None, None).await?;
+    copy_local_to_remote_inner(&sftp, None, "", "", local, remote, "", size, alive, None).await?;
     Ok(())
 }
 

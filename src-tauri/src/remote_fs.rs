@@ -176,6 +176,40 @@ pub async fn put_file(fs: &Arc<Mutex<SessionFs>>, handle: &SharedHandle, local: 
     }
 }
 
+/// Скачивание, которое бросается на ближайшем куске, как только `alive` опущен.
+pub async fn download_file_while(
+    fs: &Arc<Mutex<SessionFs>>,
+    handle: &SharedHandle,
+    remote: &str,
+    local: &str,
+    alive: &AtomicBool,
+) -> Result<(), String> {
+    match backend(fs, handle).await {
+        Backend::Sftp => sftp::download_file_while(handle, remote, local, Some(alive)).await,
+        Backend::Scp => {
+            let live = || alive.load(std::sync::atomic::Ordering::Relaxed);
+            scp::download_file_ctl(handle, remote, local, &live, &mut |_: u64, _: u64| {}).await.map(|_| ())
+        }
+    }
+}
+
+/// Заливка, которая бросается на ближайшем куске, как только `alive` опущен.
+pub async fn put_file_while(
+    fs: &Arc<Mutex<SessionFs>>,
+    handle: &SharedHandle,
+    local: &str,
+    remote: &str,
+    alive: &AtomicBool,
+) -> Result<(), String> {
+    match backend(fs, handle).await {
+        Backend::Sftp => sftp::put_file_while(handle, local, remote, Some(alive)).await,
+        Backend::Scp => {
+            let live = || alive.load(std::sync::atomic::Ordering::Relaxed);
+            scp::put_file_ctl(handle, local, remote, &live, &mut |_: u64, _: u64| {}).await.map(|_| ())
+        }
+    }
+}
+
 pub async fn upload_path(
     app: AppHandle,
     fs: Arc<Mutex<SessionFs>>,
