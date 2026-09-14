@@ -61,6 +61,8 @@ export interface BackupPreview {
   path?: string
   servers?: number
   snippets?: number
+  workspaces?: number
+  tasks?: number
   keysRemapped?: number
   proxyCommands?: BackupProxyCommand[]
   contentSha256?: string
@@ -70,6 +72,8 @@ export interface BackupImportResult {
   imported: boolean
   servers?: number
   snippets?: number
+  workspaces?: number
+  tasks?: number
   keysRemapped?: number
   proxyCommands?: BackupProxyCommand[]
   proxyCommandsEnabled?: number

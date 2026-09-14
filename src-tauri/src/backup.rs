@@ -1,4 +1,9 @@
-//! Зашифрованный бэкап серверов/настроек/сниппетов (порт backup.ts).
+//! Зашифрованный бэкап серверов, настроек, сниппетов, профилей рабочего пространства и
+//! задач (порт backup.ts).
+//!
+//! Профили и задачи добавлены без смены версии формата: старое приложение лишние поля
+//! пропустит, а старый бэкап без них читается как бэкап с пустыми списками. История запусков
+//! задач сюда не входит - это журнал, а не настройка, и переносить его незачем.
 //! Формат пакета совместим с Electron-версией (crypto::encrypt_with_password).
 
 use crate::{crypto, store};
@@ -31,6 +36,8 @@ pub struct ProxyCommandWarning {
 pub struct ImportPreview {
     pub servers: usize,
     pub snippets: usize,
+    pub workspaces: usize,
+    pub tasks: usize,
     pub keys_remapped: usize,
     pub proxy_commands: Vec<ProxyCommandWarning>,
     /// Связывает подтверждение с теми байтами, которые пользователь просмотрел.
@@ -42,6 +49,8 @@ pub struct ImportPreview {
 pub struct ImportResult {
     pub servers: usize,
     pub snippets: usize,
+    pub workspaces: usize,
+    pub tasks: usize,
     pub keys_remapped: usize,
     pub proxy_commands: Vec<ProxyCommandWarning>,
     pub proxy_commands_enabled: usize,
@@ -50,6 +59,8 @@ pub struct ImportResult {
 struct DecodedBackup {
     servers: Vec<Value>,
     snippets: Vec<Value>,
+    workspaces: Vec<Value>,
+    tasks: Vec<Value>,
     settings: Option<Value>,
 }
 
@@ -65,6 +76,8 @@ pub fn export(password: &str) -> Result<String, String> {
         "servers": store::list_servers_with_secrets(),
         "settings": store::settings_get(),
         "snippets": store::snippets_list(),
+        "workspaces": store::workspaces_list(),
+        "tasks": store::tasks_list(),
     });
     crypto::encrypt_with_password(&payload.to_string(), password)
 }
@@ -96,20 +109,21 @@ fn decode(content: &str, password: &str) -> Result<DecodedBackup, String> {
     let json = crypto::decrypt_with_password(content, password)
         .map_err(|_| "Неверный пароль или повреждённый файл бэкапа".to_string())?;
     let payload: Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    from_payload(&payload)
+}
+
+/// Содержимое расшифрованного бэкапа. Отсутствующий список - пустой: так читаются бэкапы,
+/// сделанные до появления профилей и задач.
+fn from_payload(payload: &Value) -> Result<DecodedBackup, String> {
     if payload.get("version").and_then(|v| v.as_u64()) != Some(1) {
         return Err("Неподдерживаемая версия бэкапа".into());
     }
+    let list = |key: &str| payload.get(key).and_then(|v| v.as_array()).cloned().unwrap_or_default();
     Ok(DecodedBackup {
-        servers: payload
-            .get("servers")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default(),
-        snippets: payload
-            .get("snippets")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default(),
+        servers: list("servers"),
+        snippets: list("snippets"),
+        workspaces: list("workspaces"),
+        tasks: list("tasks"),
         settings: payload.get("settings").cloned(),
     })
 }
@@ -149,6 +163,8 @@ pub fn preview(content: &str, password: &str) -> Result<ImportPreview, String> {
     Ok(ImportPreview {
         servers: decoded.servers.len(),
         snippets: decoded.snippets.len(),
+        workspaces: decoded.workspaces.len(),
+        tasks: decoded.tasks.len(),
         keys_remapped,
         proxy_commands: proxy_commands(&decoded.servers),
         content_sha256: content_hash(content),
@@ -184,12 +200,22 @@ pub fn import(
     for s in &decoded.snippets {
         store::snippets_save(s.clone())?;
     }
+    for w in &decoded.workspaces {
+        store::workspaces_save(w.clone())?;
+    }
+    // Задачи несут команды, но в отличие от ProxyCommand сами не запускаются никогда: только
+    // по кнопке, после подтверждения, и пробный прогон показывает их до запуска.
+    for t in &decoded.tasks {
+        store::tasks_save(t.clone())?;
+    }
     if let Some(settings) = decoded.settings {
         store::settings_set(settings)?;
     }
     Ok(ImportResult {
         servers: decoded.servers.len(),
         snippets: decoded.snippets.len(),
+        workspaces: decoded.workspaces.len(),
+        tasks: decoded.tasks.len(),
         keys_remapped,
         proxy_commands: warnings,
         proxy_commands_enabled,
@@ -268,6 +294,23 @@ mod tests {
         assert_eq!(warnings[0].server_index, 1);
         assert_eq!(warnings[0].server_id.as_deref(), Some("jump"));
         assert_eq!(warnings[0].command, "nc %h %p");
+    }
+
+    #[test]
+    fn старый_бэкап_без_профилей_и_задач_читается() {
+        let old = json!({ "version": 1, "servers": [{ "id": "a" }], "snippets": [] });
+        let d = from_payload(&old).expect("старый формат");
+        assert_eq!((d.servers.len(), d.workspaces.len(), d.tasks.len()), (1, 0, 0));
+
+        let new = json!({
+            "version": 1,
+            "servers": [],
+            "workspaces": [{ "id": "w", "name": "Продакшн", "tabs": [], "savedAt": 1 }],
+            "tasks": [{ "id": "t", "name": "Выкладка", "steps": [], "serverIds": [] }, { "id": "u", "name": "Логи", "steps": [], "serverIds": [] }],
+        });
+        let d = from_payload(&new).expect("новый формат");
+        assert_eq!((d.workspaces.len(), d.tasks.len()), (1, 2));
+        assert!(from_payload(&json!({ "version": 2 })).is_err());
     }
 
     #[test]

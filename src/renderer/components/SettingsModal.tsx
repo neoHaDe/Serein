@@ -133,7 +133,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
         ? `; команд-посредников разрешено: ${r.proxyCommandsEnabled}`
         : ''
       setMsg({
-        text: `Импортировано серверов: ${r.servers}, сниппетов: ${r.snippets}${remapped}${enabled}`,
+        text: `Импортировано серверов: ${r.servers}, сниппетов: ${r.snippets}, профилей: ${r.workspaces ?? 0}, задач: ${r.tasks ?? 0}${remapped}${enabled}`,
         ok: true
       })
       setBackupPreview(null)
@@ -521,7 +521,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
             <div className="settings-action-form">
               <div className="settings-row-name">Проверьте бэкап перед импортом</div>
               <div className="settings-row-desc">
-                Серверов: {backupPreview.servers ?? 0}, сниппетов: {backupPreview.snippets ?? 0}.
+                Серверов: {backupPreview.servers ?? 0}, сниппетов: {backupPreview.snippets ?? 0}, профилей:{' '}
+                {backupPreview.workspaces ?? 0}, задач: {backupPreview.tasks ?? 0}.
                 {backupPreview.keysRemapped
                   ? ` Путей к ключам будет поправлено: ${backupPreview.keysRemapped}.`
                   : ''}
