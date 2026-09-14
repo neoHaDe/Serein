@@ -32,6 +32,8 @@ pub struct HostKeyAsk {
     pub bridge: HostKeyBridge,
     /// id сессии - чтобы фронт понял, к какой вкладке относится вопрос.
     pub session_id: String,
+    /// Часы подключения этой сессии: пока человек решает, срок не идёт.
+    pub pause: HumanPause,
 }
 
 impl HostKeyAsk {
@@ -52,6 +54,7 @@ impl HostKeyAsk {
                 "kind": kind,
             }),
         );
+        let _waiting = self.pause.begin();
         rx.await.unwrap_or(false)
     }
 }
@@ -143,6 +146,98 @@ async fn within_limit<T>(
             CHANNEL_OPEN_LIMIT.as_secs()
         )),
     }
+}
+
+/// Сколько ждём ответа сервера на вход одного хопа: пароль, ключ, агент, шаги второго
+/// фактора. Время, пока человек вводит код, сюда не входит.
+pub const AUTH_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Часы подключения, которые стоят, пока ждём человека.
+///
+/// Сроки на подключение нужны против сервера, который принял соединение и замолчал. Но
+/// посреди того же рукопожатия приложение спрашивает человека - доверять ли ключу, какой
+/// код второго фактора, - и прежний срок в 15 секунд обрывал подключение, пока человек
+/// читал отпечаток. Время ответа человека в срок машины не засчитывается.
+#[derive(Clone, Default)]
+pub struct HumanPause(Arc<Mutex<PauseState>>);
+
+#[derive(Default)]
+struct PauseState {
+    waiting: usize,
+    since: Option<std::time::Instant>,
+    total: std::time::Duration,
+}
+
+/// Пока жив - ждём человека.
+pub struct PauseGuard(HumanPause);
+
+impl HumanPause {
+    pub fn begin(&self) -> PauseGuard {
+        let mut st = crate::sync::lock(&self.0);
+        if st.waiting == 0 {
+            st.since = Some(std::time::Instant::now());
+        }
+        st.waiting += 1;
+        drop(st);
+        PauseGuard(self.clone())
+    }
+
+    /// Сколько всего ждали человека, включая ожидание прямо сейчас, и ждём ли сейчас.
+    fn state(&self) -> (std::time::Duration, bool) {
+        let st = crate::sync::lock(&self.0);
+        let now = st.since.map(|t| t.elapsed()).unwrap_or_default();
+        (st.total + now, st.waiting > 0)
+    }
+}
+
+impl Drop for PauseGuard {
+    fn drop(&mut self) {
+        let mut st = crate::sync::lock(&(self.0).0);
+        st.waiting = st.waiting.saturating_sub(1);
+        if st.waiting == 0 {
+            if let Some(t) = st.since.take() {
+                st.total += t.elapsed();
+            }
+        }
+    }
+}
+
+/// Ждёт будущее не дольше `limit` машинного времени. `Err(())` - срок вышел.
+async fn machine_limit<T>(
+    pause: &HumanPause,
+    limit: std::time::Duration,
+    fut: impl std::future::Future<Output = T>,
+) -> Result<T, ()> {
+    tokio::pin!(fut);
+    let started = std::time::Instant::now();
+    let (human_before, _) = pause.state();
+    loop {
+        let (human, waiting) = pause.state();
+        let used = started
+            .elapsed()
+            .saturating_sub(human.saturating_sub(human_before));
+        let nap = if waiting {
+            std::time::Duration::from_millis(250)
+        } else if used >= limit {
+            return Err(());
+        } else {
+            limit - used
+        };
+        tokio::select! {
+            r = &mut fut => return Ok(r),
+            _ = tokio::time::sleep(nap) => {}
+        }
+    }
+}
+
+/// Срок на подключение к серверу из его настроек, по умолчанию 15 с.
+fn connect_limit(server: &Value) -> (u64, std::time::Duration) {
+    let secs = server
+        .get("connectTimeout")
+        .and_then(|v| v.as_u64())
+        .filter(|n| *n > 0)
+        .unwrap_or(15);
+    (secs, std::time::Duration::from_secs(secs))
 }
 
 /// Канал сессии (exec, shell, SFTP, SCP) под общим замком, но с ограничением по времени.
@@ -502,6 +597,8 @@ pub async fn connect_desktop(
     let dummy_ki: KiBridge = Arc::new(Mutex::new(HashMap::new()));
     let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
     let (_cancel_tx, cancel_rx) = watch::channel(false);
+    // Спросить здесь некого, но срок на шаги машины тот же, что у обычной сессии.
+    let pause = HumanPause::default();
     let mut jumps = Vec::new();
 
     let far = &chain[chain.len() - 1];
@@ -511,22 +608,25 @@ pub async fn connect_desktop(
         remote_forwards.clone(),
         cancel_rx.clone(),
         Trust::KnownOnly,
+        &pause,
     )
     .await?;
-    if !authenticate(&mut cur, far, None, &dummy_ki, None).await? {
+    if !authenticate_within(&mut cur, far, None, &dummy_ki, None, &pause).await? {
         return Err(auth_rejected(far));
     }
     for i in (0..chain.len() - 1).rev() {
         let next = &chain[i];
         let nhost = field(next, "host")
             .ok_or_else(|| crate::error::SereinError::Config("Не задан host промежуточного хоста".into()))?;
-        let channel = cur
-            .channel_open_direct_tcpip(nhost, port_of(next) as u32, "127.0.0.1", 0)
-            .await
-            .map_err(|e| crate::error::SereinError::ProxyJump {
-                host: nhost.to_string(),
-                detail: e.to_string(),
-            })?;
+        let channel = within_limit(
+            &format!("канал до {nhost}"),
+            cur.channel_open_direct_tcpip(nhost, port_of(next) as u32, "127.0.0.1", 0),
+        )
+        .await
+        .map_err(|detail| crate::error::SereinError::ProxyJump {
+            host: nhost.to_string(),
+            detail,
+        })?;
         jumps.push(cur);
         let handler = ClientHandler {
             host_id: knownhosts::host_id(nhost, port_of(next)),
@@ -535,17 +635,16 @@ pub async fn connect_desktop(
             cancel: cancel_rx.clone(),
             agent_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
-        let mut nh = client::connect_stream(
+        let mut nh = jump_handshake(
+            next,
+            nhost,
             desktop_client_config(next, window, compress),
-            channel.into_stream(),
+            channel,
             handler,
+            &pause,
         )
-        .await
-        .map_err(|e| crate::error::SereinError::ProxyJump {
-            host: nhost.to_string(),
-            detail: e.to_string(),
-        })?;
-        if !authenticate(&mut nh, next, None, &dummy_ki, None).await? {
+        .await?;
+        if !authenticate_within(&mut nh, next, None, &dummy_ki, None, &pause).await? {
             return Err(auth_rejected(next));
         }
         cur = nh;
@@ -578,6 +677,7 @@ async fn authenticate(
     app: Option<&AppHandle>,
     ki: &KiBridge,
     id: Option<&str>,
+    pause: &HumanPause,
 ) -> crate::error::Result<bool> {
     let user = field(server, "username").unwrap_or("root").to_string();
     let auth_type = field(server, "authType").unwrap_or("password");
@@ -640,7 +740,10 @@ async fn authenticate(
                                     "keyboard-interactive недоступен без UI".into(),
                                 ));
                             };
-                            let answers = request_ki(app, ki, sid, pl).await;
+                            let answers = {
+                                let _waiting = pause.begin();
+                                request_ki(app, ki, sid, pl).await
+                            };
                             resp = handle
                                 .authenticate_keyboard_interactive_respond(answers)
                                 .await
@@ -654,12 +757,60 @@ async fn authenticate(
     }
 }
 
+/// Вход на один хоп с пределом по времени.
+///
+/// Сервер, принявший соединение и замолчавший на входе, раньше держал подключение сколько
+/// угодно: вкладка крутила «подключение» без конца. Ожидание человека - код второго
+/// фактора - в срок не входит.
+async fn authenticate_within(
+    handle: &mut client::Handle<ClientHandler>,
+    server: &Value,
+    app: Option<&AppHandle>,
+    ki: &KiBridge,
+    id: Option<&str>,
+    pause: &HumanPause,
+) -> crate::error::Result<bool> {
+    match machine_limit(pause, AUTH_LIMIT, authenticate(handle, server, app, ki, id, pause)).await {
+        Ok(r) => r,
+        Err(()) => Err(crate::error::SereinError::ConnectFailed {
+            host: host_label(server),
+            detail: format!("сервер не ответил на вход за {} с", AUTH_LIMIT.as_secs()),
+            phase: crate::error::SessionPhase::Auth,
+        }),
+    }
+}
+
+/// Рукопожатие с хопом поверх канала предыдущего. Срок - тот же, что у прямого подключения
+/// к нему; вопрос человеку о ключе в срок не входит.
+async fn jump_handshake(
+    server: &Value,
+    host: &str,
+    config: Arc<client::Config>,
+    channel: Channel<Msg>,
+    handler: ClientHandler,
+    pause: &HumanPause,
+) -> crate::error::Result<client::Handle<ClientHandler>> {
+    let (secs, limit) = connect_limit(server);
+    let fut = client::connect_stream(config, channel.into_stream(), handler);
+    match machine_limit(pause, limit, fut).await {
+        Ok(r) => r.map_err(|e| crate::error::SereinError::ProxyJump {
+            host: host.to_string(),
+            detail: e.to_string(),
+        }),
+        Err(()) => Err(crate::error::SereinError::ProxyJump {
+            host: host.to_string(),
+            detail: format!("сервер не ответил за {secs} с"),
+        }),
+    }
+}
+
 async fn connect_one(
     server: &Value,
     config: Arc<client::Config>,
     rf: RemoteForwards,
     cancel: CancelRx,
     trust: Trust,
+    pause: &HumanPause,
 ) -> crate::error::Result<client::Handle<ClientHandler>> {
     let host = field(server, "host")
         .ok_or_else(|| crate::error::SereinError::Config("Не задан host".into()))?;
@@ -671,19 +822,14 @@ async fn connect_one(
         cancel,
         agent_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
-    let secs = server
-        .get("connectTimeout")
-        .and_then(|v| v.as_u64())
-        .filter(|n| *n > 0)
-        .unwrap_or(15);
-    let timeout = std::time::Duration::from_secs(secs);
+    let (secs, timeout) = connect_limit(server);
 
     if let Some(cmd) = field(server, "proxyCommand").map(str::trim).filter(|c| !c.is_empty()) {
         let user = field(server, "username").unwrap_or("root");
         let stream = crate::proxycmd::spawn(cmd, host, port_of(server), user)
             .map_err(crate::error::SereinError::Config)?;
         let fut = client::connect_stream(config, stream, handler);
-        return match tokio::time::timeout(timeout, fut).await {
+        return match machine_limit(pause, timeout, fut).await {
             Ok(r) => r.map_err(|e| crate::error::SereinError::ConnectFailed {
                 host: label.clone(),
                 detail: format!("через прокси-команду: {e}"),
@@ -694,7 +840,7 @@ async fn connect_one(
     }
 
     let fut = client::connect(config, (host, port_of(server)), handler);
-    match tokio::time::timeout(timeout, fut).await {
+    match machine_limit(pause, timeout, fut).await {
         Ok(r) => r.map_err(|e| crate::error::SereinError::ConnectFailed {
             host: label.clone(),
             detail: e.to_string(),
@@ -723,10 +869,12 @@ pub async fn connect_chain(
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let alive = Arc::new(AtomicBool::new(true));
     // Вопросы про ключ хоста задаём в UI этой сессии - и для цели, и для каждого jump-хопа.
+    let pause = HumanPause::default();
     let ask = Trust::Ask(HostKeyAsk {
         app: app.clone(),
         bridge: host_keys.clone(),
         session_id: id.clone(),
+        pause: pause.clone(),
     });
 
     // Самый дальний хоп (конец цепочки) - прямое подключение.
@@ -737,15 +885,17 @@ pub async fn connect_chain(
         remote_forwards.clone(),
         cancel_rx.clone(),
         ask.clone(),
+        &pause,
     )
     .await?;
     let far_is_target = chain.len() == 1;
-    if !authenticate(
+    if !authenticate_within(
         &mut handle,
         far,
         Some(&app),
         &ki,
         if far_is_target { Some(id.as_str()) } else { None },
+        &pause,
     )
     .await?
     {
@@ -758,13 +908,15 @@ pub async fn connect_chain(
         let next = &chain[i];
         let nhost = field(next, "host")
             .ok_or_else(|| crate::error::SereinError::Config("Не задан host промежуточного хоста".into()))?;
-        let channel = cur
-            .channel_open_direct_tcpip(nhost, port_of(next) as u32, "127.0.0.1", 0)
-            .await
-            .map_err(|e| crate::error::SereinError::ProxyJump {
-                host: nhost.to_string(),
-                detail: e.to_string(),
-            })?;
+        let channel = within_limit(
+            &format!("канал до {nhost}"),
+            cur.channel_open_direct_tcpip(nhost, port_of(next) as u32, "127.0.0.1", 0),
+        )
+        .await
+        .map_err(|detail| crate::error::SereinError::ProxyJump {
+            host: nhost.to_string(),
+            detail,
+        })?;
         jump_handles.push(Arc::new(cur));
         let config = ssh_client_config(next);
         let handler = ClientHandler {
@@ -774,19 +926,15 @@ pub async fn connect_chain(
             cancel: cancel_rx.clone(),
                 agent_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
-        let mut nh = client::connect_stream(config, channel.into_stream(), handler)
-            .await
-            .map_err(|e| crate::error::SereinError::ProxyJump {
-                host: nhost.to_string(),
-                detail: e.to_string(),
-            })?;
+        let mut nh = jump_handshake(next, nhost, config, channel, handler, &pause).await?;
         let is_target = i == 0;
-        if !authenticate(
+        if !authenticate_within(
             &mut nh,
             next,
             Some(&app),
             &ki,
             if is_target { Some(id.as_str()) } else { None },
+            &pause,
         )
         .await?
         {
@@ -885,6 +1033,8 @@ pub async fn connect_client(chain: Vec<Value>) -> crate::error::Result<SharedHan
     let dummy_ki: KiBridge = Arc::new(Mutex::new(HashMap::new()));
     let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
     let (_cancel_tx, cancel_rx) = watch::channel(false);
+    // Спросить здесь некого, но срок на шаги машины тот же, что у обычной сессии.
+    let pause = HumanPause::default();
     let far = &chain[chain.len() - 1];
     let mut handle = connect_one(
         far,
@@ -892,9 +1042,10 @@ pub async fn connect_client(chain: Vec<Value>) -> crate::error::Result<SharedHan
         remote_forwards.clone(),
         cancel_rx.clone(),
         Trust::background(),
+        &pause,
     )
     .await?;
-    if !authenticate(&mut handle, far, None, &dummy_ki, None).await? {
+    if !authenticate_within(&mut handle, far, None, &dummy_ki, None, &pause).await? {
         return Err(auth_rejected(far));
     }
     let mut cur = handle;
@@ -902,13 +1053,15 @@ pub async fn connect_client(chain: Vec<Value>) -> crate::error::Result<SharedHan
         let next = &chain[i];
         let nhost = field(next, "host")
             .ok_or_else(|| crate::error::SereinError::Config("Не задан host промежуточного хоста".into()))?;
-        let channel = cur
-            .channel_open_direct_tcpip(nhost, port_of(next) as u32, "127.0.0.1", 0)
-            .await
-            .map_err(|e| crate::error::SereinError::ProxyJump {
-                host: nhost.to_string(),
-                detail: e.to_string(),
-            })?;
+        let channel = within_limit(
+            &format!("канал до {nhost}"),
+            cur.channel_open_direct_tcpip(nhost, port_of(next) as u32, "127.0.0.1", 0),
+        )
+        .await
+        .map_err(|detail| crate::error::SereinError::ProxyJump {
+            host: nhost.to_string(),
+            detail,
+        })?;
         let config = ssh_client_config(next);
         let handler = ClientHandler {
             host_id: knownhosts::host_id(nhost, port_of(next)),
@@ -917,13 +1070,8 @@ pub async fn connect_client(chain: Vec<Value>) -> crate::error::Result<SharedHan
             cancel: cancel_rx.clone(),
                 agent_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
-        let mut nh = client::connect_stream(config, channel.into_stream(), handler)
-            .await
-            .map_err(|e| crate::error::SereinError::ProxyJump {
-                host: nhost.to_string(),
-                detail: e.to_string(),
-            })?;
-        if !authenticate(&mut nh, next, None, &dummy_ki, None).await? {
+        let mut nh = jump_handshake(next, nhost, config, channel, handler, &pause).await?;
+        if !authenticate_within(&mut nh, next, None, &dummy_ki, None, &pause).await? {
             return Err(auth_rejected(next));
         }
         cur = nh;
@@ -1246,5 +1394,61 @@ mod tests {
                 .is_ok()
         });
         assert!(woke, "ожидание отмены должно завершаться, а не висеть");
+    }
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+    }
+
+    #[test]
+    fn молчащий_сервер_упирается_в_срок() {
+        let pause = HumanPause::default();
+        let started = std::time::Instant::now();
+        let r = runtime().block_on(machine_limit(
+            &pause,
+            Duration::from_millis(100),
+            std::future::pending::<()>(),
+        ));
+        assert!(r.is_err(), "срок вышел");
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn ожидание_человека_не_съедает_срок() {
+        // Срок 100 мс, а ответ приходит через 400: всё это время ждали человека.
+        let pause = HumanPause::default();
+        let r = runtime().block_on(async {
+            let p = pause.clone();
+            let work = async move {
+                let _waiting = p.begin();
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                7
+            };
+            machine_limit(&pause, Duration::from_millis(100), work).await
+        });
+        assert_eq!(r, Ok(7));
+    }
+
+    #[test]
+    fn после_ответа_человека_срок_снова_идёт() {
+        let pause = HumanPause::default();
+        let r = runtime().block_on(async {
+            let p = pause.clone();
+            let work = async move {
+                {
+                    let _waiting = p.begin();
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+                std::future::pending::<()>().await
+            };
+            machine_limit(&pause, Duration::from_millis(100), work).await
+        });
+        assert!(r.is_err(), "сервер замолчал после ответа человека - срок обязан сработать");
     }
 }
