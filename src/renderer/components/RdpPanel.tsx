@@ -9,6 +9,7 @@ import { buttonMask, isModifier, isRdpShortcut, scancodeFor, wheelRotation } fro
 import { RdpUiMetrics } from '../rdpMetrics'
 import { useSettings } from '../SettingsContext'
 import { useFullscreen } from '../useFullscreen'
+import { isWindowsPlatform } from '../platform'
 
 /**
  * Рабочий стол по RDP.
@@ -97,6 +98,11 @@ export function RdpPanel({
   const economy = settings.rdpEconomy ?? true
   const networkProfile = settings.rdpNetworkProfile ?? 'vpn'
   const captureShortcuts = settings.rdpCaptureShortcuts !== false
+  const [isWindows, setIsWindows] = useState(false)
+  const [canvasFocused, setCanvasFocused] = useState(false)
+  const [windowFocused, setWindowFocused] = useState(() => document.hasFocus())
+  // Стоит ли хук в Rust. Без него Win и Alt+Tab забирает Windows раньше окна.
+  const [nativeCapture, setNativeCapture] = useState(false)
   // Последний размер, о котором просили сервер. Без него наблюдатель за размером слал бы
   // просьбу и на собственный ответ сервера - тот ведь тоже меняет размер холста.
   const askedRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 })
@@ -487,9 +493,53 @@ export function RdpPanel({
   // При Alt+Tab окно теряет фокус целиком, а не обязательно через blur самого canvas.
   // Отпускаем модификаторы и здесь, чтобы Alt/Ctrl не оставались зажатыми на сервере.
   useEffect(() => {
-    window.addEventListener('blur', releaseHeld)
-    return () => window.removeEventListener('blur', releaseHeld)
+    const onBlur = (): void => {
+      setWindowFocused(false)
+      releaseHeld()
+    }
+    const onFocus = (): void => setWindowFocused(true)
+    window.addEventListener('blur', onBlur)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.removeEventListener('blur', onBlur)
+      window.removeEventListener('focus', onFocus)
+    }
   }, [releaseHeld])
+
+  useEffect(() => {
+    void isWindowsPlatform().then(setIsWindows)
+  }, [])
+
+  // Системные сочетания перехватываются хуком в Rust, но только пока в фокусе холст живого
+  // сеанса: иначе клавиатура отнималась бы у всего остального. Снятие - при любом уходе
+  // фокуса, выключении настройки, обрыве и закрытии панели.
+  const wantNative = isWindows && captureShortcuts && status === 'live' && canvasFocused && windowFocused
+  useEffect(() => {
+    const id = idRef.current
+    if (!wantNative || !id) return
+    let current = true
+    window.api.rdp
+      .capture(id, true)
+      .then((on) => current && setNativeCapture(on))
+      .catch(() => current && setNativeCapture(false))
+    return () => {
+      current = false
+      setNativeCapture(false)
+      void window.api.rdp.capture(id, false).catch(() => {})
+    }
+  }, [wantNative])
+
+  // Выход из перехвата с клавиатуры: Esc при нём уходит на сервер, и из полного экрана
+  // иначе было бы не выйти.
+  useEffect(
+    () =>
+      window.api.rdp.onCaptureRelease((releasedId) => {
+        if (releasedId !== idRef.current) return
+        if (document.fullscreenElement) void document.exitFullscreen?.()
+        viewRef.current?.blur()
+      }),
+    []
+  )
 
   return (
     <div className={'ws-panel vnc-panel' + (fill ? ' fill' : '')} ref={rootRef}>
@@ -524,7 +574,13 @@ export function RdpPanel({
           {status === 'live' && (
             <button
               className={'mini' + (captureShortcuts ? ' on' : '')}
-              title={captureShortcuts ? 'Сочетания клавиш уходят в RDP' : 'Сочетания остаются Serein'}
+              title={
+                !captureShortcuts
+                  ? 'Сочетания остаются Serein'
+                  : nativeCapture
+                    ? 'Сочетания клавиш, включая Win и Alt+Tab, уходят в RDP. Вернуть клавиатуру Windows: Ctrl+Alt+Pause или Ctrl+Alt+Home'
+                    : 'Сочетания клавиш уходят в RDP'
+              }
               onClick={() => update({ rdpCaptureShortcuts: !captureShortcuts })}
             >
               <Icon name="key" size={14} />
@@ -554,7 +610,7 @@ export function RdpPanel({
           {status === 'live' && (
             <button
               className={'mini' + (full ? ' on' : '')}
-              title={full ? 'Выйти из полного экрана (Esc)' : 'На весь экран'}
+              title={full ? `Выйти из полного экрана (${nativeCapture ? 'Ctrl+Alt+Pause' : 'Esc'})` : 'На весь экран'}
               onClick={() => {
                 toggleFull()
                 // Фокус холсту: иначе клавиши уйдут кнопке, а не рабочему столу.
@@ -583,7 +639,11 @@ export function RdpPanel({
           onContextMenu={(e) => e.preventDefault()}
           onKeyDown={(e) => onKey(e, true)}
           onKeyUp={(e) => onKey(e, false)}
-          onBlur={releaseHeld}
+          onFocus={() => setCanvasFocused(true)}
+          onBlur={() => {
+            setCanvasFocused(false)
+            releaseHeld()
+          }}
         />
 
         {status !== 'live' && (

@@ -31,6 +31,7 @@ pub mod profile_lock;
 mod proxycmd;
 mod pty;
 pub mod rdp;
+mod rdp_capture;
 pub mod rdpsetup;
 pub mod remote_fs;
 mod remoteedit;
@@ -1362,6 +1363,36 @@ fn rdp_resize(id: String, width: u16, height: u16) {
 #[tauri::command]
 fn rdp_close(id: String) {
     rdp::close(&id);
+}
+
+/// Перехват системных сочетаний Windows для сеанса. `true` - хук стоит; `false` - сочетания
+/// ловит только само окно, и Win с Alt+Tab остаются системе.
+#[tauri::command]
+fn rdp_capture(app: AppHandle, window: tauri::WebviewWindow, id: String, on: bool) -> bool {
+    if !on {
+        rdp_capture::stop(Some(&id));
+        return false;
+    }
+    #[cfg(windows)]
+    let hwnd = match window.hwnd() {
+        Ok(h) => h.0 as isize,
+        Err(e) => {
+            rdp::note(&format!("перехват сочетаний не включён: нет окна: {e}"));
+            return false;
+        }
+    };
+    #[cfg(not(windows))]
+    let hwnd = {
+        let _ = &window;
+        0
+    };
+    match rdp_capture::start(app, id, hwnd) {
+        Ok(()) => true,
+        Err(e) => {
+            rdp::note(&format!("перехват сочетаний не включён: {e}"));
+            false
+        }
+    }
 }
 
 /// Отчёт интерфейса о своей половине пути кадра.
@@ -2838,6 +2869,7 @@ pub fn run() {
             rdp_secure_attention,
             rdp_resize,
             rdp_close,
+            rdp_capture,
             rdp_note,
             rdp_attach,
             desktop_active,

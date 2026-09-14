@@ -635,6 +635,8 @@ fn spawn_pipes(
         }
         crate::deskout::forget(&id);
         with_sessions(|m| m.remove(&id));
+        // Сеанс кончился сам - клавиатуру возвращаем Windows, не дожидаясь интерфейса.
+        crate::rdp_capture::stop(Some(&id));
     });
 }
 
@@ -694,6 +696,7 @@ pub fn resize(id: &str, w: u16, h: u16) {
 }
 
 pub fn close(id: &str) {
+    crate::rdp_capture::stop(Some(id));
     crate::deskout::forget(id);
     with_sessions(|m| {
         if let Some(s) = m.remove(id) {
@@ -708,6 +711,7 @@ pub fn close(id: &str) {
 
 /// Закрывает все сеансы: без этого RDP пережил бы собственный туннель.
 pub fn close_all() {
+    crate::rdp_capture::stop(None);
     with_sessions(|m| {
         for (id, s) in m.drain() {
             crate::deskout::forget(&id);

@@ -241,7 +241,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           Перехватывать сочетания клавиш в окне RDP
         </label>
         <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
-          Пока холст RDP в фокусе, сочетания Serein и доступные Windows-клавиши уходят на сервер.
+          Пока холст RDP в фокусе, сочетания Serein уходят на сервер, а на Windows - и системные: Win,
+          Alt+Tab, Ctrl+Esc. Вернуть клавиатуру Windows: Ctrl+Alt+Pause или Ctrl+Alt+Home.
         </div>
 
         <label className="checkbox-row">

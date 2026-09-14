@@ -473,6 +473,13 @@ export const api = {
       invoke('rdp_wheel', { id, vertical, delta }),
     secureAttention: (id: string): Promise<void> => invoke('rdp_secure_attention', { id }),
     /**
+     * Перехват системных сочетаний Windows (Win, Alt+Tab, Ctrl+Esc) для сеанса. `true` - хук
+     * стоит; `false` - сочетания ловит только окно, как на других системах.
+     */
+    capture: (id: string, on: boolean): Promise<boolean> => invoke<boolean>('rdp_capture', { id, on }),
+    /** Нажато Ctrl+Alt+Pause или Ctrl+Alt+Home: клавиатуру пора вернуть Windows. */
+    onCaptureRelease: (cb: (id: string) => void): (() => void) => sub<string>('rdp-capture-release', cb),
+    /**
      * Просит сервер сменить размер рабочего стола прямо в живом сеансе.
      *
      * Переподключения не будет: размер идёт отдельным каналом управления экраном.
