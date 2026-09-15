@@ -26,4 +26,18 @@ fi
   echo 'PubkeyAcceptedAlgorithms +ssh-rsa'
 } >> /etc/ssh/sshd_config
 
+# Второй порт, где пароль принимается только через keyboard-interactive (PAM) - частая
+# «закрученная» настройка. Блок `Match` обязан стоять последним: всё, что ниже него,
+# относилось бы уже только к этому порту. Включается переменной, потому что без PAM
+# (Alpine) keyboard-interactive спрашивать нечем.
+if [ -n "${KBDINT_PORT:-}" ]; then
+  {
+    echo 'Port 22'
+    echo "Port $KBDINT_PORT"
+    echo "Match LocalPort $KBDINT_PORT"
+    echo '  PasswordAuthentication no'
+    echo '  KbdInteractiveAuthentication yes'
+  } >> /etc/ssh/sshd_config
+fi
+
 exec "$@"

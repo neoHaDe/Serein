@@ -242,3 +242,74 @@ fn server_side_disconnect_surfaces_as_an_error_not_a_hang() {
         );
     });
 }
+
+/// Текст ошибки подключения: сама сессия здесь не нужна.
+fn refusal(chain: Vec<Value>) -> String {
+    match rt().block_on(serein_lib::ssh::connect_client(chain)) {
+        Ok(_) => panic!("подключение должно было получить отказ"),
+        Err(e) => e.to_string(),
+    }
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn keyboard_interactive_is_answered_with_the_saved_password() {
+    // Порт 2206 не принимает метод «password» - только keyboard-interactive через PAM
+    // (`up.sh` это проверяет). Раньше без окна приложения такой сервер не пускал вовсе:
+    // туннели, Fleet и задачи падали, хотя пароль сохранён.
+    let s = Stand::from_env();
+    let (code, out) = run(s.by_password(s.kbdint_port), "id -un");
+    assert_eq!(code, 0);
+    assert_eq!(out.trim(), s.user);
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn keyboard_interactive_wrong_password_is_refused_without_hanging() {
+    let s = Stand::from_env();
+    let mut bad = s.by_password(s.kbdint_port);
+    bad["password"] = json!("это-точно-не-пароль");
+    let started = std::time::Instant::now();
+    refusal(vec![bad]);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "отказ должен приходить быстро, а не по таймауту"
+    );
+}
+
+fn by_agent(s: &Stand, port: u16) -> Value {
+    json!({
+        "host": s.host,
+        "port": port,
+        "username": s.user,
+        "authType": "agent",
+        "connectTimeout": 20,
+    })
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn agent_auth_works_on_debian() {
+    // Ключ лежит только в агенте: профиль пути к нему не знает.
+    let s = Stand::from_env();
+    #[cfg(unix)]
+    assert!(
+        std::env::var_os("SSH_AUTH_SOCK").is_some(),
+        "нужен ssh-agent с ключом стенда: eval \"$(ssh-agent -s)\" && ssh-add $SEREIN_STAND_KEY"
+    );
+    let (code, out) = run(by_agent(&s, s.debian_port), "id -un");
+    assert_eq!(code, 0);
+    assert_eq!(out.trim(), s.user);
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn agent_without_the_chosen_key_explains_itself() {
+    // Профиль просит конкретный ключ, а в агенте его нет: перебирать остальные нельзя
+    // (сервер с `MaxAuthTries 2` отказал бы раньше нужного), молчаливый отказ бесполезен.
+    let s = Stand::from_env();
+    let mut server = by_agent(&s, s.debian_port);
+    server["agentKey"] = json!("SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let err = refusal(vec![server]);
+    assert!(err.contains("Выбранного ключа"), "ошибка должна назвать причину: {err}");
+}

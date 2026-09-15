@@ -190,6 +190,7 @@ jobs:
           SEREIN_STAND_HOSTKEY_PORT: "2203"
           SEREIN_STAND_NOSFTP_PORT: "2204"
           SEREIN_STAND_VNC_PORT: "2205"
+          SEREIN_STAND_KBDINT_PORT: "2206"
           SEREIN_STAND_PG_HOST: postgres
           SEREIN_STAND_REDIS_HOST: redis
           SEREIN_STAND_MARIADB_HOST: mariadb
@@ -203,6 +204,9 @@ jobs:
           SEREIN_STAND_PASSWORD: probe-pass
         run: |
           export SEREIN_STAND_KEY="$GITHUB_WORKSPACE/scripts/ssh-stand/.stand/id_ed25519"
+          # Вход через агент проверяется настоящим ssh-agent с ключом стенда.
+          eval "$(ssh-agent -s)"
+          ssh-add "$SEREIN_STAND_KEY"
           cargo test --manifest-path src-tauri/Cargo.toml --test ssh_stand --locked -- --ignored --test-threads=1
           cargo test --manifest-path src-tauri/Cargo.toml --test sftp_stand --locked -- --ignored --test-threads=1
           cargo test --manifest-path src-tauri/Cargo.toml --test scp_stand --locked -- --ignored --test-threads=1

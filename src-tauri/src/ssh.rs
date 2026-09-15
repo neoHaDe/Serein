@@ -662,6 +662,14 @@ async fn request_ki(app: &AppHandle, ki: &KiBridge, id: &str, prompts: Vec<Value
     rx.await.unwrap_or_default()
 }
 
+/// Похож ли вопрос сервера на обычный запрос пароля. Новый пароль (истёк срок) и коды
+/// второго фактора сохранённым паролем не отвечаются.
+fn is_password_prompt(prompt: &str) -> bool {
+    let p = prompt.to_lowercase();
+    (p.contains("password") || p.contains("пароль"))
+        && !["new", "нов", "code", "код", "otp", "token"].iter().any(|w| p.contains(w))
+}
+
 /// Аутентификация одного хопа. Для целевого сервера (есть `id`/`ki`) - с поддержкой 2FA.
 fn wants_agent_forward(server: &Value) -> bool {
     server
@@ -725,17 +733,27 @@ async fn authenticate(
             .map_err(crate::error::SereinError::Protocol),
         _ => {
             let pass = field(server, "password").unwrap_or("");
+            // Отказал ли сервер именно сохранённому паролю. Если метода «password» у сервера
+            // нет вовсе, пароль ещё может быть верным - его спросит keyboard-interactive.
+            let mut password_refused = false;
             if !pass.is_empty() {
-                if handle
+                let r = handle
                     .authenticate_password(&user, pass)
                     .await
-                    .map_err(|e| crate::error::SereinError::Protocol(e.to_string()))?
-                    .success()
-                {
+                    .map_err(|e| crate::error::SereinError::Protocol(e.to_string()))?;
+                if r.success() {
                     return Ok(true);
                 }
+                if let russh::client::AuthResult::Failure { remaining_methods, .. } = &r {
+                    password_refused = remaining_methods.contains(&russh::MethodKind::Password);
+                }
             }
-            if let Some(sid) = id {
+            // keyboard-interactive. Человека спрашиваем только в живой сессии, а сохранённым
+            // паролем отвечаем и без неё: серверы с `PasswordAuthentication no` и паролем через
+            // PAM иначе не пускали туннели, Fleet и задачи вовсе, а в сессии спрашивали пароль
+            // при каждом входе, хотя он сохранён.
+            let mut saved = (!pass.is_empty() && !password_refused).then_some(pass);
+            if id.is_some() || saved.is_some() {
                 let mut resp = handle
                     .authenticate_keyboard_interactive_start(&user, None)
                     .await
@@ -746,7 +764,7 @@ async fn authenticate(
                         KeyboardInteractiveAuthResponse::Failure { .. } => {
                             // Сервер сам пароль не спрашивает (у него только метод «password»), а
                             // сохранённого нет - спрашиваем сами, одним вопросом.
-                            if let Some(app) = app.filter(|_| pass.is_empty()) {
+                            if let (Some(app), Some(sid)) = (app.filter(|_| pass.is_empty()), id) {
                                 let answers = {
                                     let _waiting = pause.begin();
                                     request_ki(app, ki, sid, vec![json!({ "prompt": format!("Пароль для {user}: "), "echo": false })])
@@ -763,18 +781,27 @@ async fn authenticate(
                             return Ok(false);
                         }
                         KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
-                            let pl: Vec<Value> = prompts
-                                .iter()
-                                .map(|p| json!({ "prompt": p.prompt, "echo": p.echo }))
-                                .collect();
-                            let Some(app) = app else {
-                                return Err(crate::error::SereinError::Config(
-                                    "keyboard-interactive недоступен без UI".into(),
-                                ));
-                            };
-                            let answers = {
+                            let password_asked =
+                                prompts.len() == 1 && !prompts[0].echo && is_password_prompt(&prompts[0].prompt);
+                            let answers = if let Some(p) = saved.filter(|_| password_asked) {
+                                // Сохранённым паролем отвечаем один раз: повторный вопрос значит,
+                                // что он не подошёл, и дальше решает человек.
+                                saved = None;
+                                vec![p.to_string()]
+                            } else if let (Some(app), Some(sid)) = (app, id) {
+                                let pl: Vec<Value> = prompts
+                                    .iter()
+                                    .map(|p| json!({ "prompt": p.prompt, "echo": p.echo }))
+                                    .collect();
                                 let _waiting = pause.begin();
                                 request_ki(app, ki, sid, pl).await
+                            } else if prompts.is_empty() {
+                                // Пустой запрос: сервер показывает текст и ждёт пустого ответа.
+                                Vec::new()
+                            } else {
+                                return Err(crate::error::SereinError::Config(
+                                    "сервер спрашивает при входе не только пароль, а ответить некому - подключитесь в обычной вкладке".into(),
+                                ));
                             };
                             resp = handle
                                 .authenticate_keyboard_interactive_respond(answers)
@@ -1367,6 +1394,17 @@ mod tests {
         assert_eq!(port_of(&json!({ "port": 2222 })), 2222);
         // Порт строкой (так приезжает из некоторых импортов) - не повод падать.
         assert_eq!(port_of(&json!({ "port": "2222" })), 22);
+    }
+
+    #[test]
+    fn password_prompts_are_recognised() {
+        assert!(is_password_prompt("Password: "));
+        assert!(is_password_prompt("(probe@127.0.0.1) Password:"));
+        assert!(is_password_prompt("Пароль:"));
+        assert!(!is_password_prompt("Verification code: "));
+        assert!(!is_password_prompt("New password: "));
+        assert!(!is_password_prompt("OTP password: "));
+        assert!(!is_password_prompt("Username: "));
     }
 
     #[test]

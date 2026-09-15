@@ -11,6 +11,8 @@ use common::{rt, Stand};
 
 use serein_lib::sftp;
 use serein_lib::ssh;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Подключиться к Debian ключом. Alpine для SFTP не берём: там sftp-подсистема тоже есть,
 /// но проверяем края протокола, а не различия дистрибутивов.
@@ -23,6 +25,223 @@ async fn connect(s: &Stand) -> ssh::SharedHandle {
 /// Уникальный каталог на прогон: тесты идут параллельно и не должны мешать друг другу.
 fn scratch(name: &str) -> String {
     format!("/tmp/serein-sftp-{name}")
+}
+
+/// Имена в каталоге, включая скрытые: временные файлы передачи начинаются с точки.
+async fn names_in(h: &ssh::SharedHandle, dir: &str) -> Vec<String> {
+    let (code, out, err) = ssh::exec(h, &format!("ls -A '{dir}'"), None).await.expect("листинг");
+    assert_eq!(code, 0, "листинг: {err}");
+    out.lines().map(str::to_string).collect()
+}
+
+async fn remote_text(h: &ssh::SharedHandle, path: &str) -> String {
+    let (code, out, err) = ssh::exec(h, &format!("cat '{path}'"), None).await.expect("чтение");
+    assert_eq!(code, 0, "чтение: {err}");
+    out
+}
+
+/// Своя папка на прогон, пустая.
+fn local_scratch(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("serein-стенд-{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("своя папка");
+    dir
+}
+
+fn local_names(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .expect("своя папка")
+        .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Опустить флажок передачи чуть позже, посреди неё.
+fn stop_soon(alive: &Arc<AtomicBool>) {
+    let flip = alive.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        flip.store(false, Ordering::Relaxed);
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn прерванная_заливка_оставляет_прежний_файл_целым() {
+    // Раньше заливка писала прямо в целевой файл: отменённая или оборванная замена конфига
+    // оставляла на его месте обрубок. Теперь файл пишется рядом и встаёт на место в конце.
+    let s = Stand::from_env();
+    let dir = scratch("прерванная заливка");
+    rt().block_on(async {
+        let h = connect(&s).await;
+        let _ = sftp::remove(&h, &dir, true).await;
+        sftp::mkdir(&h, &dir).await.expect("каталог");
+        let file = format!("{dir}/данные.bin");
+        sftp::write_file(&h, &file, "оригинал", 0o640, 0, "lf").await.expect("оригинал");
+
+        let local_dir = local_scratch("прерванная-заливка");
+        let local = local_dir.join("данные.bin");
+        let payload: Vec<u8> = (0..(48 * 1024 * 1024u32)).map(|i| (i % 253) as u8).collect();
+        std::fs::write(&local, &payload).expect("свой файл");
+        let local = local.to_string_lossy().to_string();
+
+        // Отмена до первого байта: путь уборки проходится всегда, как бы быстро ни шла сеть.
+        let stopped = AtomicBool::new(false);
+        let r = sftp::put_file_while(&h, &local, &file, Some(&stopped)).await;
+        assert!(r.is_err(), "отменённая заливка не может закончиться успехом");
+        assert_eq!(remote_text(&h, &file).await, "оригинал");
+        assert_eq!(names_in(&h, &dir).await, vec!["данные.bin"], "временный файл обязан убираться");
+
+        // Отмена посреди передачи. Успеть может любая сторона, поэтому проверяем то, что
+        // верно в обоих случаях: файл либо прежний, либо новый целиком - и ничего лишнего.
+        let alive = Arc::new(AtomicBool::new(true));
+        stop_soon(&alive);
+        let r = sftp::put_file_while(&h, &local, &file, Some(&alive)).await;
+        match r {
+            Ok(()) => {
+                let (_, size, _) = ssh::exec(&h, &format!("stat -c %s '{file}'"), None).await.expect("размер");
+                assert_eq!(size.trim(), payload.len().to_string(), "успешная заливка - файл целиком");
+            }
+            Err(_) => assert_eq!(remote_text(&h, &file).await, "оригинал", "после отмены - прежний файл"),
+        }
+        assert_eq!(names_in(&h, &dir).await, vec!["данные.bin"]);
+
+        let _ = std::fs::remove_dir_all(&local_dir);
+        sftp::remove(&h, &dir, true).await.expect("уборка");
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn заливка_поверх_файла_сохраняет_его_права() {
+    // Замена через временный файл не должна открывать закрытый файл: новый получает права
+    // прежнего, а не обычные права только что созданного.
+    let s = Stand::from_env();
+    let dir = scratch("права заливки");
+    rt().block_on(async {
+        let h = connect(&s).await;
+        let _ = sftp::remove(&h, &dir, true).await;
+        sftp::mkdir(&h, &dir).await.expect("каталог");
+        let file = format!("{dir}/секрет.conf");
+        sftp::write_file(&h, &file, "старое", 0o600, 0, "lf").await.expect("прежний файл");
+
+        let local_dir = local_scratch("права-заливки");
+        let local = local_dir.join("секрет.conf");
+        std::fs::write(&local, "новое").expect("свой файл");
+        sftp::put_file(&h, &local.to_string_lossy(), &file).await.expect("заливка");
+
+        let read = sftp::read_file(&h, &file).await.expect("чтение");
+        assert_eq!(read.get("content").and_then(|v| v.as_str()), Some("новое"));
+        assert_eq!(
+            read.get("mode").and_then(|v| v.as_u64()).map(|m| m & 0o777),
+            Some(0o600),
+            "права обязаны остаться прежними"
+        );
+        assert_eq!(names_in(&h, &dir).await, vec!["секрет.conf"]);
+
+        let _ = std::fs::remove_dir_all(&local_dir);
+        sftp::remove(&h, &dir, true).await.expect("уборка");
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn заливка_в_ссылку_меняет_цель_и_не_ломает_ссылку() {
+    // `sites-enabled/site` -> `sites-available/site`: замена переименованием превратила бы
+    // ссылку в обычный файл, и цель молча разошлась бы с ней.
+    let s = Stand::from_env();
+    let dir = scratch("заливка в ссылку");
+    rt().block_on(async {
+        let h = connect(&s).await;
+        let _ = sftp::remove(&h, &dir, true).await;
+        sftp::mkdir(&h, &dir).await.expect("каталог");
+        sftp::write_file(&h, &format!("{dir}/цель.conf"), "было", 0o644, 0, "lf").await.expect("цель");
+        let (code, _, err) = ssh::exec(&h, &format!("cd '{dir}' && ln -s цель.conf ссылка.conf"), None)
+            .await
+            .expect("ссылка");
+        assert_eq!(code, 0, "ссылка не создалась: {err}");
+
+        let local_dir = local_scratch("заливка-в-ссылку");
+        let local = local_dir.join("ссылка.conf");
+        std::fs::write(&local, "стало").expect("свой файл");
+        sftp::put_file(&h, &local.to_string_lossy(), &format!("{dir}/ссылка.conf")).await.expect("заливка");
+
+        let (code, out, _) = ssh::exec(&h, &format!("cd '{dir}' && test -L ссылка.conf && cat цель.conf"), None)
+            .await
+            .expect("проверка");
+        assert_eq!(code, 0, "ссылка обязана остаться ссылкой");
+        assert_eq!(out, "стало", "новое содержимое - в цели");
+
+        let _ = std::fs::remove_dir_all(&local_dir);
+        sftp::remove(&h, &dir, true).await.expect("уборка");
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn совпадения_имён_ищутся_по_имени_файла() {
+    // Панель спрашивает про замену до заливки. Имена приходят своими путями - в том числе
+    // виндовыми, - а сравнивать надо только последнюю часть, и папка тоже считается.
+    let s = Stand::from_env();
+    let dir = scratch("совпадения имён");
+    rt().block_on(async {
+        let h = connect(&s).await;
+        let _ = sftp::remove(&h, &dir, true).await;
+        sftp::mkdir(&h, &dir).await.expect("каталог");
+        sftp::write_file(&h, &format!("{dir}/отчёт.txt"), "есть", 0o644, 0, "lf").await.expect("файл");
+        sftp::mkdir(&h, &format!("{dir}/папка")).await.expect("папка");
+
+        let names: Vec<String> = [r"C:\Users\me\отчёт.txt", "/home/me/папка", "новый.txt", "..", ""]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let found = sftp::name_conflicts(&h, &dir, &names).await.expect("проверка имён");
+        assert_eq!(found, vec!["отчёт.txt", "папка"]);
+
+        sftp::remove(&h, &dir, true).await.expect("уборка");
+    });
+}
+
+#[test]
+#[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
+fn прерванное_скачивание_не_портит_свой_файл() {
+    // Скачивание идёт во временный файл рядом; отмена обязана оставить прежний свой файл
+    // и не оставить обрывок.
+    let s = Stand::from_env();
+    let dir = scratch("прерванное скачивание");
+    rt().block_on(async {
+        let h = connect(&s).await;
+        let _ = sftp::remove(&h, &dir, true).await;
+        sftp::mkdir(&h, &dir).await.expect("каталог");
+        let file = format!("{dir}/большой.bin");
+        let (code, _, err) = ssh::exec(&h, &format!("head -c 33554432 /dev/zero > '{file}'"), None)
+            .await
+            .expect("большой файл");
+        assert_eq!(code, 0, "файл не создался: {err}");
+
+        let local_dir = local_scratch("прерванное-скачивание");
+        let local = local_dir.join("большой.bin");
+        std::fs::write(&local, "мой").expect("свой файл");
+        let local_s = local.to_string_lossy().to_string();
+
+        let stopped = AtomicBool::new(false);
+        let r = sftp::download_file_while(&h, &file, &local_s, Some(&stopped)).await;
+        assert!(r.is_err(), "отменённое скачивание не может закончиться успехом");
+        assert_eq!(std::fs::read_to_string(&local).expect("свой файл"), "мой");
+        assert_eq!(local_names(&local_dir), vec!["большой.bin"]);
+
+        let alive = Arc::new(AtomicBool::new(true));
+        stop_soon(&alive);
+        match sftp::download_file_while(&h, &file, &local_s, Some(&alive)).await {
+            Ok(()) => assert_eq!(std::fs::metadata(&local).expect("файл").len(), 33_554_432),
+            Err(_) => assert_eq!(std::fs::read_to_string(&local).expect("свой файл"), "мой"),
+        }
+        assert_eq!(local_names(&local_dir), vec!["большой.bin"], "обрывок не оставляем");
+
+        let _ = std::fs::remove_dir_all(&local_dir);
+        sftp::remove(&h, &dir, true).await.expect("уборка");
+    });
 }
 
 #[test]

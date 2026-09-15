@@ -480,8 +480,8 @@ pub async fn put_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>
     put_file_while(handle, local, remote, None).await
 }
 
-/// То же, но передача бросается, как только `alive` опущен. SFTP пишет прямо в целевой файл,
-/// поэтому брошенная заливка оставляет его недолитым - как и обрыв связи.
+/// То же, но передача бросается, как только `alive` опущен. Файл пишется рядом и встаёт на
+/// место в конце, поэтому брошенная заливка оставляет прежний файл целым.
 pub async fn put_file_while(
     handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
     local: &str,
@@ -1075,42 +1075,95 @@ async fn copy_local_to_remote_inner(
     xfer: Option<&XferCtrl>,
 ) -> Result<u64, String> {
     let mut lf = tokio::fs::File::open(local).await.map_err(|e| e.to_string())?;
-    let mut rf = sftp.create(remote).await.map_err(|e| e.to_string())?;
-    let mut buf = vec![0u8; SFTP_CHUNK as usize];
-    let mut transferred: u64 = 0;
-    let mut last_emit: u64 = 0;
-    loop {
-        gone(alive, xfer)?;
-        wait_if_paused(app, alive, xfer, item_id, session_id, "upload", local, remote, rel, size, transferred).await?;
-        let n = tokio::select! {
-            _ = wait_cancel(alive, xfer) => return Err(CANCELLED.into()),
-            n = lf.read(&mut buf) => n.map_err(|e| e.to_string())?,
-        };
-        if n == 0 {
-            break;
+    // Пишем во временный файл рядом и ставим его на место в самом конце. Раньше заливка
+    // писала прямо в целевой файл, и отменённая или оборванная замена оставляла вместо
+    // рабочего конфига обрубок.
+    //
+    // Ссылку так не заменяем: переименование превратило бы её в обычный файл, и цель
+    // (`sites-enabled/site` -> `sites-available/site`) молча разошлась бы со ссылкой.
+    let existing = sftp.symlink_metadata(remote).await.ok();
+    let is_link = existing.as_ref().is_some_and(|m| m.is_symlink());
+    let dir = Path::new(remote).parent().map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+    let base = Path::new(remote).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let tag: String = uuid::Uuid::new_v4().simple().to_string().chars().take(8).collect();
+    let tmp = format!("{dir}/.{base}.serein-{tag}.part");
+    let (mut rf, staged) = if is_link {
+        (sftp.create(remote).await.map_err(|e| e.to_string())?, false)
+    } else {
+        match sftp.create(&tmp).await {
+            Ok(f) => (f, true),
+            // В каталог писать нельзя, а в сам файл можно - остаётся запись на месте.
+            Err(_) => (sftp.create(remote).await.map_err(|e| e.to_string())?, false),
         }
-        tokio::select! {
-            _ = wait_cancel(alive, xfer) => return Err(CANCELLED.into()),
-            r = rf.write_all(&buf[..n]) => r.map_err(|e| e.to_string())?,
+    };
+    let target = if staged { tmp.as_str() } else { remote };
+
+    let pumped: Result<u64, String> = async {
+        let mut buf = vec![0u8; SFTP_CHUNK as usize];
+        let mut transferred: u64 = 0;
+        let mut last_emit: u64 = 0;
+        loop {
+            gone(alive, xfer)?;
+            wait_if_paused(app, alive, xfer, item_id, session_id, "upload", local, remote, rel, size, transferred).await?;
+            let n = tokio::select! {
+                _ = wait_cancel(alive, xfer) => return Err(CANCELLED.into()),
+                n = lf.read(&mut buf) => n.map_err(|e| e.to_string())?,
+            };
+            if n == 0 {
+                break;
+            }
+            tokio::select! {
+                _ = wait_cancel(alive, xfer) => return Err(CANCELLED.into()),
+                r = rf.write_all(&buf[..n]) => r.map_err(|e| e.to_string())?,
+            }
+            transferred += n as u64;
+            if let Some(app) = app {
+                if transferred - last_emit >= 262144 {
+                    last_emit = transferred;
+                    emit_transfer(app, item_id, session_id, "upload", local, remote, rel, size, transferred, "active", None);
+                }
+            }
         }
-        transferred += n as u64;
-        if let Some(app) = app {
-            if transferred - last_emit >= 262144 {
-                last_emit = transferred;
-                emit_transfer(app, item_id, session_id, "upload", local, remote, rel, size, transferred, "active", None);
+        rf.flush().await.map_err(|e| e.to_string())?;
+        Ok(transferred)
+    }
+    .await;
+    rf.shutdown().await.ok();
+    drop(rf);
+    let transferred = match pumped {
+        Ok(n) => n,
+        Err(e) => {
+            if staged {
+                let _ = sftp.remove_file(&tmp).await;
+            }
+            return Err(e);
+        }
+    };
+
+    if staged {
+        // Права прежнего файла переносим на новый: иначе закрытый `0600` после замены
+        // становился бы файлом с обычными правами. Не вышло - не заменяем вовсе.
+        if let Some(mode) = existing.as_ref().and_then(|m| m.permissions) {
+            let mut attrs = FileAttributes::empty();
+            attrs.permissions = Some(mode & 0o777);
+            if let Err(e) = sftp.set_metadata(&tmp, attrs).await {
+                let _ = sftp.remove_file(&tmp).await;
+                return Err(format!("не удалось сохранить права файла: {e}"));
             }
         }
     }
-    rf.flush().await.ok();
-    rf.shutdown().await.ok();
     // Время правки - как у своего файла. Иначе на сервере стояло бы время заливки, и
     // сравнение папок сочло бы файл правленым на сервере позже. Не вышло - файл всё равно
-    // залит, а сравнение честно покажет его «на сервере новее».
+    // залит, а сравнение честно покажет его «на сервере новее». Переименование время
+    // сохраняет, поэтому ставим его до замены.
     if let Some(t) = file_mtime_secs(&lf).await {
         let mut attrs = FileAttributes::empty();
         attrs.atime = Some(t);
         attrs.mtime = Some(t);
-        let _ = sftp.set_metadata(remote, attrs).await;
+        let _ = sftp.set_metadata(target, attrs).await;
+    }
+    if staged {
+        replace_file(sftp, &tmp, remote, &dir, &base, &tag).await?;
     }
     Ok(transferred)
 }

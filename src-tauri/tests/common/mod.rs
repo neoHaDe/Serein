@@ -25,6 +25,8 @@ pub struct Stand {
     pub nosftp_port: u16,
     /// Сервер с рабочим столом VNC на своей петле — снаружи порт 5900 не опубликован.
     pub vnc_port: u16,
+    /// Тот же Debian, но пароль принимается только через keyboard-interactive (PAM).
+    pub kbdint_port: u16,
     /// Как базы видны ИЗНУТРИ сети стенда: наружу их порты не публикуются вовсе, дойти
     /// можно только каналом внутри SSH-сессии — ровно так, как это делает приложение.
     pub pg_host: String,
@@ -78,6 +80,7 @@ impl Stand {
             hostkey_port: env("SEREIN_STAND_HOSTKEY_PORT").parse().expect("порт для теста ключа"),
             nosftp_port: env("SEREIN_STAND_NOSFTP_PORT").parse().expect("порт сервера без SFTP"),
             vnc_port: env("SEREIN_STAND_VNC_PORT").parse().expect("порт сервера с VNC"),
+            kbdint_port: env("SEREIN_STAND_KBDINT_PORT").parse().expect("порт keyboard-interactive"),
             pg_host: env("SEREIN_STAND_PG_HOST"),
             redis_host: env("SEREIN_STAND_REDIS_HOST"),
             mariadb_host: env("SEREIN_STAND_MARIADB_HOST"),

@@ -18,7 +18,7 @@ docker compose up -d --build
 
 # Ждём именно готовности принимать соединения: `up -d` возвращается раньше, чем sshd
 # успевает сгенерировать ключи хоста, и первый же тест ловил бы отказ на ровном месте.
-for port in 2201 2202 2203 2204 2205; do
+for port in 2201 2202 2203 2204 2205 2206; do
   echo -n "жду 127.0.0.1:$port "
   for _ in $(seq 1 60); do
     if printf '' 2>/dev/null >/dev/tcp/127.0.0.1/"$port"; then echo "- готов"; break; fi
@@ -26,6 +26,20 @@ for port in 2201 2202 2203 2204 2205; do
     sleep 1
   done
 done
+
+# Порт keyboard-interactive обязан действительно не принимать метод «password»: иначе тест
+# входа на нём молча проверял бы обычный пароль. Спрашиваем у сервера список методов.
+methods=$(ssh -v -p 2206 -o BatchMode=yes -o PreferredAuthentications=none \
+  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null probe@127.0.0.1 true 2>&1 \
+  | sed -n 's/.*Authentications that can continue: //p' | head -1)
+echo "методы входа на 2206: $methods"
+case ",$methods," in
+  *,keyboard-interactive,*) ;;
+  *) echo "на 2206 нет keyboard-interactive" >&2; exit 1 ;;
+esac
+case ",$methods," in
+  *,password,*) echo "на 2206 не должно быть метода password" >&2; exit 1 ;;
+esac
 
 # Базы данных наружу портов не публикуют, поэтому их готовность спрашиваем у самого
 # compose. MySQL 8 при первом запуске создаёт системные таблицы десятки секунд, и без
@@ -98,6 +112,9 @@ cat <<VARS
   export SEREIN_STAND_HOSTKEY_PORT=2203
   export SEREIN_STAND_NOSFTP_PORT=2204
   export SEREIN_STAND_VNC_PORT=2205
+  export SEREIN_STAND_KBDINT_PORT=2206
+  # Вход через агент: ключ стенда должен быть в агенте.
+  eval "\$(ssh-agent -s)" && ssh-add $(pwd)/.stand/id_ed25519
 
 Запуск: cargo test --manifest-path ../../src-tauri/Cargo.toml -- --ignored
 Остановить: ./down.sh
