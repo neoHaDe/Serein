@@ -276,7 +276,9 @@ fn default_settings() -> Value {
         "sftpColWidths": { "name": 200, "ext": 64, "mode": 52, "size": 84, "mtime": 136 },
         "sftpSortCol": "name",
         "sftpSortDir": "asc",
-        "externalEditor": ""
+        "externalEditor": "",
+        // Журнал действий ведётся по умолчанию: спрашивают его первым после шифрования.
+        "actionLog": true
     })
 }
 

@@ -588,6 +588,10 @@ export interface AppSettings {
   fleetTimeoutSec?: number
   /** Крестик главного окна прячет приложение в трей. Не задано - включено на Windows, выключено на Linux. */
   closeToTray?: boolean
+  /** Журнал действий. Не задано - включён. */
+  actionLog?: boolean
+  /** Отправка каждой записи журнала в syslog или SIEM компании. */
+  actionLogSyslog?: { enabled: boolean; host: string; port: number; protocol: 'udp' | 'tcp' }
   /** Плотность интерфейса: 'comfortable' (по умолчанию) | 'compact'. */
   density?: 'comfortable' | 'compact'
   /** Отдельные кнопки на панели задач для откреплённых окон. По умолчанию одно приложение. */

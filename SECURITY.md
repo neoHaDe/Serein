@@ -52,6 +52,11 @@ What you point it at: the SSH servers you configure and whatever you reach throu
 the network tools you run from your own machine — port check, DNS lookup, HTTP request, TLS
 certificate, traceroute, LDAP. Those connect to the host you typed, when you press the button.
 
+The action log is written locally and, **only if you enable it and type an address**, each
+entry is also sent to that syslog server (RFC 5424, UDP or TCP, no TLS — use a local relay with
+TLS if the path is untrusted). The entry is the same JSON that is written to disk: who, when,
+which server, what action. Nothing else leaves the machine for it, and it is off by default.
+
 The update check, in order:
 
 1. A GET to `github.com/neoHaDe/Serein/releases/latest/download/latest.json`.

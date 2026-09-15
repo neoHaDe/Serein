@@ -33,6 +33,7 @@ import { sshLeafForTools } from './tabs'
 import { MultiExecModal } from './components/MultiExecModal'
 import { WorkspaceProfilesModal } from './components/WorkspaceProfilesModal'
 import { TasksModal } from './components/TasksModal'
+import { ActionLogModal } from './components/ActionLogModal'
 import { ToolsModal } from './components/ToolsModal'
 
 export default function App(): JSX.Element {
@@ -49,6 +50,7 @@ export default function App(): JSX.Element {
   const [multiExec, setMultiExec] = useState(false)
   const [showProfiles, setShowProfiles] = useState(false)
   const [showTasks, setShowTasks] = useState(false)
+  const [showActionLog, setShowActionLog] = useState(false)
   const [showPuttyImport, setShowPuttyImport] = useState(true)
   const { settings, update } = useSettings()
   useWindowSnap()
@@ -160,6 +162,7 @@ export default function App(): JSX.Element {
         focusTab: tabsApi.setActiveKey,
         openProfiles: () => setShowProfiles(true),
         openTasks: () => setShowTasks(true),
+        openActionLog: () => setShowActionLog(true),
         quitApp: () => void invoke('app_quit')
       }),
     [ops.servers, tabsApi]
@@ -384,6 +387,7 @@ export default function App(): JSX.Element {
       {multiExec && <MultiExecModal servers={ops.servers} onClose={() => setMultiExec(false)} />}
 
       {showTasks && <TasksModal servers={ops.servers} onClose={() => setShowTasks(false)} />}
+      {showActionLog && <ActionLogModal onClose={() => setShowActionLog(false)} />}
 
       {showProfiles && (
         <WorkspaceProfilesModal

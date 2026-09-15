@@ -263,10 +263,24 @@ impl EditManager {
                             .await
                             .ok()
                             .flatten();
+                        crate::actionlog::record_session(
+                            &session_id,
+                            "file.edit.upload",
+                            json!({ "remotePath": remote }),
+                            &Ok::<(), String>(()),
+                        );
                         emit(&app, &session_id, &remote, "synced", None);
                     }
                     // Правку оставляем в `pending`: следующий круг повторит её сам.
-                    Err(e) => emit(&app, &session_id, &remote, "error", Some(&e)),
+                    Err(e) => {
+                        crate::actionlog::record_session(
+                            &session_id,
+                            "file.edit.upload",
+                            json!({ "remotePath": remote }),
+                            &Err::<(), _>(&e),
+                        );
+                        emit(&app, &session_id, &remote, "error", Some(&e));
+                    }
                 }
             }
             // Уходя, забираем за собой временный каталог - но только если всё залито.

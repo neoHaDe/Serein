@@ -2,6 +2,7 @@
  * Мост renderer ↔ Rust: `window.api` через Tauri `invoke` / `listen`.
  * Неперенесённые модули пока возвращают заглушки.
  */
+import type { ActionLogEntry, ActionLogStatus, ActionLogVerify } from '../renderer/actionLog'
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
@@ -759,6 +760,22 @@ export const api = {
     subnet: (input: string): Promise<Record<string, unknown>> => invoke('tools_subnet', { input }),
     hash: (algo: string, text: string): Promise<Record<string, unknown>> => invoke('tools_hash', { algo, text }),
     jwtDecode: (token: string): Promise<Record<string, unknown>> => invoke('tools_jwt_decode', { token })
+  },
+  actionLog: {
+    list: (limit: number): Promise<ActionLogEntry[]> => invoke('action_log_list', { limit }),
+    verify: (): Promise<ActionLogVerify> => invoke('action_log_verify'),
+    status: (): Promise<ActionLogStatus> => invoke('action_log_status'),
+    /** Весь журнал одним файлом JSONL в выбранное место. */
+    exportAll: async (): Promise<{ saved: boolean; path?: string; count?: number }> => {
+      const path = await saveDialog({
+        title: 'Выгрузить журнал действий',
+        defaultPath: `serein-actions-${new Date().toISOString().slice(0, 10)}.jsonl`,
+        filters: [{ name: 'JSON Lines', extensions: ['jsonl'] }]
+      })
+      if (!path) return { saved: false }
+      const count = await invoke<number>('action_log_export', { path })
+      return { saved: true, path, count }
+    }
   },
   app: {
     /** Куда приложение реально пишет профиль и логи - видно в настройках. */

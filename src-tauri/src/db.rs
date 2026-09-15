@@ -147,6 +147,11 @@ fn with_sessions<T>(f: impl FnOnce(&mut HashMap<String, Open>) -> T) -> T {
     f(g.get_or_insert_with(HashMap::new))
 }
 
+/// SSH-сессия, внутри которой открыта база: по ней журнал находит сервер.
+pub fn session_of(id: &str) -> Option<String> {
+    with_sessions(|m| m.get(id).map(|o| o.session_id.clone()))
+}
+
 /// Роняет соединение внутри асинхронного рантайма.
 ///
 /// Не блажь, а обязательное условие. `russh` в деструкторе канала вызывает

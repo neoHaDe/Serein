@@ -10,6 +10,7 @@ import { appPlatform } from '../platform'
 import type { BackupPreview } from '../../api'
 import { ThresholdsEditor } from './ThresholdsEditor'
 import { DEFAULT_THRESHOLDS } from '../serverHealth'
+import { ActionLogModal } from './ActionLogModal'
 
 const FONTS = [
   'Cascadia Code, Consolas, "Courier New", monospace',
@@ -23,6 +24,7 @@ type Action = null | 'enable' | 'disable' | 'export' | 'import'
 
 export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
   const { settings, update } = useSettings()
+  const [showActionLog, setShowActionLog] = useState(false)
   const [recording, setRecording] = useState<ActionId | null>(null)
   const [knownHosts, setKnownHosts] = useState<KnownHostEntry[]>([])
   const [hostsMsg, setHostsMsg] = useState('')
@@ -587,6 +589,83 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           )}
 
           {msg && <div className={'settings-msg' + (msg.ok ? ' ok' : ' err')}>{msg.text}</div>}
+        </div>
+
+        <div className="settings-section">
+          <div className="settings-section-title">Журнал действий</div>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={settings.actionLog !== false}
+              onChange={(e) => update({ actionLog: e.target.checked })}
+            />
+            Вести журнал действий
+          </label>
+          <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
+            Подключения, файлы, службы, контейнеры, базы, Fleet, задачи и строки, набранные в терминале.
+            Строка после запроса пароля не пишется. Каждая запись ссылается на предыдущую по хешу:
+            удалённую или изменённую запись найдёт проверка. Выключение пишется в журнал последней записью.
+          </div>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={!!settings.actionLogSyslog?.enabled}
+              disabled={settings.actionLog === false}
+              onChange={(e) =>
+                update({
+                  actionLogSyslog: {
+                    host: '',
+                    port: 514,
+                    protocol: 'udp',
+                    ...settings.actionLogSyslog,
+                    enabled: e.target.checked
+                  }
+                })
+              }
+            />
+            Отправлять записи в syslog
+          </label>
+          {settings.actionLogSyslog?.enabled && settings.actionLog !== false && (
+            <div className="settings-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <input
+                className="search"
+                style={{ flex: '1 1 180px' }}
+                placeholder="адрес syslog или SIEM"
+                value={settings.actionLogSyslog.host}
+                onChange={(e) => update({ actionLogSyslog: { ...settings.actionLogSyslog!, host: e.target.value } })}
+              />
+              <input
+                className="search"
+                style={{ width: 90 }}
+                type="number"
+                min={1}
+                max={65535}
+                value={settings.actionLogSyslog.port}
+                onChange={(e) =>
+                  update({ actionLogSyslog: { ...settings.actionLogSyslog!, port: Number(e.target.value) || 514 } })
+                }
+              />
+              <select
+                value={settings.actionLogSyslog.protocol}
+                onChange={(e) =>
+                  update({
+                    actionLogSyslog: { ...settings.actionLogSyslog!, protocol: e.target.value === 'tcp' ? 'tcp' : 'udp' }
+                  })
+                }
+              >
+                <option value="udp">UDP</option>
+                <option value="tcp">TCP</option>
+              </select>
+            </div>
+          )}
+          <div className="settings-row-desc">
+            RFC 5424, local0.info, запись целиком в JSON. Без шифрования: для отправки через недоверенную сеть
+            нужен ретранслятор с TLS на своей стороне.
+          </div>
+          <div className="settings-row">
+            <button onClick={() => setShowActionLog(true)}>Открыть журнал</button>
+          </div>
+          {showActionLog && <ActionLogModal onClose={() => setShowActionLog(false)} />}
         </div>
 
         {/* ---- Обновления ---- */}

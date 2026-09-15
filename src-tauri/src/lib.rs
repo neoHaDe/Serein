@@ -1,5 +1,6 @@
 //! Serein - backend. Команды Tauri и менеджер сессий.
 
+mod actionlog;
 mod backup;
 mod clipboard;
 mod crypto;
@@ -108,6 +109,10 @@ impl AppState {
 
     /// Идемпотентно: туннели, edit-watchers, KI, russh disconnect. Можно звать с фронта и из shell-таска.
     pub(crate) fn teardown(&self, app: &AppHandle, id: &str, user: bool) {
+        if let Some(server) = actionlog::unbind(id) {
+            let reason = if user { "closed" } else { "drop" };
+            actionlog::record(Some(&server), Some(id), "ssh.disconnect", json!({ "reason": reason }), Ok(()));
+        }
         // Рабочий стол ходит своим SSH-соединением и сам со смертью сессии не умрёт.
         // Открыт он был из неё и по её учётке - без неё жить не должен.
         close_desktop_of(id);
@@ -218,9 +223,53 @@ async fn multi_exec(
 ) -> Result<Vec<Value>, String> {
     let cancel = state.ops.begin("multi-exec");
     let opts = multihost::RunOptions::new(concurrency, timeout_sec);
+    let journal_cmd = actionlog::text(&command);
     let out = multihost::run(app, server_ids, command, opts, cancel).await;
     state.ops.finish("multi-exec");
+    for host in &out {
+        let Some(server) = host["serverId"].as_str() else { continue };
+        let state_name = host["state"].as_str().unwrap_or("");
+        let code = host["code"].as_i64();
+        let result = if state_name == "done" && code == Some(0) {
+            Ok(())
+        } else {
+            Err(host["error"].as_str().map(str::to_owned).unwrap_or_else(|| match code {
+                Some(c) => format!("код {c}"),
+                None => state_name.to_owned(),
+            }))
+        };
+        actionlog::record(
+            Some(server),
+            None,
+            "fleet.exec",
+            json!({ "command": journal_cmd, "state": state_name, "code": code }),
+            result,
+        );
+    }
     Ok(out)
+}
+
+/// Последние записи журнала действий, новые первыми.
+#[tauri::command]
+async fn action_log_list(limit: Option<usize>) -> Result<Vec<Value>, String> {
+    let limit = limit.unwrap_or(1000).clamp(1, 20_000);
+    tauri::async_runtime::spawn_blocking(move || actionlog::list(limit)).await.map_err(|e| e.to_string())
+}
+
+/// Проверка цепочки журнала: номера подряд, хеши сходятся.
+#[tauri::command]
+async fn action_log_verify() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(actionlog::verify).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn action_log_export(path: String) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || actionlog::export(&path)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn action_log_status() -> Value {
+    actionlog::status()
 }
 
 #[tauri::command]
@@ -235,6 +284,7 @@ fn settings_get() -> Value {
 #[tauri::command]
 fn settings_set(state: State<'_, AppState>, patch: Value) -> Result<Value, String> {
     let cur = store::settings_set(patch)?;
+    actionlog::configure(&cur);
     if let Some(n) = cur.get("sftpConcurrency").and_then(|v| v.as_u64()) {
         state.transfers.set_limit(n as usize);
     }
@@ -305,8 +355,30 @@ async fn tasks_run(
         serde_json::from_value(task).map_err(|e| format!("Задача не разобралась: {e}"))?;
     let key = format!("task:{run_id}");
     let cancel = state.ops.begin(&key);
+    let journal_task = task.name.clone();
     let out = tasks::run(app, task, run_id, dry_run, cancel).await;
     state.ops.finish(&key);
+    match &out {
+        Ok(report) => {
+            for srv in report["servers"].as_array().into_iter().flatten() {
+                let Some(server) = srv["serverId"].as_str() else { continue };
+                let st = srv["state"].as_str().unwrap_or("");
+                let result = if st == "done" || st == "planned" {
+                    Ok(())
+                } else {
+                    Err(srv["error"].as_str().map(str::to_owned).unwrap_or_else(|| st.to_owned()))
+                };
+                actionlog::record(
+                    Some(server),
+                    None,
+                    "task.run",
+                    json!({ "task": journal_task, "dryRun": dry_run, "state": st, "errors": srv["errors"] }),
+                    result,
+                );
+            }
+        }
+        Err(e) => actionlog::record(None, None, "task.run", json!({ "task": journal_task, "dryRun": dry_run }), Err(e.clone())),
+    }
     out
 }
 #[tauri::command]
@@ -586,7 +658,14 @@ async fn session_open_ssh(
 
     let sess =
         // Фазу сбоя не схлопываем в строку: по ней фронтенд решает, повторять ли попытку.
-        ssh::connect_chain(app.clone(), id.clone(), chain, cols, rows, ki, host_keys).await?;
+        match ssh::connect_chain(app.clone(), id.clone(), chain, cols, rows, ki, host_keys).await {
+            Ok(s) => s,
+            Err(e) => {
+                let e = crate::error::OpenError::from(e);
+                actionlog::record(Some(server_id), None, "ssh.connect", json!({}), Err(e.message.clone()));
+                return Err(e);
+            }
+        };
     let sess = Arc::new(sess);
     // Автозапуск туннелей + команда на подключении.
     let server = store::server_with_secrets(server_id);
@@ -619,6 +698,8 @@ async fn session_open_ssh(
     // Сборщик метрик заводится вместе с сессией, а не с панелью обзора: история за час
     // должна быть и у сервера, на обзор которого ещё не смотрели.
     metrics::spawn(id.clone(), sess.handle.clone(), sess.cancel.subscribe());
+    actionlog::bind(&id, server_id);
+    actionlog::record(Some(server_id), Some(&id), "ssh.connect", json!({}), Ok(()));
     crate::sync::lock(&state.sessions).insert(id.clone(), Session::Ssh(sess));
     // Владельцем становится окно, которое сессию открыло: закрыть её сможет только оно.
     state.owners.claim(&id, window.label());
@@ -634,6 +715,7 @@ fn session_write(state: State<'_, AppState>, id: String, data: String) {
             Session::Serial(p) => p.write(&data),
             Session::Tcp(t) => t.write(&data),
             Session::Ssh(s) => {
+                actionlog::terminal_input(&id, &data);
                 let _ = s.tx.send(ssh::SshCmd::Write(data.into_bytes()));
             }
         }
@@ -855,13 +937,24 @@ async fn db_open(
 ) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let id = format!("db-{}", uuid::Uuid::new_v4());
-    db::open(id, &session_id, &s.handle, params).await
+    let journal = json!({ "database": params.database, "user": params.user });
+    let r = db::open(id, &session_id, &s.handle, params).await;
+    let mut detail = r.as_ref().ok().cloned().unwrap_or_else(|| json!({}));
+    if let (Some(d), Some(j)) = (detail.as_object_mut(), journal.as_object()) {
+        d.extend(j.clone());
+    }
+    actionlog::record_session(&session_id, "db.open", detail, &r);
+    r
 }
 
 /// Выполняет запрос: SQL для PostgreSQL, команду для Redis.
 #[tauri::command]
 async fn db_query(id: String, text: String) -> Result<Value, String> {
-    db::query(&id, &text).await
+    let r = db::query(&id, &text).await;
+    if let Some(session) = db::session_of(&id) {
+        actionlog::record_session(&session, "db.query", json!({ "query": actionlog::text(&text), "db": id }), &r);
+    }
+    r
 }
 
 /// Останавливает выполняющийся запрос. PostgreSQL отменяет его, не закрывая соединение;
@@ -1067,6 +1160,7 @@ async fn vnc_open(
     let id = format!("vnc-{}", uuid::Uuid::new_v4());
     // Tight и ZRLE уже сжаты zlib: второй раз сжимать их на уровне SSH - пустая работа.
     let link = desktop_link(&s.server_id, DESKTOP_WINDOW_VNC, false).await;
+    let journal = json!({ "host": host.as_deref().unwrap_or("127.0.0.1"), "port": port.unwrap_or(5900) });
     let target = vnc::Target::Ssh {
         handle: link.as_ref().map_or_else(|| s.handle.clone(), |l| l.handle.clone()),
         host: host.unwrap_or_else(|| "127.0.0.1".into()),
@@ -1074,7 +1168,9 @@ async fn vnc_open(
         port: port.unwrap_or(5900),
         link,
     };
-    vnc::open(id.clone(), session_id.clone(), target, password, on_frame).await?;
+    let r = vnc::open(id.clone(), session_id.clone(), target, password, on_frame).await;
+    actionlog::record_session(&session_id, "vnc.open", journal, &r.as_ref().map(|_| ()).map_err(|e| e.message.clone()));
+    r?;
     Ok(id)
 }
 
@@ -1308,13 +1404,19 @@ async fn rdp_open(
         rdp::NetworkProfile::Vpn => desktop_link(&s.server_id, DESKTOP_WINDOW_VPN, true).await,
         rdp::NetworkProfile::Lan => desktop_link(&s.server_id, DESKTOP_WINDOW_LAN, false).await,
     };
+    let journal = json!({
+        "host": host.as_deref().unwrap_or("127.0.0.1"),
+        "port": port.unwrap_or(3389),
+        "user": &user,
+        "domain": &domain,
+    });
     let target = rdp::Target::Ssh {
         handle: link.as_ref().map_or_else(|| s.handle.clone(), |l| l.handle.clone()),
         host: host.unwrap_or_else(|| "127.0.0.1".to_owned()),
         port: port.unwrap_or(3389),
         link,
     };
-    rdp::open(
+    let r = rdp::open(
         id.clone(),
         session_id.clone(),
         target,
@@ -1330,7 +1432,9 @@ async fn rdp_open(
         },
         on_frame,
     )
-    .await?;
+    .await;
+    actionlog::record_session(&session_id, "rdp.open", journal, &r);
+    r?;
     Ok(id)
 }
 
@@ -1461,8 +1565,10 @@ async fn workspace_kill(
         } else {
             err.trim().to_string()
         };
+        actionlog::record_session(&session_id, "process.kill", json!({ "pid": pid }), &Err::<(), _>(&error));
         return Ok(json!({ "ok": false, "error": error }));
     }
+    actionlog::record_session(&session_id, "process.kill", json!({ "pid": pid }), &Ok::<(), String>(()));
     Ok(json!({ "ok": true }))
 }
 
@@ -1504,8 +1610,10 @@ async fn workspace_service_action(
         } else {
             err.trim().to_string()
         };
+        actionlog::record_session(&session_id, "service.action", json!({ "name": name, "action": action }), &Err::<(), _>(&error));
         return Ok(json!({ "ok": false, "error": error }));
     }
+    actionlog::record_session(&session_id, "service.action", json!({ "name": name, "action": action }), &Ok::<(), String>(()));
     Ok(json!({ "ok": true }))
 }
 
@@ -1559,13 +1667,16 @@ async fn docker_action(
     let cmd = docker::action_cmd(&container_id, &action)
         .ok_or_else(|| format!("Неизвестное действие: {action}"))?;
     let (code, _o, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
-    if code != 0 {
-        Ok(
-            json!({ "ok": false, "error": if err.trim().is_empty() { format!("Код {code}") } else { err.trim().to_string() } }),
-        )
+    let result: Result<(), String> = if code != 0 {
+        Err(if err.trim().is_empty() { format!("Код {code}") } else { err.trim().to_string() })
     } else {
-        Ok(json!({ "ok": true }))
-    }
+        Ok(())
+    };
+    actionlog::record_session(&id, "docker.action", json!({ "container": container_id, "action": action }), &result);
+    Ok(match result {
+        Ok(()) => json!({ "ok": true }),
+        Err(e) => json!({ "ok": false, "error": e }),
+    })
 }
 #[tauri::command]
 async fn docker_logs(
@@ -1717,13 +1828,21 @@ async fn docker_compose_action(
     let cmd = docker_compose::action_cmd(&compose_file, &project, &action, svc)
         .ok_or_else(|| format!("Неизвестное действие: {action}"))?;
     let (code, _o, err) = docker_exec(&s.handle, &cmd, Some(s.cancel.subscribe()), 60).await?;
-    if code != 0 {
-        Ok(
-            json!({ "ok": false, "error": if err.trim().is_empty() { format!("Код {code}") } else { err.trim().to_string() } }),
-        )
+    let result: Result<(), String> = if code != 0 {
+        Err(if err.trim().is_empty() { format!("Код {code}") } else { err.trim().to_string() })
     } else {
-        Ok(json!({ "ok": true }))
-    }
+        Ok(())
+    };
+    actionlog::record_session(
+        &id,
+        "docker.compose",
+        json!({ "composeFile": compose_file, "project": project, "action": action, "service": service }),
+        &result,
+    );
+    Ok(match result {
+        Ok(()) => json!({ "ok": true }),
+        Err(e) => json!({ "ok": false, "error": e }),
+    })
 }
 
 #[tauri::command]
@@ -1823,7 +1942,9 @@ async fn sftp_mkdir(
     path: String,
 ) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    remote_fs::mkdir(&s.remote_fs, &s.handle, &path).await
+    let r = remote_fs::mkdir(&s.remote_fs, &s.handle, &path).await;
+    actionlog::record_session(&session_id, "file.mkdir", json!({ "path": path }), &r);
+    r
 }
 #[tauri::command]
 async fn sftp_remove(
@@ -1833,7 +1954,9 @@ async fn sftp_remove(
     is_dir: bool,
 ) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    remote_fs::remove(&s.remote_fs, &s.handle, &path, is_dir).await
+    let r = remote_fs::remove(&s.remote_fs, &s.handle, &path, is_dir).await;
+    actionlog::record_session(&session_id, "file.remove", json!({ "path": path, "dir": is_dir }), &r);
+    r
 }
 #[tauri::command]
 async fn sftp_rename(
@@ -1843,7 +1966,9 @@ async fn sftp_rename(
     to: String,
 ) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    remote_fs::rename(&s.remote_fs, &s.handle, &from, &to).await
+    let r = remote_fs::rename(&s.remote_fs, &s.handle, &from, &to).await;
+    actionlog::record_session(&session_id, "file.rename", json!({ "from": from, "to": to }), &r);
+    r
 }
 #[tauri::command]
 async fn sftp_chmod(
@@ -1853,7 +1978,9 @@ async fn sftp_chmod(
     mode: u32,
 ) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    remote_fs::chmod(&s.remote_fs, &s.handle, &path, mode).await
+    let r = remote_fs::chmod(&s.remote_fs, &s.handle, &path, mode).await;
+    actionlog::record_session(&session_id, "file.chmod", json!({ "path": path, "mode": format!("{mode:o}") }), &r);
+    r
 }
 #[tauri::command]
 async fn sftp_preview(
@@ -1884,7 +2011,7 @@ async fn sftp_write_file(
     eol: String,
 ) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    remote_fs::write_file(
+    let r = remote_fs::write_file(
         &s.remote_fs,
         &s.handle,
         &remote_path,
@@ -1893,7 +2020,9 @@ async fn sftp_write_file(
         base_mtime,
         &eol,
     )
-    .await
+    .await;
+    actionlog::record_session(&session_id, "file.save", json!({ "path": remote_path, "bytes": content.len() }), &r);
+    r
 }
 #[tauri::command]
 async fn sftp_name_conflicts(
@@ -1915,6 +2044,8 @@ async fn sftp_upload_paths(
 ) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let n = paths.len();
+    // Каждый файл виден в списке передач; в журнал - что и куда отправлено.
+    let journal = json!({ "remoteDir": remote_dir, "paths": paths.iter().take(50).collect::<Vec<_>>(), "count": n });
     let handle = s.handle.clone();
     let remote_fs = s.remote_fs.clone();
     let alive = s.alive.clone();
@@ -1935,6 +2066,7 @@ async fn sftp_upload_paths(
         })
         .collect();
     futures::future::join_all(futs).await;
+    actionlog::record_session(&session_id, "file.upload", journal, &Ok::<(), String>(()));
     Ok(json!({ "uploaded": n }))
 }
 #[tauri::command]
@@ -1946,7 +2078,7 @@ async fn sftp_download_to(
     local_dir: String,
 ) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    remote_fs::download_path(
+    let r = remote_fs::download_path(
         app,
         s.remote_fs.clone(),
         s.handle.clone(),
@@ -1956,7 +2088,9 @@ async fn sftp_download_to(
         s.alive.clone(),
         state.transfers.clone(),
     )
-    .await
+    .await;
+    actionlog::record_session(&session_id, "file.download", json!({ "remotePath": remote_path, "localDir": local_dir }), &r);
+    r
 }
 #[tauri::command]
 async fn sftp_drag_out(
@@ -2055,7 +2189,8 @@ async fn sftp_edit(
     remote_path: String,
 ) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    state
+    let journal = (session_id.clone(), json!({ "remotePath": remote_path }));
+    let r = state
         .edit
         .open(
             app,
@@ -2064,7 +2199,9 @@ async fn sftp_edit(
             session_id,
             remote_path,
         )
-        .await
+        .await;
+    actionlog::record_session(&journal.0, "file.edit", journal.1, &r);
+    r
 }
 #[tauri::command]
 fn sftp_cancel_transfer(state: State<'_, AppState>, id: String) {
@@ -2112,7 +2249,17 @@ async fn tunnel_open(
         })
         .cloned()
         .ok_or("Конфиг туннеля не найден")?;
-    state
+    let journal = (
+        session_id.clone(),
+        json!({
+            "tunnel": tunnel_id,
+            "type": cfg.get("type"),
+            "localPort": cfg.get("localPort"),
+            "remoteHost": cfg.get("remoteHost"),
+            "remotePort": cfg.get("remotePort"),
+        }),
+    );
+    let r = state
         .tunnels
         .open(
             app,
@@ -2122,7 +2269,9 @@ async fn tunnel_open(
             s.remote_forwards.clone(),
             s.cancel.subscribe(),
         )
-        .await
+        .await;
+    actionlog::record_session(&journal.0, "tunnel.open", journal.1, &r);
+    r
 }
 #[tauri::command]
 fn tunnel_close(app: AppHandle, state: State<'_, AppState>, session_id: String, tunnel_id: String) {
@@ -2757,6 +2906,14 @@ pub fn run() {
                 // Без значка крестик просто закрывает приложение - как было до трея.
                 eprintln!("значок в трее не поставлен: {e}");
             }
+            actionlog::init(&store::settings_get());
+            actionlog::record(
+                None,
+                None,
+                "app.start",
+                json!({ "version": app.package_info().version.to_string() }),
+                Ok(()),
+            );
             #[cfg(windows)]
             if let Some(w) = app.get_webview_window("main") {
                 disable_browser_accelerators(&w);
@@ -2933,6 +3090,10 @@ pub fn run() {
             app_quit,
             multi_exec,
             multi_exec_cancel,
+            action_log_list,
+            action_log_verify,
+            action_log_export,
+            action_log_status,
             windows_nudge_group,
             windows_raise_group,
             windows_restore_minimized,

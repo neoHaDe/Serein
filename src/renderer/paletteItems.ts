@@ -26,6 +26,8 @@ export interface PaletteActions {
   openProfiles?: () => void
   /** Задачи. */
   openTasks?: () => void
+  /** Журнал действий. */
+  openActionLog?: () => void
   /** Выйти из приложения: крестик прячет его в трей. */
   quitApp?: () => void
 }
@@ -92,6 +94,16 @@ export function buildPaletteItems(
       icon: '📋',
       group: 'Действие',
       run: actions.openTasks
+    })
+  }
+  if (actions.openActionLog) {
+    items.push({
+      id: 'act:actionlog',
+      label: 'Журнал действий',
+      hint: 'что и на каких серверах делали из Serein',
+      icon: '🧾',
+      group: 'Действие',
+      run: actions.openActionLog
     })
   }
   if (actions.openProfiles) {
