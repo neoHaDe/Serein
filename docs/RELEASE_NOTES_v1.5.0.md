@@ -162,4 +162,10 @@ An administrator fixes settings a user cannot change.
 ### Checksums
 
 ```
+68676e092a8f5d46037e56573a0f7f85290eb7666680f63e7441c3c48aeab171 Serein_1.5.0_x64-setup.exe
+9ce9d5b69517b40388bd0915fa29460c24ce3b8d188eac1e1b68f53dbc11f2c5 Serein_1.5.0_x64-portable.zip
+31147d3be357de8e7afa5ffd15bb44112fceaf67c170be2a73e73703af541bc2 Serein_1.5.0_amd64.deb
+d3c036dafa215bfbcca8494b9f55a8d972802a19261c86f0647db4318d687512 Serein_1.5.0_amd64.AppImage
+c16f1c9753d4b04a9b31af3231dbbe6d3c04f1fca248e1e22193d2199c7b3389 Serein-1.5.0-1.x86_64.rpm
+c92771d488fa8733b28bfc9c8c78873746951e6c554d214af77bf5be324fa300 serein-1.5.0-sbom.zip
 ```
