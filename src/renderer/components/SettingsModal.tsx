@@ -11,6 +11,7 @@ import type { BackupPreview } from '../../api'
 import { ThresholdsEditor } from './ThresholdsEditor'
 import { DEFAULT_THRESHOLDS } from '../serverHealth'
 import { ActionLogModal } from './ActionLogModal'
+import { lockedText } from '../policyText'
 
 const FONTS = [
   'Cascadia Code, Consolas, "Courier New", monospace',
@@ -23,7 +24,7 @@ const FONTS = [
 type Action = null | 'enable' | 'disable' | 'export' | 'import'
 
 export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
-  const { settings, update } = useSettings()
+  const { settings, update, locked, policy } = useSettings()
   const [showActionLog, setShowActionLog] = useState(false)
   const [recording, setRecording] = useState<ActionId | null>(null)
   const [knownHosts, setKnownHosts] = useState<KnownHostEntry[]>([])
@@ -182,6 +183,17 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>Настройки</h2>
+        {policy?.error && (
+          <div className="settings-msg err">Политика администратора не применена: {policy.error}</div>
+        )}
+        {policy && policy.sources.length > 0 && (
+          <div className="agent-hint policy-note">
+            Часть настроек задана администратором и здесь не меняется
+            {policy.locked.length > 0 && `: ${lockedText(policy.locked)}`}
+            {policy.forbidLegacySshAlgorithms && '; устаревшие алгоритмы SSH запрещены'}. Источник:{' '}
+            {policy.sources.join(', ')}.
+          </div>
+        )}
 
         <label>
           Цветовая схема
@@ -305,6 +317,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           <input
             type="checkbox"
             checked={!!settings.offline}
+            disabled={locked.has('offline')}
             onChange={(e) => update({ offline: e.target.checked })}
           />
           Закрытый контур: не обращаться в интернет
@@ -597,6 +610,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
             <input
               type="checkbox"
               checked={settings.actionLog !== false}
+              disabled={locked.has('actionLog')}
               onChange={(e) => update({ actionLog: e.target.checked })}
             />
             Вести журнал действий
@@ -610,7 +624,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
             <input
               type="checkbox"
               checked={!!settings.actionLogSyslog?.enabled}
-              disabled={settings.actionLog === false}
+              disabled={settings.actionLog === false || locked.has('actionLogSyslog')}
               onChange={(e) =>
                 update({
                   actionLogSyslog: {
@@ -626,7 +640,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
             Отправлять записи в syslog
           </label>
           {settings.actionLogSyslog?.enabled && settings.actionLog !== false && (
-            <div className="settings-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <fieldset className="settings-row policy-fieldset" disabled={locked.has('actionLogSyslog')} style={{ gap: 8, flexWrap: 'wrap' }}>
               <input
                 className="search"
                 style={{ flex: '1 1 180px' }}
@@ -656,7 +670,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
                 <option value="udp">UDP</option>
                 <option value="tcp">TCP</option>
               </select>
-            </div>
+            </fieldset>
           )}
           <div className="settings-row-desc">
             RFC 5424, local0.info, запись целиком в JSON. Без шифрования: для отправки через недоверенную сеть

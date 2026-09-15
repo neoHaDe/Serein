@@ -547,6 +547,14 @@ export interface ApiResult<T = void> {
 
 // ---- Настройки приложения ----
 
+/** Политика администратора: что задано и запрещено на этой машине. */
+export interface PolicyStatus {
+  sources: string[]
+  locked: string[]
+  forbidLegacySshAlgorithms: boolean
+  error?: string | null
+}
+
 export interface AppSettings {
   /** Имя цветовой схемы (см. THEMES в renderer). */
   theme: string

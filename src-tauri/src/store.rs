@@ -282,8 +282,11 @@ fn default_settings() -> Value {
     })
 }
 
+/// Настройки с наложенной политикой администратора: всё приложение читает их отсюда.
 pub fn settings_get() -> Value {
-    settings_from(read_checked("settings.json"))
+    let mut v = settings_from(read_checked("settings.json"));
+    crate::policy::overlay(&mut v);
+    v
 }
 
 /// Настройки из прочитанного файла - отдельно от диска, чтобы решение можно было проверить.
@@ -314,8 +317,11 @@ fn settings_from(stored: Result<Option<Value>, String>) -> Value {
     base
 }
 
-pub fn settings_set(patch: Value) -> Result<Value, String> {
-    let mut cur = settings_get();
+pub fn settings_set(mut patch: Value) -> Result<Value, String> {
+    // Заданное политикой не пишется в файл пользователя: снимут политику - вернётся его выбор,
+    // а не значение, которое ему навязали.
+    crate::policy::strip_locked(&mut patch);
+    let mut cur = settings_from(read_checked("settings.json"));
     if let (Some(obj), Some(p)) = (cur.as_object_mut(), patch.as_object()) {
         for (k, v) in p {
             obj.insert(k.clone(), v.clone());
@@ -325,6 +331,7 @@ pub fn settings_set(patch: Value) -> Result<Value, String> {
         }
     }
     write_value("settings.json", &cur)?;
+    crate::policy::overlay(&mut cur);
     Ok(cur)
 }
 

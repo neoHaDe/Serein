@@ -88,6 +88,41 @@ only request the app makes without you asking for it.
   release notes if that matters to you — that is a real check, whereas a certificate mostly buys
   a quieter dialog.
 
+## Administrator policy
+
+An administrator can fix settings so that users on the machine cannot change them — for example
+keep the action log on and forwarded to syslog, keep the app offline, and forbid legacy SSH
+algorithms. The policy is taken only from places a user without administrator rights cannot
+replace:
+
+- on Windows, the `Policy` string value (JSON) under `HKLM\SOFTWARE\Policies\Serein` — writable only
+  by administrators and deployable with Group Policy. **This is the recommended source.**
+- `%ProgramData%\Serein\policy.json` on Windows, `/etc/serein/policy.json` on Linux — **only if the
+  file and its folder are protected.** A location alone guarantees nothing: any user can create a
+  folder in `ProgramData` and would then own it and could swap the file an administrator later
+  puts there. On Windows the file and folder must be owned by Administrators, SYSTEM or
+  TrustedInstaller, and no one else may write, delete or change permissions; on Linux they must
+  be owned by root and not writable by group or others. Otherwise the file is not applied.
+
+The registry value overrides the file key by key.
+
+```json
+{
+  "settings": {
+    "actionLog": true,
+    "actionLogSyslog": { "enabled": true, "host": "siem.corp.local", "port": 514, "protocol": "tcp" },
+    "offline": true
+  },
+  "forbidLegacySshAlgorithms": true
+}
+```
+
+`settings` accepts any key of `settings.json`; those keys are shown as locked and changes to them
+are dropped before anything is written. The policy is read once at startup. A policy that cannot
+be read, is not protected, or cannot be parsed — including an unknown top-level key, so that a
+typo does not silently forbid nothing — is not applied at all; the error is shown in Settings and
+recorded in the action log.
+
 ## Known accepted risks
 
 - `RUSTSEC-2023-0071` (`rsa`, Marvin attack) has no upstream fix and is listed by ID with its

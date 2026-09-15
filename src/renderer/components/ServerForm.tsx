@@ -170,7 +170,8 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
   const [thresholds, setThresholds] = useState<Partial<HealthThresholds>>(
     initial?.healthThresholds ?? {}
   )
-  const { settings: appSettings } = useSettings()
+  const { settings: appSettings, policy } = useSettings()
+  const legacyForbidden = !!policy?.forbidLegacySshAlgorithms
   const [agentKey, setAgentKey] = useState(initial?.agentKey ?? '')
   const [agentKeys, setAgentKeys] = useState<AgentIdentity[]>([])
   const [agentError, setAgentError] = useState('')
@@ -594,12 +595,16 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
         <label className="checkbox-row">
           <input
             type="checkbox"
-            checked={sshLegacyAlgos}
+            checked={sshLegacyAlgos && !legacyForbidden}
+            disabled={legacyForbidden}
             onChange={(e) => setSshLegacyAlgos(e.target.checked)}
           />
           Разрешить устаревшие алгоритмы (старые коммутаторы и прошивки)
         </label>
-        {sshLegacyAlgos && (
+        {legacyForbidden && (
+          <div className="agent-hint">Запрещено политикой администратора: устаревшие алгоритмы не предлагаются.</div>
+        )}
+        {sshLegacyAlgos && !legacyForbidden && (
           <div className="agent-hint">
             Добавит <code>diffie-hellman-group1-sha1</code>, CBC-шифры, <code>3des-cbc</code> и{' '}
             <code>ssh-rsa</code> в конец списка. С современным сервером по-прежнему выберется

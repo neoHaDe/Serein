@@ -27,6 +27,7 @@ pub mod mysql;
 mod os_secrets;
 mod ownership;
 mod paths;
+pub mod policy;
 pub mod platform;
 pub mod profile_lock;
 mod proxycmd;
@@ -270,6 +271,12 @@ async fn action_log_export(path: String) -> Result<usize, String> {
 #[tauri::command]
 fn action_log_status() -> Value {
     actionlog::status()
+}
+
+/// Что задано политикой администратора: источники, запертые настройки, запреты, ошибка.
+#[tauri::command]
+fn policy_status() -> Value {
+    policy::status()
 }
 
 #[tauri::command]
@@ -2911,8 +2918,11 @@ pub fn run() {
                 None,
                 None,
                 "app.start",
-                json!({ "version": app.package_info().version.to_string() }),
-                Ok(()),
+                json!({ "version": app.package_info().version.to_string(), "policy": policy::status() }),
+                match &policy::current().error {
+                    Some(e) => Err(format!("политика администратора не применена: {e}")),
+                    None => Ok(()),
+                },
             );
             #[cfg(windows)]
             if let Some(w) = app.get_webview_window("main") {
@@ -3094,6 +3104,7 @@ pub fn run() {
             action_log_verify,
             action_log_export,
             action_log_status,
+            policy_status,
             windows_nudge_group,
             windows_raise_group,
             windows_restore_minimized,

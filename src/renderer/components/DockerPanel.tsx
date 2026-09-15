@@ -15,6 +15,7 @@ import { WsDetachButton } from './WsDetachButton'
 import { openDetachedWorkspace } from './workspaceWindow'
 import { matchesQuery, nextSort, parseBytes, parsePercent, saveSort, sortRows, loadSort } from '../tableSort'
 import { SortHeader } from './SortHeader'
+import { formatPorts } from '../dockerPorts'
 
 interface Props {
   /** SSH-сессия, на которой выполняем docker-команды и shell. */
@@ -31,16 +32,6 @@ interface Props {
   onDetached?: () => void
 }
 
-function formatPorts(raw?: string): string {
-  if (!raw?.trim()) return '—'
-  return raw
-    .split(',')
-    .map((part) => {
-      const m = part.trim().match(/:(\d+)->(\d+)/)
-      return m ? `${m[1]} → ${m[2]}` : part.trim()
-    })
-    .join(', ')
-}
 
 function formatCreated(raw?: string): string {
   if (!raw?.trim()) return '—'

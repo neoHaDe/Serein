@@ -2,6 +2,7 @@
  * Мост renderer ↔ Rust: `window.api` через Tauri `invoke` / `listen`.
  * Неперенесённые модули пока возвращают заглушки.
  */
+import type { PolicyStatus } from '../shared/types'
 import type { ActionLogEntry, ActionLogStatus, ActionLogVerify } from '../renderer/actionLog'
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -760,6 +761,9 @@ export const api = {
     subnet: (input: string): Promise<Record<string, unknown>> => invoke('tools_subnet', { input }),
     hash: (algo: string, text: string): Promise<Record<string, unknown>> => invoke('tools_hash', { algo, text }),
     jwtDecode: (token: string): Promise<Record<string, unknown>> => invoke('tools_jwt_decode', { token })
+  },
+  policy: {
+    status: (): Promise<PolicyStatus> => invoke('policy_status')
   },
   actionLog: {
     list: (limit: number): Promise<ActionLogEntry[]> => invoke('action_log_list', { limit }),

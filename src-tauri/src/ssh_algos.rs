@@ -59,7 +59,8 @@ pub fn compression_first() -> Cow<'static, [compression::Name]> {
 /// Собирает набор алгоритмов под конкретный сервер.
 pub fn preferred_for(server: &Value) -> Preferred {
     let base = Preferred::DEFAULT;
-    let legacy = flag(server, "sshLegacyAlgos");
+    // Политика администратора сильнее профиля: запрещённые алгоритмы не предлагаются вовсе.
+    let legacy = flag(server, "sshLegacyAlgos") && !crate::policy::forbids_legacy_algorithms();
 
     let kexes = if legacy {
         let mut v = base.kex.to_vec();
