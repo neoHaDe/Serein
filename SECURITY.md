@@ -95,8 +95,9 @@ keep the action log on and forwarded to syslog, keep the app offline, and forbid
 algorithms. The policy is taken only from places a user without administrator rights cannot
 replace:
 
-- on Windows, the `Policy` string value (JSON) under `HKLM\SOFTWARE\Policies\Serein` — writable only
-  by administrators and deployable with Group Policy. **This is the recommended source.**
+- on Windows, the `HKLM\SOFTWARE\Policies\Serein` registry key — writable only by administrators. Use
+  the Group Policy template in `docs/policy` (`Serein.admx` with `en-US` and `ru-RU` language files),
+  or a single `Policy` string value holding the JSON below. **This is the recommended source.**
 - `%ProgramData%\Serein\policy.json` on Windows, `/etc/serein/policy.json` on Linux — **only if the
   file and its folder are protected.** A location alone guarantees nothing: any user can create a
   folder in `ProgramData` and would then own it and could swap the file an administrator later
@@ -113,9 +114,25 @@ The registry value overrides the file key by key.
     "actionLogSyslog": { "enabled": true, "host": "siem.corp.local", "port": 514, "protocol": "tcp" },
     "offline": true
   },
-  "forbidLegacySshAlgorithms": true
+  "allowedHosts": ["*.corp.local", "10.0.0.0/8"],
+  "forbidLegacySshAlgorithms": true,
+  "forbidSavedPasswords": true,
+  "requireMasterPassword": true,
+  "forbidLocalTerminal": true,
+  "forbidSessionRecording": true
 }
 ```
+
+- `allowedHosts` — SSH, telnet and TCP connections only to these addresses: a full name, all
+  subdomains (`*.corp.local`), a subnet or `*`. Every jump host is checked too. The address is
+  compared as written in the server profile; names are not resolved, so a subnet matches only an
+  address written as an IP, and a DNS alias of a forbidden host is not caught.
+- `forbidSavedPasswords` — passwords and key passphrases are not saved and saved ones are not
+  used; they are asked for on connection. Saved ones already on disk are left in place, unused.
+- `requireMasterPassword` — the master password cannot be turned off, and secrets are not saved
+  until it is on.
+- `forbidLocalTerminal`, `forbidSessionRecording` — no local shell, no recording terminal output
+  to a file.
 
 `settings` accepts any key of `settings.json`; those keys are shown as locked and changes to them
 are dropped before anything is written. The policy is read once at startup. A policy that cannot

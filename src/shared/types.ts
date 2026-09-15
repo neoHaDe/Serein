@@ -552,6 +552,12 @@ export interface PolicyStatus {
   sources: string[]
   locked: string[]
   forbidLegacySshAlgorithms: boolean
+  /** Куда можно подключаться; `null` - без ограничения. */
+  allowedHosts?: string[] | null
+  forbidSavedPasswords?: boolean
+  requireMasterPassword?: boolean
+  forbidLocalTerminal?: boolean
+  forbidSessionRecording?: boolean
   error?: string | null
 }
 

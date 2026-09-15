@@ -516,17 +516,22 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
         {/* Пароли, ключи, jump-хост и туннели относятся только к SSH. */}
         {connection === 'ssh' && (
           <>
-        {authType === 'password' && (
-          <label>
-            Пароль
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={isEdit ? '•••••• (оставьте пустым, чтобы не менять)' : ''}
-            />
-          </label>
-        )}
+        {authType === 'password' &&
+          (policy?.forbidSavedPasswords ? (
+            <div className="agent-hint">
+              Пароль не сохраняется - так требует политика администратора. Он спросится при подключении.
+            </div>
+          ) : (
+            <label>
+              Пароль
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={isEdit ? '•••••• (оставьте пустым, чтобы не менять)' : ''}
+              />
+            </label>
+          ))}
 
         {authType === 'key' && (
           <>
@@ -539,15 +544,21 @@ export function ServerForm({ initial, servers, onCancel, onSave }: Props): JSX.E
                 </button>
               </div>
             </label>
-            <label>
-              Парольная фраза ключа (если есть)
-              <input
-                type="password"
-                value={passphrase}
-                onChange={(e) => setPassphrase(e.target.value)}
-                placeholder={isEdit ? '•••••• (оставьте пустым, чтобы не менять)' : ''}
-              />
-            </label>
+            {policy?.forbidSavedPasswords ? (
+              <div className="agent-hint">
+                Парольная фраза не сохраняется - так требует политика администратора. Она спросится при подключении.
+              </div>
+            ) : (
+              <label>
+                Парольная фраза ключа (если есть)
+                <input
+                  type="password"
+                  value={passphrase}
+                  onChange={(e) => setPassphrase(e.target.value)}
+                  placeholder={isEdit ? '•••••• (оставьте пустым, чтобы не менять)' : ''}
+                />
+              </label>
+            )}
           </>
         )}
 

@@ -52,7 +52,7 @@ export default function App(): JSX.Element {
   const [showTasks, setShowTasks] = useState(false)
   const [showActionLog, setShowActionLog] = useState(false)
   const [showPuttyImport, setShowPuttyImport] = useState(true)
-  const { settings, update } = useSettings()
+  const { settings, update, policy: adminPolicy } = useSettings()
   useWindowSnap()
 
   const auxRestore = useAuxRestore()
@@ -149,11 +149,14 @@ export default function App(): JSX.Element {
 
   const serverStatuses = useMemo(() => aggregateServerStatuses(tabsApi.tabs), [tabsApi.tabs])
 
+  // Локальный терминал может быть запрещён политикой администратора: тогда его нет нигде в окне.
+  const openLocal = adminPolicy?.forbidLocalTerminal ? undefined : tabsApi.openLocalTab
+
   const paletteItems = useMemo(
     () =>
       buildPaletteItems(ops.servers, tabsApi.tabs, tabsApi.activeKey, {
         openServer: tabsApi.openServerTab,
-        openLocal: tabsApi.openLocalTab,
+        openLocal,
         openSettings: () => setShowSettings(true),
         openKeyGen: () => setShowKeyGen(true),
         openTools: tabsApi.openToolsTab,
@@ -165,7 +168,7 @@ export default function App(): JSX.Element {
         openActionLog: () => setShowActionLog(true),
         quitApp: () => void invoke('app_quit')
       }),
-    [ops.servers, tabsApi]
+    [ops.servers, tabsApi, openLocal]
   )
 
   return (
@@ -173,7 +176,7 @@ export default function App(): JSX.Element {
       <Sidebar
         servers={ops.servers}
         onConnect={tabsApi.openServerTab}
-        onOpenLocal={tabsApi.openLocalTab}
+        onOpenLocal={openLocal}
         onNew={() => setEditing(null)}
         onEdit={(s) => setEditing(s)}
         onDelete={ops.deleteServer}
@@ -208,7 +211,7 @@ export default function App(): JSX.Element {
           servers={ops.servers}
           onSelect={tabsApi.setActiveKey}
           onClose={tabsApi.closeTab}
-          onNewLocal={tabsApi.openLocalTab}
+          onNewLocal={openLocal}
           onToggleSftp={tabsApi.toggleSftp}
           onSetWorkspace={tabsApi.setWorkspace}
           onDetachTab={(key) => void tabsApi.detachTab(key)}
@@ -240,10 +243,14 @@ export default function App(): JSX.Element {
                 )}
                 <button onClick={() => setEditing(null)}>Добавить сервер вручную</button>
               </div>
-              <p className="welcome-hint">Локальный терминал работает и без настройки.</p>
-              <button className="ghost" onClick={tabsApi.openLocalTab}>
-                Открыть локальный терминал
-              </button>
+              {openLocal && (
+                <>
+                  <p className="welcome-hint">Локальный терминал работает и без настройки.</p>
+                  <button className="ghost" onClick={openLocal}>
+                    Открыть локальный терминал
+                  </button>
+                </>
+              )}
             </div>
           )}
 
@@ -255,7 +262,7 @@ export default function App(): JSX.Element {
                 <br />
                 или откройте локальный терминал.
               </p>
-              <button onClick={tabsApi.openLocalTab}>Открыть локальный терминал</button>
+              {openLocal && <button onClick={openLocal}>Открыть локальный терминал</button>}
             </div>
           )}
 

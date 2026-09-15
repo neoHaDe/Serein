@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <displayName>Serein</displayName>
+  <description>Serein client policies: action log, network, allowed servers, password storage.</description>
+  <resources>
+    <stringTable>
+      <string id="Serein">Serein</string>
+      <string id="SUPPORTED_Serein15">Serein 1.5 or later</string>
+      <string id="ActionLog">Action log</string>
+      <string id="ActionLog_Explain">Enabled - the action log is always kept and the user cannot turn it off. Disabled - the log is not kept and cannot be turned on. Not configured - the user decides.</string>
+      <string id="Syslog">Send the action log to syslog</string>
+      <string id="Syslog_Explain">Every log entry is sent to the given syslog or SIEM server (RFC 5424, JSON in the message body). TLS is not used: put a TLS relay in front of untrusted networks. The user cannot change these parameters.</string>
+      <string id="Offline">Offline mode</string>
+      <string id="Offline_Explain">Enabled - the app does not check for updates or make any other requests of its own to the internet.</string>
+      <string id="AllowedHosts">Allowed servers</string>
+      <string id="AllowedHosts_Explain">SSH, telnet and TCP connections are allowed only to the listed addresses, one per line: a full name (prod.corp.local), all subdomains (*.corp.local), a subnet (10.0.0.0/8) or * for any. Jump hosts are checked too. The address is compared as written in the server profile: names are not resolved, so a subnet matches only an address written as an IP.</string>
+      <string id="ForbidLegacySshAlgorithms">Forbid legacy SSH algorithms</string>
+      <string id="ForbidLegacySshAlgorithms_Explain">Legacy algorithms (ssh-rsa, CBC ciphers, hmac-sha1, DH group1) are never offered, even if a server profile allows them.</string>
+      <string id="ForbidSavedPasswords">Forbid saved passwords</string>
+      <string id="ForbidSavedPasswords_Explain">Passwords and key passphrases are not saved in Serein and are not used even if saved earlier: they are asked for on every connection.</string>
+      <string id="RequireMasterPassword">Require a master password</string>
+      <string id="RequireMasterPassword_Explain">The master password cannot be turned off, and secrets are not saved until it is turned on.</string>
+      <string id="ForbidLocalTerminal">Forbid the local terminal</string>
+      <string id="ForbidLocalTerminal_Explain">The local shell of this machine cannot be opened from Serein.</string>
+      <string id="ForbidSessionRecording">Forbid recording sessions to a file</string>
+      <string id="ForbidSessionRecording_Explain">Terminal output cannot be recorded to a file on this machine.</string>
+      <string id="Udp">UDP</string>
+      <string id="Tcp">TCP</string>
+    </stringTable>
+    <presentationTable>
+      <presentation id="Syslog">
+        <textBox refId="SyslogHost"><label>Syslog server address</label></textBox>
+        <decimalTextBox refId="SyslogPort" defaultValue="514">Port</decimalTextBox>
+        <dropdownList refId="SyslogProtocol" defaultItem="0">Protocol</dropdownList>
+      </presentation>
+      <presentation id="AllowedHosts">
+        <multiTextBox refId="AllowedHosts">Addresses, one per line</multiTextBox>
+      </presentation>
+    </presentationTable>
+  </resources>
+</policyDefinitionResources>

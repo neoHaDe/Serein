@@ -15,7 +15,8 @@ const WORKSPACE_TOOLS: { id: WorkspaceTool; label: string }[] = [
 
 export interface PaletteActions {
   openServer: (server: ServerConfig) => void
-  openLocal: () => void
+  /** Нет - локальный терминал запрещён политикой администратора. */
+  openLocal?: () => void
   openSettings: () => void
   openKeyGen: () => void
   openTools: () => void
@@ -50,13 +51,15 @@ export function buildPaletteItems(
       run: () => actions.openServer(s)
     })
   }
-  items.push({
-    id: 'act:local',
-    label: 'Новый локальный терминал',
-    icon: '🖥',
-    group: 'Действие',
-    run: actions.openLocal
-  })
+  if (actions.openLocal) {
+    items.push({
+      id: 'act:local',
+      label: 'Новый локальный терминал',
+      icon: '🖥',
+      group: 'Действие',
+      run: actions.openLocal
+    })
+  }
   items.push({
     id: 'act:settings',
     label: 'Настройки',

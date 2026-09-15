@@ -11,7 +11,7 @@ import type { BackupPreview } from '../../api'
 import { ThresholdsEditor } from './ThresholdsEditor'
 import { DEFAULT_THRESHOLDS } from '../serverHealth'
 import { ActionLogModal } from './ActionLogModal'
-import { lockedText } from '../policyText'
+import { policySummary } from '../policyText'
 
 const FONTS = [
   'Cascadia Code, Consolas, "Courier New", monospace',
@@ -188,10 +188,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
         )}
         {policy && policy.sources.length > 0 && (
           <div className="agent-hint policy-note">
-            Часть настроек задана администратором и здесь не меняется
-            {policy.locked.length > 0 && `: ${lockedText(policy.locked)}`}
-            {policy.forbidLegacySshAlgorithms && '; устаревшие алгоритмы SSH запрещены'}. Источник:{' '}
-            {policy.sources.join(', ')}.
+            Политика администратора: {policySummary(policy).join('; ') || 'без ограничений'}. Заданное ей здесь не
+            меняется. Источник: {policy.sources.join(', ')}.
           </div>
         )}
 
@@ -493,10 +491,25 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
               <div className="settings-row-name">Мастер-пароль</div>
               <div className="settings-row-desc">
                 {masterEnabled ? 'Включён - спрашивается при запуске' : 'Доп. шифрование секретов поверх системного'}
+                {policy?.requireMasterPassword && !masterEnabled && (
+                  <>
+                    <br />
+                    <span style={{ color: 'var(--warn)' }}>
+                      Обязателен по политике администратора - включите: пока он выключен, пароли не сохраняются.
+                    </span>
+                  </>
+                )}
               </div>
             </div>
             {masterEnabled ? (
-              <button className="secondary" onClick={() => startAction('disable')}>Отключить</button>
+              <button
+                className="secondary"
+                disabled={!!policy?.requireMasterPassword}
+                title={policy?.requireMasterPassword ? 'Мастер-пароль обязателен по политике администратора' : undefined}
+                onClick={() => startAction('disable')}
+              >
+                Отключить
+              </button>
             ) : (
               <button className="secondary" onClick={() => startAction('enable')}>Включить</button>
             )}

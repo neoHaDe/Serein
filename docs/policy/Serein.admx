@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Шаблон групповых политик Serein. Скопируйте Serein.admx в PolicyDefinitions
+  (C:\Windows\PolicyDefinitions или центральное хранилище домена), а папки en-US и ru-RU
+  с файлами .adml - рядом. Значения пишутся в HKLM\Software\Policies\Serein и читаются
+  приложением при запуске.
+-->
+<policyDefinitions xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <policyNamespaces>
+    <target prefix="serein" namespace="Serein.Policies" />
+    <using prefix="windows" namespace="Microsoft.Policies.Windows" />
+  </policyNamespaces>
+  <resources minRequiredRevision="1.0" />
+  <supportedOn>
+    <definitions>
+      <definition name="SUPPORTED_Serein15" displayName="$(string.SUPPORTED_Serein15)" />
+    </definitions>
+  </supportedOn>
+  <categories>
+    <category name="Serein" displayName="$(string.Serein)" />
+  </categories>
+  <policies>
+    <policy name="ActionLog" class="Machine" displayName="$(string.ActionLog)" explainText="$(string.ActionLog_Explain)" key="Software\Policies\Serein" valueName="ActionLog">
+      <parentCategory ref="Serein" />
+      <supportedOn ref="SUPPORTED_Serein15" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Syslog" class="Machine" displayName="$(string.Syslog)" explainText="$(string.Syslog_Explain)" presentation="$(presentation.Syslog)" key="Software\Policies\Serein">
+      <parentCategory ref="Serein" />
+      <supportedOn ref="SUPPORTED_Serein15" />
+      <elements>
+        <text id="SyslogHost" valueName="SyslogHost" required="true" />
+        <decimal id="SyslogPort" valueName="SyslogPort" minValue="1" maxValue="65535" />
+        <enum id="SyslogProtocol" valueName="SyslogProtocol">
+          <item displayName="$(string.Udp)"><value><string>udp</string></value></item>
+          <item displayName="$(string.Tcp)"><value><string>tcp</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="Offline" class="Machine" displayName="$(string.Offline)" explainText="$(string.Offline_Explain)" key="Software\Policies\Serein" valueName="Offline">
+      <parentCategory ref="Serein" />
+      <supportedOn ref="SUPPORTED_Serein15" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="AllowedHosts" class="Machine" displayName="$(string.AllowedHosts)" explainText="$(string.AllowedHosts_Explain)" presentation="$(presentation.AllowedHosts)" key="Software\Policies\Serein">
+      <parentCategory ref="Serein" />
+      <supportedOn ref="SUPPORTED_Serein15" />
+      <elements>
+        <multiText id="AllowedHosts" valueName="AllowedHosts" />
+      </elements>
+    </policy>
+    <policy name="ForbidLegacySshAlgorithms" class="Machine" displayName="$(string.ForbidLegacySshAlgorithms)" explainText="$(string.ForbidLegacySshAlgorithms_Explain)" key="Software\Policies\Serein" valueName="ForbidLegacySshAlgorithms">
+      <parentCategory ref="Serein" />
+      <supportedOn ref="SUPPORTED_Serein15" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="ForbidSavedPasswords" class="Machine" displayName="$(string.ForbidSavedPasswords)" explainText="$(string.ForbidSavedPasswords_Explain)" key="Software\Policies\Serein" valueName="ForbidSavedPasswords">
+      <parentCategory ref="Serein" />
+      <supportedOn ref="SUPPORTED_Serein15" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="RequireMasterPassword" class="Machine" displayName="$(string.RequireMasterPassword)" explainText="$(string.RequireMasterPassword_Explain)" key="Software\Policies\Serein" valueName="RequireMasterPassword">
+      <parentCategory ref="Serein" />
+      <supportedOn ref="SUPPORTED_Serein15" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="ForbidLocalTerminal" class="Machine" displayName="$(string.ForbidLocalTerminal)" explainText="$(string.ForbidLocalTerminal_Explain)" key="Software\Policies\Serein" valueName="ForbidLocalTerminal">
+      <parentCategory ref="Serein" />
+      <supportedOn ref="SUPPORTED_Serein15" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="ForbidSessionRecording" class="Machine" displayName="$(string.ForbidSessionRecording)" explainText="$(string.ForbidSessionRecording_Explain)" key="Software\Policies\Serein" valueName="ForbidSessionRecording">
+      <parentCategory ref="Serein" />
+      <supportedOn ref="SUPPORTED_Serein15" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+  </policies>
+</policyDefinitions>

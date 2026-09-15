@@ -3,6 +3,7 @@ import type { Tab, SplitChoice } from '../tabs'
 import type { ServerConfig, Snippet, WorkspaceTool } from '../../shared/types'
 import { findLeaf } from '../paneTree'
 import { Icon } from './Icon'
+import { useSettings } from '../SettingsContext'
 
 interface Props {
   tabs: Tab[]
@@ -10,7 +11,8 @@ interface Props {
   servers: ServerConfig[]
   onSelect: (key: string) => void
   onClose: (key: string) => void
-  onNewLocal: () => void
+  /** Нет - локальный терминал запрещён политикой администратора. */
+  onNewLocal?: () => void
   onToggleSftp: (key: string) => void
   onSetWorkspace: (key: string, tool: WorkspaceTool) => void
   onDetachTab: (key: string) => void
@@ -154,6 +156,7 @@ export function TabBar({
   const [splitFilter, setSplitFilter] = useState('')
   const [snippetOpen, setSnippetOpen] = useState(false)
   const [logging, setLogging] = useState(false)
+  const { policy } = useSettings()
 
   const activeSessionId = activeLeaf?.sessionId
 
@@ -303,9 +306,11 @@ export function TabBar({
           )
         })}
         </div>
-        <button className="tab-new" title="Новый локальный терминал" onClick={onNewLocal}>
-          <Icon name="plus" />
-        </button>
+        {onNewLocal && (
+          <button className="tab-new" title="Новый локальный терминал" onClick={onNewLocal}>
+            <Icon name="plus" />
+          </button>
+        )}
       </div>
 
       <div className="tabbar-right">
@@ -395,7 +400,7 @@ export function TabBar({
             )}
           </div>
         )}
-        {active && activeLeaf?.sessionId && (
+        {active && activeLeaf?.sessionId && (logging || !policy?.forbidSessionRecording) && (
           <button
             className={'tool-btn' + (logging ? ' on' : '')}
             title={logging ? 'Логирование включено - нажмите, чтобы остановить' : 'Логировать вывод сессии в файл'}

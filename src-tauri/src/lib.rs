@@ -302,7 +302,21 @@ fn servers_list() -> Vec<Value> {
     store::servers_list_safe()
 }
 #[tauri::command]
-fn servers_save(cfg: Value) -> Result<Value, String> {
+fn servers_save(mut cfg: Value) -> Result<Value, String> {
+    let has_secret = ["password", "passphrase"]
+        .iter()
+        .any(|k| cfg.get(*k).and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty()));
+    if policy::forbids_saved_passwords() {
+        // Не храним вовсе: пароль спросится при подключении.
+        if let Some(o) = cfg.as_object_mut() {
+            o.remove("password");
+            o.remove("passphrase");
+        }
+    } else if has_secret && policy::requires_master_password() && !vault::is_enabled() {
+        return Err(
+            "Политика администратора требует мастер-пароль: включите его в настройках, прежде чем сохранять пароли".into(),
+        );
+    }
     store::servers_save(cfg)
 }
 /// Перестановка серверов после перетаскивания: `[{ id, group, order }]`.
@@ -460,8 +474,21 @@ fn resolve_chain(server_id: &str) -> Result<Vec<Value>, String> {
         if !seen.insert(sid.clone()) {
             return Err("Циклическая цепочка jump-хостов".into());
         }
-        let s =
+        let mut s =
             store::server_with_secrets(&sid).ok_or("Сервер из цепочки jump-хостов не найден")?;
+        // Политика администратора проверяет каждое звено, а не только конечный сервер: иначе
+        // запрещённый адрес прошёл бы jump-хостом.
+        if s.get("connection").and_then(|v| v.as_str()) != Some("serial") {
+            let host = s.get("host").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+            policy::check_host(&host)?;
+        }
+        // Сохранённые раньше пароли при запрете не идут в ход: их спросят при подключении.
+        if policy::forbids_saved_passwords() {
+            if let Some(o) = s.as_object_mut() {
+                o.remove("password");
+                o.remove("passphrase");
+            }
+        }
         let next = s
             .get("proxyJump")
             .and_then(|v| v.as_str())
@@ -480,6 +507,9 @@ fn session_open_local(
     state: State<'_, AppState>,
     p: Value,
 ) -> Result<String, String> {
+    if policy::forbids_local_terminal() {
+        return Err("Локальный терминал запрещён политикой администратора".into());
+    }
     let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
     let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
     let cwd = p.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -602,6 +632,7 @@ fn session_open_tcp(
     // кто на 2000, кто на 4001. Пусть пользователь укажет явно.
     let default_port = if mode == telnet::Mode::Telnet { 23 } else { 0 };
     let (host, port) = telnet::endpoint(&profile, default_port);
+    policy::check_host(&host)?;
     if port == 0 {
         return Err("Укажите порт: у TCP-подключения нет значения по умолчанию".into());
     }
@@ -656,7 +687,13 @@ async fn session_open_ssh(
         .get("serverId")
         .and_then(|v| v.as_str())
         .ok_or("Не задан serverId")?;
-    let chain = resolve_chain(server_id)?;
+    let chain = match resolve_chain(server_id) {
+        Ok(c) => c,
+        Err(e) => {
+            actionlog::record(Some(server_id), None, "ssh.connect", json!({}), Err(e.clone()));
+            return Err(e.into());
+        }
+    };
     let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u32;
     let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u32;
     let id = uuid::Uuid::new_v4().to_string();
@@ -848,6 +885,9 @@ fn session_log_toggle(id: String, title: String) -> Result<Value, String> {
         let path = term_out::log_path_of(&id);
         term_out::log_stop(&id);
         return Ok(json!({ "logging": false, "path": path }));
+    }
+    if policy::forbids_session_recording() {
+        return Err("Запись сессии в файл запрещена политикой администратора".into());
     }
     let path = term_out::log_start(&id, &title)?;
     Ok(json!({ "logging": true, "path": path }))
@@ -2311,6 +2351,9 @@ async fn vault_enable(password: String) -> Value {
 }
 #[tauri::command]
 async fn vault_disable(password: String) -> Value {
+    if policy::requires_master_password() {
+        return json!({ "ok": false, "error": "Мастер-пароль обязателен по политике администратора" });
+    }
     let Ok(_permit) = PASSWORD_KDF_GATE.acquire().await else {
         return json!({ "ok": false, "error": "Очередь операций с паролем закрыта" });
     };

@@ -32,7 +32,8 @@ const EDGE = 48
 interface Props {
   servers: ServerConfig[]
   onConnect: (s: ServerConfig) => void
-  onOpenLocal: () => void
+  /** Нет - локальный терминал запрещён политикой администратора. */
+  onOpenLocal?: () => void
   onNew: () => void
   onEdit: (s: ServerConfig) => void
   onDelete: (id: string) => void
@@ -944,9 +945,11 @@ export function Sidebar({
       <div className="sidebar-footer">
         {collapsed ? (
           <>
-            <button className="icon-btn" title="Локальный терминал" onClick={onOpenLocal}>
-              <Icon name="desktop" />
-            </button>
+            {onOpenLocal && (
+              <button className="icon-btn" title="Локальный терминал" onClick={onOpenLocal}>
+                <Icon name="desktop" />
+              </button>
+            )}
             <button className="icon-btn" title="Генерация ключей" onClick={onOpenKeyGen}>
               <Icon name="key" />
             </button>
@@ -969,9 +972,11 @@ export function Sidebar({
           </>
         ) : (
           <>
-            <button className="full-btn" onClick={onOpenLocal}>
-              <Icon name="desktop" /> Локальный терминал
-            </button>
+            {onOpenLocal && (
+              <button className="full-btn" onClick={onOpenLocal}>
+                <Icon name="desktop" /> Локальный терминал
+              </button>
+            )}
             <button className="full-btn" onClick={onOpenKeyGen}>
               <Icon name="key" /> Генерация ключей
             </button>

@@ -686,15 +686,29 @@ async fn authenticate(
         "key" => {
             let raw = field(server, "privateKeyPath")
                 .ok_or_else(|| crate::error::SereinError::Config("Не задан путь к ключу".into()))?;
-            let passphrase = field(server, "passphrase");
+            let passphrase = field(server, "passphrase").filter(|p| !p.is_empty());
             let path = crate::paths::resolve_identity(raw);
             if !std::path::Path::new(&path).exists() {
                 return Err(crate::error::SereinError::Config(crate::paths::missing_key_error(
                     raw, &path,
                 )));
             }
-            let key = load_secret_key(&path, passphrase)
-                .map_err(|e| crate::error::SereinError::Protocol(e.to_string()))?;
+            let key = match (load_secret_key(&path, passphrase), app, id) {
+                (Ok(k), _, _) => k,
+                // Фраза не сохранена - например, это запрещено политикой. Спрашиваем тем же окном,
+                // что и ввод от сервера, вместо того чтобы молча не войти.
+                (Err(russh::keys::Error::KeyIsEncrypted), Some(app), Some(sid)) if passphrase.is_none() => {
+                    let answers = {
+                        let _waiting = pause.begin();
+                        request_ki(app, ki, sid, vec![json!({ "prompt": format!("Парольная фраза ключа {raw}: "), "echo": false })])
+                            .await
+                    };
+                    let phrase = answers.into_iter().next().unwrap_or_default();
+                    load_secret_key(&path, Some(&phrase))
+                        .map_err(|e| crate::error::SereinError::Protocol(e.to_string()))?
+                }
+                (Err(e), _, _) => return Err(crate::error::SereinError::Protocol(e.to_string())),
+            };
             let hash = handle
                 .best_supported_rsa_hash()
                 .await
@@ -729,7 +743,25 @@ async fn authenticate(
                 loop {
                     match resp {
                         KeyboardInteractiveAuthResponse::Success => return Ok(true),
-                        KeyboardInteractiveAuthResponse::Failure { .. } => return Ok(false),
+                        KeyboardInteractiveAuthResponse::Failure { .. } => {
+                            // Сервер сам пароль не спрашивает (у него только метод «password»), а
+                            // сохранённого нет - спрашиваем сами, одним вопросом.
+                            if let Some(app) = app.filter(|_| pass.is_empty()) {
+                                let answers = {
+                                    let _waiting = pause.begin();
+                                    request_ki(app, ki, sid, vec![json!({ "prompt": format!("Пароль для {user}: "), "echo": false })])
+                                        .await
+                                };
+                                if let Some(p) = answers.into_iter().next().filter(|p| !p.is_empty()) {
+                                    return handle
+                                        .authenticate_password(&user, &p)
+                                        .await
+                                        .map(|r| r.success())
+                                        .map_err(|e| crate::error::SereinError::Protocol(e.to_string()));
+                                }
+                            }
+                            return Ok(false);
+                        }
                         KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
                             let pl: Vec<Value> = prompts
                                 .iter()

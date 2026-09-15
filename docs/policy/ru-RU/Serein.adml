@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <displayName>Serein</displayName>
+  <description>Политики клиента Serein: журнал действий, сеть, разрешённые серверы, хранение паролей.</description>
+  <resources>
+    <stringTable>
+      <string id="Serein">Serein</string>
+      <string id="SUPPORTED_Serein15">Serein 1.5 и новее</string>
+      <string id="ActionLog">Журнал действий</string>
+      <string id="ActionLog_Explain">Включено - журнал действий ведётся всегда, пользователь не может его выключить. Отключено - журнал не ведётся и не включается. Не задано - решает пользователь.</string>
+      <string id="Syslog">Отправка журнала действий в syslog</string>
+      <string id="Syslog_Explain">Каждая запись журнала отправляется на указанный сервер syslog или SIEM (RFC 5424, JSON в теле сообщения). TLS не используется: для недоверенной сети нужен ретранслятор с TLS. Пользователь не может изменить эти параметры.</string>
+      <string id="Offline">Закрытый контур</string>
+      <string id="Offline_Explain">Включено - приложение не проверяет обновления и не делает других собственных запросов в интернет.</string>
+      <string id="AllowedHosts">Разрешённые серверы</string>
+      <string id="AllowedHosts_Explain">Подключаться по SSH, telnet и TCP можно только к перечисленным адресам - по одному на строку: имя целиком (prod.corp.local), все поддомены (*.corp.local), подсеть (10.0.0.0/8) или * для любого. Проверяются и промежуточные jump-хосты. Сравнивается адрес так, как он записан в профиле сервера: имя не разрешается в IP, поэтому подсеть совпадает только с адресом, записанным как IP.</string>
+      <string id="ForbidLegacySshAlgorithms">Запретить устаревшие алгоритмы SSH</string>
+      <string id="ForbidLegacySshAlgorithms_Explain">Устаревшие алгоритмы (ssh-rsa, CBC-шифры, hmac-sha1, DH group1) не предлагаются, даже если профиль сервера их разрешает.</string>
+      <string id="ForbidSavedPasswords">Запретить хранить пароли</string>
+      <string id="ForbidSavedPasswords_Explain">Пароли и парольные фразы ключей не сохраняются в Serein и не используются, даже если были сохранены раньше: они спрашиваются при каждом подключении.</string>
+      <string id="RequireMasterPassword">Требовать мастер-пароль</string>
+      <string id="RequireMasterPassword_Explain">Мастер-пароль нельзя отключить, а пока он не включён, секреты не сохраняются.</string>
+      <string id="ForbidLocalTerminal">Запретить локальный терминал</string>
+      <string id="ForbidLocalTerminal_Explain">Локальную командную оболочку этой машины из Serein открыть нельзя.</string>
+      <string id="ForbidSessionRecording">Запретить запись сессии в файл</string>
+      <string id="ForbidSessionRecording_Explain">Вывод терминала нельзя записать в файл на этой машине.</string>
+      <string id="Udp">UDP</string>
+      <string id="Tcp">TCP</string>
+    </stringTable>
+    <presentationTable>
+      <presentation id="Syslog">
+        <textBox refId="SyslogHost"><label>Адрес сервера syslog</label></textBox>
+        <decimalTextBox refId="SyslogPort" defaultValue="514">Порт</decimalTextBox>
+        <dropdownList refId="SyslogProtocol" defaultItem="0">Протокол</dropdownList>
+      </presentation>
+      <presentation id="AllowedHosts">
+        <multiTextBox refId="AllowedHosts">Адреса, по одному на строку</multiTextBox>
+      </presentation>
+    </presentationTable>
+  </resources>
+</policyDefinitionResources>
