@@ -37,7 +37,7 @@ methods=""
 for _ in $(seq 1 30); do
   methods=$(ssh -v -p 2206 -o BatchMode=yes -o PreferredAuthentications=none -o ConnectTimeout=5 \
     -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null probe@127.0.0.1 true 2>&1 \
-    | sed -n 's/.*Authentications that can continue: //p' | head -1 || true)
+    | tr -d '\r' | sed -n 's/.*Authentications that can continue: //p' | head -1 || true)
   [ -n "$methods" ] && break
   sleep 1
 done
