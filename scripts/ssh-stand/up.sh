@@ -29,9 +29,18 @@ done
 
 # Порт keyboard-interactive обязан действительно не принимать метод «password»: иначе тест
 # входа на нём молча проверял бы обычный пароль. Спрашиваем у сервера список методов.
-methods=$(ssh -v -p 2206 -o BatchMode=yes -o PreferredAuthentications=none \
-  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null probe@127.0.0.1 true 2>&1 \
-  | sed -n 's/.*Authentications that can continue: //p' | head -1)
+#
+# Вход методом none всегда заканчивается отказом, и ssh выходит с кодом 255 - при
+# `pipefail` это уронило бы весь скрипт, поэтому `|| true`. Порт открывается раньше, чем
+# sshd готов отвечать, поэтому спрашиваем, пока не получим список.
+methods=""
+for _ in $(seq 1 30); do
+  methods=$(ssh -v -p 2206 -o BatchMode=yes -o PreferredAuthentications=none -o ConnectTimeout=5 \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null probe@127.0.0.1 true 2>&1 \
+    | sed -n 's/.*Authentications that can continue: //p' | head -1 || true)
+  [ -n "$methods" ] && break
+  sleep 1
+done
 echo "методы входа на 2206: $methods"
 case ",$methods," in
   *,keyboard-interactive,*) ;;
