@@ -10,7 +10,7 @@ SSH, SFTP and SCP with an editor, serial consoles, telnet and raw TCP.
 Tabs and split panes, port forwards, resource monitoring, a Docker panel
 and a local terminal - in an installer of about **8.0 MB**.
 
-Free, open source, Apache 2.0. Windows x64 and Linux x64, **v1.4.0**.
+Free, open source, Apache 2.0. Windows x64 and Linux x64, **v1.5.0**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -46,7 +46,7 @@ the PTY live in a single Rust binary.
 Measured on 1.3.1 with no session open: about 100 MB private across the tree of seven
 processes, and 70 MB on a fresh profile. Adding up Working Set in Task Manager gives about
 480 MB - the same memory counted once per WebView2 process that shares it. The Electron
-figures are public measurements normalised to the same metric; size is the 1.4.0 installer.
+figures are public measurements normalised to the same metric; size is the 1.5.0 installer.
 
 ---
 
@@ -70,7 +70,9 @@ figures are public measurements normalised to the same metric; size is the 1.4.0
 
 ### Connections
 - Sidebar with **drag & drop groups**, right-click menus and search, **live connection status**
-- Auth: **password · key · keyboard-interactive 2FA · SSH agent** (pick the key from the ring)
+- Auth: **password · key · keyboard-interactive 2FA · SSH agent** (pick the key from the ring).
+  **Since v1.5** a saved password also answers a keyboard-interactive password prompt, so servers
+  with the password behind PAM work for tunnels, Fleet and tasks too
 - **Serial / COM console** - baud, parity, flow control, DTR/RTS, send BREAK
 - **Telnet** - option negotiation, terminal type, window size, BREAK/Interrupt/AYT, per-server Enter mode
 - **Raw TCP** - untouched bytes, for console servers
@@ -106,6 +108,8 @@ figures are public measurements normalised to the same metric; size is the 1.4.0
 - **VPN profile (v1.4)** saves bandwidth: 16-bit colour, no wallpaper or effects, up to 30 frames
   per second; the LAN profile keeps full quality
 - **Full screen (v1.4)** for RDP and VNC, wheel in both directions, Ctrl+Alt+Del as a command
+- **Win, Alt+Tab, Ctrl+Esc go to the remote desktop (v1.5)** while its canvas has focus; the
+  keyboard returns to Windows on a click outside, and Ctrl+Alt+Pause or Ctrl+Alt+Home leaves
 - **Resolution follows the window (v1.3.1)**: stretch it and the server redraws the desktop
   at the new size, with no reconnection
 - **The desktop session belongs to the SSH connection (v1.3.1)**, not to a window: switching
@@ -135,6 +139,9 @@ figures are public measurements normalised to the same metric; size is the 1.4.0
   server, only on the server, and "can't tell" (same size, no modification time to check).
   "Upload N" sends only new and changed files, re-checks the server first and stops if a file
   changed there since the comparison; nothing is deleted on the server
+- **Uploads never leave a damaged file (v1.5)**: SFTP and SCP write to a temporary file next to
+  the target and replace it at the end, keeping its permissions; a cancelled or broken upload
+  leaves the old file whole, and a symlink stays a symlink
 - **Built-in editor** (CodeMirror 6) - atomic save back to the server
 - **External editor** - OS default app, re-upload on save
 - **SCP fallback (v1.2.7)** - servers with no `Subsystem sftp` (old switches, stripped images)
@@ -144,6 +151,8 @@ figures are public measurements normalised to the same metric; size is the 1.4.0
 - Forwards: **local `-L`**, **remote `-R`**, **dynamic SOCKS5 `-D`** (tunnel create can be cancelled)
 - **Resource monitor** - CPU / RAM / disk / load (`/proc` + `df`)
 - **Docker workspace (v1.2.0)** - containers with live `docker stats`, ports and health; files inside a container; start/stop/restart/remove, shell
+- **Sort and search (v1.5)** in processes and containers: any column, several words at once;
+  CPU and memory per container
 - **Docker Compose (v1.2.0)** - projects and services, up/down/start/stop/restart, per-service logs and shell, compose YAML
 - **Docker logs** - coloured levels, follow (`-f`) with stop, wide panel; **detach** to a second monitor
 - **Host logs (v1.2.0)** - `journalctl` with highlighting, filter and an error report exported to `.txt`
@@ -174,10 +183,28 @@ figures are public measurements normalised to the same metric; size is the 1.4.0
   always), a time limit, retries and "continue on error"
 - **Dry run** checks the servers and shows the plan without changing anything; progress per step
   in real time, and a history of the last 50 runs
+- **Variables, secrets and environments (v1.5)** - `{{name}}` in any field, values asked for
+  before the run; a secret is never stored and shows as `••••` in output and history;
+  environments (prod, stage) carry their own values and servers
+- **Templates and export (v1.5)** - service restart with a check, deploy, Compose update; a task
+  goes to a file without secrets and finds its servers by address and name on another machine
 - **Workspace profiles** - a set of tabs under a name ("Production", "Logs"): open next to the
   current tabs or instead of them
 
+### For organisations (v1.5)
+- **Action log** - connections, file operations, services, containers, databases, Fleet, tasks,
+  tunnels, remote desktops and terminal lines on Enter (never the line after a password prompt).
+  Monthly JSONL files chained by SHA-256 with a "Verify" button, export, and forwarding to
+  syslog or a SIEM (RFC 5424, UDP or TCP)
+- **Administrator policies** - Group Policy (`HKLM\SOFTWARE\Policies\Serein`, ADMX template in
+  `docs/policy`) or a protected `policy.json`: lock any setting, allow only listed servers,
+  forbid saved passwords, require a master password, remove the local terminal and session
+  recording, forbid legacy SSH algorithms. A policy that cannot be understood is not applied,
+  and the error is shown
+
 ### App windows
+- **Tray (v1.5)** - closing the main window hides Serein in the tray, sessions and transfers keep
+  running; on by default on Windows, off on Linux
 - Detached tabs, SFTP, logs, and workspace panels - **separate OS windows**, no Windows caption
 - **Magnet**: windows snap flush and to guides (edges / center)
 - The main window drags a docked group; drag an extra window to undock it
@@ -232,17 +259,17 @@ Matrix and smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
 
 From [Releases](../../releases/latest):
 
-- **`Serein_1.4.0_x64-setup.exe`** - Windows installer (Start menu, uninstall).
-- **`Serein_1.4.0_x64-portable.zip`** - portable Windows build, no installer: `Serein.exe` and the RDP helper `serein-rdp.exe`. Unpack into a folder and run. Settings still live in `%APPDATA%\serein`.
-- **`Serein_1.4.0_amd64.deb`** - Debian/Ubuntu/**Astra** package (`/usr/bin/serein`).
-- **`Serein-1.4.0-1.x86_64.rpm`** - **Fedora** package. Installs and runs on a clean Fedora; on RedOS and Alt it has not been checked yet.
-- **`Serein_1.4.0_amd64.AppImage`** - portable Linux binary, one file for both families.
+- **`Serein_1.5.0_x64-setup.exe`** - Windows installer (Start menu, uninstall).
+- **`Serein_1.5.0_x64-portable.zip`** - portable Windows build, no installer: `Serein.exe` and the RDP helper `serein-rdp.exe`. Unpack into a folder and run. Settings still live in `%APPDATA%\serein`.
+- **`Serein_1.5.0_amd64.deb`** - Debian/Ubuntu/**Astra** package (`/usr/bin/serein`).
+- **`Serein-1.5.0-1.x86_64.rpm`** - **Fedora** package. Installs and runs on a clean Fedora; on RedOS and Alt it has not been checked yet.
+- **`Serein_1.5.0_amd64.AppImage`** - portable Linux binary, one file for both families.
 
 Every release publishes SHA-256 sums and a **CycloneDX SBOM** for both the Rust and the npm
 dependency trees. Check the sums - the Windows build is **unsigned** and SmartScreen will
 complain (*More info → Run anyway*).
 
-Release notes: [RELEASE_NOTES_v1.4.0.md](docs/RELEASE_NOTES_v1.4.0.md).
+Release notes: [RELEASE_NOTES_v1.5.0.md](docs/RELEASE_NOTES_v1.5.0.md).
 Security policy and threat model: [SECURITY.md](SECURITY.md).
 
 Auto-update checks GitHub Releases first and falls back to our own mirror
@@ -282,7 +309,7 @@ see offline mode below, and [SECURITY.md](SECURITY.md) for exactly what goes out
 │  pty · term_out · store · schema · vault · crypto · dpapi ·            │
 │  os_secrets · keygen · importers · knownhosts · remoteedit ·           │
 │  ownership · multihost · tasks · foldersync · db · mongo · mysql ·     │
-│  metrics · profile_lock · tools · error · sync                         │
+│  metrics · profile_lock · tools · actionlog · policy · error · sync    │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -374,13 +401,17 @@ stripped; there is no application-wide log file yet - for that, use `npm run tau
   relatives, not the same system: older libraries there can stop a Fedora-built binary.
 - Windows Server in the overview is checked against recorded answers only: the stand has no live machine.
 - RDP over a slow VPN is usable but heavier than `mstsc`: plain bitmaps, no RemoteFX/H.264 yet.
+- The action log goes to syslog without TLS; protect the network path or use a local relay.
+- Policies are local - Group Policy or a file. There is no delivery from an organisation
+  server, and no shared server catalog or roles yet.
 - Not planned: cloud sync, mobile, plugins, a generic LLM chat pane.
 
 Product plan. 1.2.7 was about security; 1.3 closed three parity items at once: **VNC**,
 **databases** over our own channels, and **Windows Server**; 1.3.1 added **RDP**; 1.4 brought
-**all seven databases**, **tasks**, a finished **Fleet**, **folder comparison** and **profiles**.
-Still open: macOS, the Russian software registry, and the corporate layer (audit log, shared
-catalog, roles). See [release notes 1.4.0](docs/RELEASE_NOTES_v1.4.0.md).
+**all seven databases**, **tasks**, a finished **Fleet**, **folder comparison** and **profiles**;
+1.5 started the corporate layer with the **action log** and **administrator policies**, and gave
+tasks **variables, secrets and environments**. Still open: macOS, the Russian software registry,
+a shared catalog, roles and SSO. See [release notes 1.5.0](docs/RELEASE_NOTES_v1.5.0.md).
 
 ---
 
