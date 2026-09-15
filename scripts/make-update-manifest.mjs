@@ -71,11 +71,14 @@ function signatureFor(file) {
       throw new Error(`нет подписи ${sig} и нет ключа ${keyPath}`)
     }
     const args = ['run', 'tauri', '--', 'signer', 'sign', '--private-key-path', keyPath, file]
+    // Пароль - только переменной окружения. Аргументом он попадал в строку команды, которую
+    // npm печатает перед запуском, и оказывался в выводе, логах и истории терминала.
+    const env = { ...process.env }
     if (existsSync(passPath)) {
-      args.splice(-1, 0, '--password', readFileSync(passPath, 'utf8').trim())
+      env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = readFileSync(passPath, 'utf8').trim()
     }
     console.log(`подписываю ${file}`)
-    execFileSync('npm', args, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' })
+    execFileSync('npm', args, { cwd: root, env, stdio: 'inherit', shell: process.platform === 'win32' })
   }
   return readFileSync(sig, 'utf8').trim()
 }
