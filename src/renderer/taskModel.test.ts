@@ -7,6 +7,12 @@ import {
   runSummary,
   stepLabel,
   taskProblem,
+  references,
+  variableProblem,
+  effectiveServers,
+  initialValues,
+  promptVariables,
+  TEMPLATES,
   type ServerProgress,
   type TaskDef
 } from './taskModel'
@@ -98,5 +104,40 @@ describe('отчёт прогона', () => {
     )
     expect(p[0].steps.map((s) => s.state)).toEqual(['pending', 'failed', 'pending'])
     expect(p[0].steps[1].output).toBe('код 1')
+  })
+})
+
+describe('переменные и среды задачи', () => {
+  it('находит переменные, но не шаблоны Docker', () => {
+    expect(references("cd {{ dir }} && docker ps --format '{{.Names}}' {{server.host}}")).toEqual(['dir', 'server.host'])
+  })
+
+  it('ругается на неизвестные и повторы, пропускает встроенные', () => {
+    const t = task({ steps: [{ ...newStep('command'), command: 'echo {{ver}} {{server.name}}' }] })
+    expect(taskProblem(t)).toBe('Шаг 1: неизвестная переменная «ver»')
+    expect(taskProblem({ ...t, variables: [{ name: 'ver' }] })).toBeNull()
+    expect(variableProblem({ ...t, variables: [{ name: 'ver' }, { name: 'ver' }] })).toContain('дважды')
+    expect(variableProblem({ ...t, variables: [{ name: 'server.x' }] })).toContain('заняты')
+  })
+
+  it('шаблон в адресе проверки не проверяется как адрес', () => {
+    const t = task({ variables: [{ name: 'url' }], steps: [{ ...newStep('healthcheck'), check: 'http', target: '{{url}}' }] })
+    expect(taskProblem(t)).toBeNull()
+  })
+
+  it('среда подставляет свои значения и серверы, секреты всегда пустые', () => {
+    const t = task({
+      serverIds: ['a'],
+      variables: [{ name: 'ver', default: '1' }, { name: 'token', secret: true, default: 'leak' }, { name: 'dir', ask: true }],
+      profiles: [{ name: 'prod', values: { ver: '2' }, serverIds: ['p'] }]
+    })
+    expect(effectiveServers(t)).toEqual(['a'])
+    expect(effectiveServers(t, 'prod')).toEqual(['p'])
+    expect(initialValues(t, 'prod')).toEqual({ ver: '2', token: '', dir: '' })
+    expect(promptVariables(t).map((v) => v.name)).toEqual(['token', 'dir'])
+  })
+
+  it('готовые шаблоны без ошибок в переменных', () => {
+    for (const tpl of TEMPLATES) expect(variableProblem({ ...tpl.make(), serverIds: ['a'] })).toBeNull()
   })
 })

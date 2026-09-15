@@ -5795,3 +5795,62 @@ button.secondary:hover {
   padding: 0;
   min-width: 0;
 }
+
+/* Задачи: переменные, среды, запрос значений перед запуском. */
+.task-var {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) minmax(140px, 2fr) auto auto auto;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.task-profile {
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 6px 8px;
+  margin-bottom: 6px;
+}
+.task-profile-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.task-profile-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.task-ask {
+  border: 1px solid rgba(var(--accent-rgb), 0.5);
+  border-radius: var(--r);
+  padding: 10px;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.task-ask-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.task-run select {
+  width: auto;
+  max-width: 220px;
+}
+.task-profile-head input {
+  width: auto;
+  flex: 1 1 160px;
+}
+.tasks-modal button.primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.tasks-list-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+}

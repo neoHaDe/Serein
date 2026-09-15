@@ -22,7 +22,7 @@ use crate::remote_fs::{self, SessionFs};
 use crate::{docker, platform, ssh, store};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -142,6 +142,45 @@ pub struct Task {
     pub server_ids: Vec<String>,
     #[serde(default)]
     pub concurrency: Option<u32>,
+    /// Переменные: `{{имя}}` в полях шагов.
+    #[serde(default)]
+    pub variables: Vec<Variable>,
+    /// Среды: свои значения переменных и, если заданы, свои серверы.
+    #[serde(default)]
+    pub profiles: Vec<Profile>,
+    /// Только на время запуска: выбранная среда и введённые значения. В файл задачи не пишутся.
+    #[serde(default, skip_serializing)]
+    pub run_profile: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub run_values: BTreeMap<String, String>,
+}
+
+/// Переменная задачи.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Variable {
+    pub name: String,
+    #[serde(default)]
+    pub default: String,
+    /// Спросить перед запуском, подставив умолчание.
+    #[serde(default)]
+    pub ask: bool,
+    /// Не хранится: вводится перед каждым запуском, в выводе заменяется точками.
+    #[serde(default)]
+    pub secret: bool,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Среда: prod, stage - свои значения переменных и, если заданы, свои серверы.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Profile {
+    pub name: String,
+    #[serde(default)]
+    pub values: BTreeMap<String, String>,
+    #[serde(default)]
+    pub server_ids: Vec<String>,
 }
 
 fn first_line(s: &str) -> String {
@@ -187,6 +226,317 @@ impl Step {
                 .min(MAX_STEP_TIMEOUT_SECS),
         )
     }
+}
+
+/// Встроенные переменные: свои у каждого сервера.
+pub const BUILTIN_VARS: &[&str] = &["server.name", "server.host", "server.user"];
+
+/// Имя переменной: буква или `_`, дальше буквы, цифры, `_`, `.`, `-`. Только такие `{{…}}` -
+/// переменные: `{{.Names}}` и `{{json .}}` в шаблонах Docker остаются как есть.
+fn var_name(inner: &str) -> Option<&str> {
+    let n = inner.trim();
+    let mut chars = n.chars();
+    let first = chars.next()?;
+    ((first.is_ascii_alphabetic() || first == '_') && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')))
+        .then_some(n)
+}
+
+/// Имена переменных, на которые ссылается текст.
+fn references(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("{{") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else { break };
+        if let Some(n) = var_name(&after[..end]) {
+            out.push(n.to_owned());
+        }
+        rest = &after[end + 2..];
+    }
+    out
+}
+
+/// Подстановка значений. Неизвестная переменная - ошибка, а не пустая строка: команда с
+/// выпавшим куском пути опаснее, чем отказ её выполнять.
+fn substitute(text: &str, vars: &BTreeMap<String, String>) -> Result<String, String> {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("{{") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else { break };
+        match var_name(&after[..end]) {
+            Some(n) => {
+                out.push_str(&rest[..start]);
+                out.push_str(vars.get(n).ok_or_else(|| format!("неизвестная переменная «{n}»"))?);
+            }
+            None => out.push_str(&rest[..start + 2 + end + 2]),
+        }
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+/// Текстовые поля шага, в которых бывают переменные.
+fn action_texts(a: &Action) -> Vec<&str> {
+    match a {
+        Action::Command { command } => vec![command.as_str()],
+        Action::Upload { local_path, remote_path }
+        | Action::Download { remote_path, local_path }
+        | Action::Sync { local_path, remote_path, .. } => vec![local_path.as_str(), remote_path.as_str()],
+        Action::Service { service, action } => vec![service.as_str(), action.as_str()],
+        Action::Docker { container, action } => vec![container.as_str(), action.as_str()],
+        Action::Healthcheck { target, .. } => vec![target.as_str()],
+    }
+}
+
+fn expand_step(step: &Step, vars: &BTreeMap<String, String>) -> Result<Step, String> {
+    let s = |t: &str| substitute(t, vars);
+    let action = match &step.action {
+        Action::Command { command } => Action::Command { command: s(command)? },
+        Action::Upload { local_path, remote_path } => {
+            Action::Upload { local_path: s(local_path)?, remote_path: s(remote_path)? }
+        }
+        Action::Download { remote_path, local_path } => {
+            Action::Download { remote_path: s(remote_path)?, local_path: s(local_path)? }
+        }
+        Action::Sync { local_path, remote_path, include_remote_newer } => Action::Sync {
+            local_path: s(local_path)?,
+            remote_path: s(remote_path)?,
+            include_remote_newer: *include_remote_newer,
+        },
+        Action::Service { service, action } => Action::Service { service: s(service)?, action: s(action)? },
+        Action::Docker { container, action } => Action::Docker { container: s(container)?, action: s(action)? },
+        Action::Healthcheck { check, target, attempts, interval_sec } => Action::Healthcheck {
+            check: *check,
+            target: s(target)?,
+            attempts: *attempts,
+            interval_sec: *interval_sec,
+        },
+    };
+    Ok(Step { action, ..step.clone() })
+}
+
+/// Шаг, готовый к выполнению на сервере: значения подставлены, поля проверены.
+fn prepare_step(step: &Step, vars: &BTreeMap<String, String>) -> Result<Step, String> {
+    let expanded = expand_step(step, vars)?;
+    validate_step(&expanded)?;
+    Ok(expanded)
+}
+
+/// Серверы запуска: у выбранной среды свои, если заданы.
+pub fn effective_servers(task: &Task) -> Vec<String> {
+    task.run_profile
+        .as_deref()
+        .and_then(|name| task.profiles.iter().find(|p| p.name == name))
+        .filter(|p| !p.server_ids.is_empty())
+        .map_or_else(|| task.server_ids.clone(), |p| p.server_ids.clone())
+}
+
+fn validate_variables(task: &Task) -> Result<(), String> {
+    let mut names = BTreeSet::new();
+    for v in &task.variables {
+        let n = v.name.trim();
+        if var_name(n) != Some(n) {
+            return Err(format!("переменная «{}»: имя из букв, цифр, «_», «.», «-», начиная с буквы", v.name));
+        }
+        if n.starts_with("server.") {
+            return Err(format!("переменная «{n}»: имена server.* заняты встроенными"));
+        }
+        if !names.insert(n.to_owned()) {
+            return Err(format!("переменная «{n}» объявлена дважды"));
+        }
+    }
+    let mut profiles = BTreeSet::new();
+    for p in &task.profiles {
+        if p.name.trim().is_empty() {
+            return Err("у среды нет названия".into());
+        }
+        if !profiles.insert(p.name.trim().to_owned()) {
+            return Err(format!("среда «{}» объявлена дважды", p.name));
+        }
+    }
+    for (i, step) in task.steps.iter().enumerate() {
+        for text in action_texts(&step.action) {
+            for r in references(text) {
+                if !names.contains(&r) && !BUILTIN_VARS.contains(&r.as_str()) {
+                    return Err(format!("Шаг {}: неизвестная переменная «{r}»", i + 1));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Значения для запуска: умолчание, затем выбранная среда, затем введённое. Секреты -
+/// только введённые: сохранённого значения у них нет по определению.
+pub fn resolve_values(task: &Task) -> Result<(BTreeMap<String, String>, Vec<String>), String> {
+    let profile = match task.run_profile.as_deref().filter(|p| !p.is_empty()) {
+        Some(name) => Some(task.profiles.iter().find(|p| p.name == name).ok_or_else(|| format!("в задаче нет среды «{name}»"))?),
+        None => None,
+    };
+    let mut values = BTreeMap::new();
+    let mut secrets = Vec::new();
+    for v in &task.variables {
+        let mut value = if v.secret { String::new() } else { v.default.clone() };
+        if !v.secret {
+            if let Some(pv) = profile.and_then(|p| p.values.get(&v.name)) {
+                value = pv.clone();
+            }
+        }
+        if let Some(rv) = task.run_values.get(&v.name) {
+            value = rv.clone();
+        }
+        if v.secret {
+            if value.is_empty() {
+                return Err(format!("не введено значение секретной переменной «{}»", v.name));
+            }
+            secrets.push(value.clone());
+        }
+        values.insert(v.name.clone(), value);
+    }
+    Ok((values, secrets))
+}
+
+/// Секретные значения в выводе заменяются точками: команда может напечатать токен, ошибка -
+/// процитировать строку с паролем.
+fn mask(text: &str, secrets: &[String]) -> String {
+    secrets.iter().filter(|s| !s.is_empty()).fold(text.to_owned(), |acc, s| acc.replace(s.as_str(), "••••"))
+}
+
+/// Задача перед записью: без значений запуска и без секретов - их только спрашивают.
+pub fn sanitize_for_save(t: &mut Value) {
+    let Some(obj) = t.as_object_mut() else { return };
+    obj.remove("runValues");
+    obj.remove("runProfile");
+    let mut secret = BTreeSet::new();
+    if let Some(vars) = obj.get_mut("variables").and_then(Value::as_array_mut) {
+        for v in vars {
+            if v.get("secret").and_then(Value::as_bool) == Some(true) {
+                if let Some(name) = v.get("name").and_then(Value::as_str) {
+                    secret.insert(name.to_owned());
+                }
+                if let Some(o) = v.as_object_mut() {
+                    o.insert("default".into(), json!(""));
+                }
+            }
+        }
+    }
+    if let Some(profiles) = obj.get_mut("profiles").and_then(Value::as_array_mut) {
+        for p in profiles {
+            if let Some(vals) = p.get_mut("values").and_then(Value::as_object_mut) {
+                vals.retain(|k, _| !secret.contains(k));
+            }
+        }
+    }
+}
+
+fn server_ref(servers: &[Value], id: &str) -> Option<Value> {
+    servers.iter().find(|s| s.get("id").and_then(Value::as_str) == Some(id)).map(|s| {
+        json!({
+            "name": s.get("name").cloned().unwrap_or(Value::Null),
+            "host": s.get("host").cloned().unwrap_or(Value::Null),
+            "port": s.get("port").cloned().unwrap_or(Value::Null),
+            "username": s.get("username").cloned().unwrap_or(Value::Null),
+        })
+    })
+}
+
+/// Сервер на этой машине по ссылке из файла: сначала адрес, порт и пользователь, потом имя.
+fn find_server(servers: &[Value], r: &Value) -> Option<String> {
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(|x| x.trim().to_lowercase()).unwrap_or_default();
+    let port = |v: &Value| v.get("port").and_then(Value::as_u64).unwrap_or(22);
+    let by_addr = servers.iter().find(|x| {
+        !text(r, "host").is_empty()
+            && text(x, "host") == text(r, "host")
+            && port(x) == port(r)
+            && (text(r, "username").is_empty() || text(x, "username") == text(r, "username"))
+    });
+    by_addr
+        .or_else(|| servers.iter().find(|x| !text(r, "name").is_empty() && text(x, "name") == text(r, "name")))
+        .and_then(|x| x.get("id").and_then(Value::as_str).map(str::to_owned))
+}
+
+fn describe_ref(r: &Value) -> String {
+    let f = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("?").to_owned();
+    format!("{} ({}@{})", f("name"), f("username"), f("host"))
+}
+
+fn resolve_refs(refs: Option<&Value>, servers: &[Value], missing: &mut Vec<String>) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for r in refs.and_then(Value::as_array).into_iter().flatten() {
+        match find_server(servers, r) {
+            Some(id) if !ids.contains(&id) => ids.push(id),
+            Some(_) => {}
+            None => {
+                let d = describe_ref(r);
+                if !missing.contains(&d) {
+                    missing.push(d);
+                }
+            }
+        }
+    }
+    ids
+}
+
+/// Задача для переноса на другую машину: без id, секретов и значений запуска; серверы -
+/// адресом и именем, потому что id на другой машине другие.
+pub fn export_task(task: &Task, servers: &[Value]) -> Value {
+    let mut t = task.clone();
+    t.id = None;
+    for v in &mut t.variables {
+        if v.secret {
+            v.default.clear();
+        }
+    }
+    let mut body = serde_json::to_value(&t).unwrap_or_default();
+    sanitize_for_save(&mut body);
+    let refs = |ids: &[String]| ids.iter().filter_map(|id| server_ref(servers, id)).collect::<Vec<_>>();
+    if let Some(o) = body.as_object_mut() {
+        o.remove("id");
+        o.remove("serverIds");
+        o.insert("servers".into(), json!(refs(&task.server_ids)));
+    }
+    if let Some(profiles) = body.get_mut("profiles").and_then(Value::as_array_mut) {
+        for (p, orig) in profiles.iter_mut().zip(&task.profiles) {
+            if let Some(o) = p.as_object_mut() {
+                o.remove("serverIds");
+                o.insert("servers".into(), json!(refs(&orig.server_ids)));
+            }
+        }
+    }
+    json!({ "format": "serein-task", "version": 1, "task": body })
+}
+
+/// Разбор выгруженной задачи. Серверы находятся по адресу, затем по имени; ненайденные -
+/// во втором значении, словами.
+pub fn import_task(file: &Value, servers: &[Value]) -> Result<(Value, Vec<String>), String> {
+    if file.get("format").and_then(Value::as_str) != Some("serein-task") {
+        return Err("это не выгруженная задача Serein".into());
+    }
+    let mut body = file.get("task").cloned().filter(Value::is_object).ok_or("в файле нет задачи")?;
+    let mut missing = Vec::new();
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("id");
+        let ids = resolve_refs(obj.get("servers"), servers, &mut missing);
+        obj.remove("servers");
+        obj.insert("serverIds".into(), json!(ids));
+        if let Some(profiles) = obj.get_mut("profiles").and_then(Value::as_array_mut) {
+            for p in profiles {
+                if let Some(po) = p.as_object_mut() {
+                    let ids = resolve_refs(po.get("servers"), servers, &mut missing);
+                    po.remove("servers");
+                    po.insert("serverIds".into(), json!(ids));
+                }
+            }
+        }
+    }
+    sanitize_for_save(&mut body);
+    let parsed: Task = serde_json::from_value(body.clone()).map_err(|e| format!("задача в файле не разобралась: {e}"))?;
+    if parsed.name.trim().is_empty() {
+        return Err("у задачи в файле нет названия".into());
+    }
+    Ok((body, missing))
 }
 
 /// Выполнять ли шаг, если до него задача на этом сервере остановилась (`failed`) или нет.
@@ -238,58 +588,56 @@ pub fn validate(task: &Task) -> Result<(), String> {
     if task.steps.is_empty() {
         return Err("В задаче нет шагов".into());
     }
-    if task.server_ids.is_empty() {
+    if effective_servers(task).is_empty() {
         return Err("Не выбран ни один сервер".into());
     }
+    validate_variables(task)?;
     for (i, step) in task.steps.iter().enumerate() {
-        let n = i + 1;
-        let fail = |what: String| Err(format!("Шаг {n}: {what}"));
-        let empty = |v: &str| v.trim().is_empty();
-        match &step.action {
-            Action::Command { command } if empty(command) => return fail("пустая команда".into()),
-            Action::Upload { local_path, remote_path }
-            | Action::Download { local_path, remote_path }
-            | Action::Sync { local_path, remote_path, .. } => {
-                if empty(local_path) || empty(remote_path) {
-                    return fail("нужны и своя папка, и путь на сервере".into());
-                }
-                if let Err(e) = crate::sftp::check_remote_path(remote_path) {
-                    return fail(e);
-                }
-            }
-            Action::Service { service, action } => {
-                if let Err(e) = crate::workspace::check_service(service, action) {
-                    return fail(e);
-                }
-            }
-            Action::Docker { container, action } => {
-                if let Err(e) = safe_container(container) {
-                    return fail(e);
-                }
-                if docker::action_cmd(container, action).is_none() {
-                    return fail(format!("неизвестное действие с контейнером «{action}»"));
-                }
-            }
-            Action::Healthcheck { check, target, .. } => {
-                if empty(target) {
-                    return fail("не указано, что проверять".into());
-                }
-                match check {
-                    CheckKind::Port if parse_host_port(target).is_none() => {
-                        return fail("порт указывается как адрес:порт, например 127.0.0.1:8080".into())
-                    }
-                    CheckKind::Http => {
-                        if let Err(e) = check_url(target) {
-                            return fail(e);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            _ => {}
+        // С переменными поля проверяются после подстановки, на каждом сервере: до неё
+        // «{{service}}» - не имя службы, а шаблон.
+        if action_texts(&step.action).iter().any(|t| !references(t).is_empty()) {
+            continue;
         }
+        validate_step(step).map_err(|e| format!("Шаг {}: {e}", i + 1))?;
     }
     Ok(())
+}
+
+/// Поля одного шага: пустые, недопустимые пути, службы, контейнеры, адреса проверок.
+fn validate_step(step: &Step) -> Result<(), String> {
+    let empty = |v: &str| v.trim().is_empty();
+    match &step.action {
+        Action::Command { command } if empty(command) => Err("пустая команда".into()),
+        Action::Upload { local_path, remote_path }
+        | Action::Download { local_path, remote_path }
+        | Action::Sync { local_path, remote_path, .. } => {
+            if empty(local_path) || empty(remote_path) {
+                return Err("нужны и своя папка, и путь на сервере".into());
+            }
+            crate::sftp::check_remote_path(remote_path).map(|_| ())
+        }
+        Action::Service { service, action } => crate::workspace::check_service(service, action).map(|_| ()),
+        Action::Docker { container, action } => {
+            safe_container(container)?;
+            if docker::action_cmd(container, action).is_none() {
+                return Err(format!("неизвестное действие с контейнером «{action}»"));
+            }
+            Ok(())
+        }
+        Action::Healthcheck { check, target, .. } => {
+            if empty(target) {
+                return Err("не указано, что проверять".into());
+            }
+            match check {
+                CheckKind::Port if parse_host_port(target).is_none() => {
+                    Err("порт указывается как адрес:порт, например 127.0.0.1:8080".into())
+                }
+                CheckKind::Http => check_url(target).map(|_| ()),
+                _ => Ok(()),
+            }
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Команда проверки под систему сервера.
@@ -820,6 +1168,9 @@ struct RunCtx<'a> {
     multi: bool,
     cancel: ssh::CancelRx,
     emit: &'a (dyn Fn(Value) + Sync),
+    /// Значения переменных запуска и секреты, которые надо прятать в выводе.
+    values: &'a BTreeMap<String, String>,
+    secrets: &'a [String],
 }
 
 fn step_json(i: usize, step: &Step, state: &str, output: &str, ms: u128, attempts: u32) -> Value {
@@ -843,10 +1194,11 @@ async fn run_server(ctx: &RunCtx<'_>, server_id: String) -> Value {
             "name": name,
             "step": step,
             "state": state,
-            "output": output,
+            "output": output.map(|o| mask(o, ctx.secrets)),
         }))
     };
     let finish = |state: &str, error: Option<String>, steps: Vec<Value>| {
+        let error = error.map(|e| mask(&e, ctx.secrets));
         emit(None, state, error.as_deref());
         json!({
             "serverId": server_id,
@@ -867,6 +1219,15 @@ async fn run_server(ctx: &RunCtx<'_>, server_id: String) -> Value {
     }
     if let Some(why) = crate::multihost::skip_reason(&chain) {
         return finish("skipped", Some(why), Vec::new());
+    }
+    // Встроенные переменные - свои у каждого сервера.
+    let mut vars = ctx.values.clone();
+    {
+        let first = chain.first();
+        let field = |k: &str| first.and_then(|s| s.get(k)).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+        vars.insert("server.name".into(), name.clone());
+        vars.insert("server.host".into(), field("host"));
+        vars.insert("server.user".into(), field("username"));
     }
     if *ctx.cancel.borrow() {
         return finish("cancelled", Some("задача остановлена до подключения".into()), Vec::new());
@@ -913,7 +1274,17 @@ async fn run_server(ctx: &RunCtx<'_>, server_id: String) -> Value {
         }
         if ctx.dry_run {
             emit(Some(i), "running", None);
-            let checked = or_stop(&host.cancel, tokio::time::timeout(PLAN_LIMIT, plan_action(&host, &step.action))).await;
+            let expanded = match prepare_step(step, &vars) {
+                Ok(s) => s,
+                Err(e) => {
+                    let why = mask(&e, ctx.secrets);
+                    problems += 1;
+                    emit(Some(i), "problem", Some(&why));
+                    steps.push(step_json(i, step, "problem", &why, t.elapsed().as_millis(), 0));
+                    continue;
+                }
+            };
+            let checked = or_stop(&host.cancel, tokio::time::timeout(PLAN_LIMIT, plan_action(&host, &expanded.action))).await;
             let (state, mut out) = match checked {
                 None => {
                     emit(Some(i), "cancelled", None);
@@ -935,6 +1306,7 @@ async fn run_server(ctx: &RunCtx<'_>, server_id: String) -> Value {
                 When::Always => out.push_str(" (в любом случае)"),
                 When::Success => {}
             }
+            let out = mask(&out, ctx.secrets);
             emit(Some(i), state, Some(&out));
             steps.push(step_json(i, step, state, &out, t.elapsed().as_millis(), 0));
             continue;
@@ -950,7 +1322,11 @@ async fn run_server(ctx: &RunCtx<'_>, server_id: String) -> Value {
             continue;
         }
         emit(Some(i), "running", None);
-        let (ok, out, attempts) = run_step(&host, step).await;
+        let (ok, out, attempts) = match prepare_step(step, &vars) {
+            Ok(expanded) => run_step(&host, &expanded).await,
+            Err(e) => (false, e, 0),
+        };
+        let out = mask(&out, ctx.secrets);
         let state = if ok { "done" } else { "failed" };
         emit(Some(i), state, Some(&out));
         steps.push(step_json(i, step, state, &out, t.elapsed().as_millis(), attempts));
@@ -1026,19 +1402,23 @@ async fn run_with(
     use futures::stream::{FuturesUnordered, StreamExt};
 
     validate(task)?;
+    let (values, secrets) = resolve_values(task)?;
+    let server_ids = effective_servers(task);
     let started_at = now_ms();
     let ctx = RunCtx {
         task,
         run_id,
         dry_run,
-        multi: task.server_ids.len() > 1,
+        multi: server_ids.len() > 1,
         cancel: cancel.clone(),
         emit,
+        values: &values,
+        secrets: &secrets,
     };
     let concurrency = task.concurrency.unwrap_or(4).clamp(1, 64) as usize;
-    let mut queue = task.server_ids.clone().into_iter();
+    let mut queue = server_ids.clone().into_iter();
     let mut running = FuturesUnordered::new();
-    let mut servers = Vec::with_capacity(task.server_ids.len());
+    let mut servers = Vec::with_capacity(server_ids.len());
     for _ in 0..concurrency {
         match queue.next() {
             Some(id) => running.push(run_server(&ctx, id)),
@@ -1056,6 +1436,7 @@ async fn run_with(
         "runId": run_id,
         "taskId": task.id,
         "taskName": task.name,
+        "profile": task.run_profile,
         "dryRun": dry_run,
         "cancelled": *cancel.borrow(),
         "startedAt": started_at,
@@ -1233,5 +1614,100 @@ mod stop_tests {
         assert_eq!(or_stop(&rx, async { 5 }).await, Some(5));
         drop(tx);
         assert_eq!(or_stop(&rx, async { 6 }).await, Some(6), "закрытый канал - не остановка");
+    }
+}
+
+#[cfg(test)]
+mod vars_tests {
+    use super::*;
+
+    fn task(v: Value) -> Task {
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn подстановка_не_трогает_шаблоны_docker_и_ругается_на_неизвестное() {
+        let vars = BTreeMap::from([("dir".to_owned(), "/opt/app".to_owned()), ("server.name".to_owned(), "prod".to_owned())]);
+        assert_eq!(substitute("cd {{dir}} && echo {{ server.name }}", &vars).unwrap(), "cd /opt/app && echo prod");
+        assert_eq!(
+            substitute("docker ps --format '{{.Names}} {{json .}}'", &vars).unwrap(),
+            "docker ps --format '{{.Names}} {{json .}}'"
+        );
+        assert_eq!(substitute("echo {{nope}}", &vars).unwrap_err(), "неизвестная переменная «nope»");
+        assert_eq!(references("{{a}} {{b.c}} {{.X}}"), vec!["a", "b.c"]);
+    }
+
+    #[test]
+    fn значения_умолчание_среда_введённое_и_секреты() {
+        let mut t = task(json!({
+            "name": "t", "serverIds": ["a"],
+            "steps": [{ "kind": "command", "command": "deploy {{ver}} {{token}}" }],
+            "variables": [ { "name": "ver", "default": "1.0" }, { "name": "token", "secret": true, "ask": true } ],
+            "profiles": [ { "name": "prod", "values": { "ver": "2.0" }, "serverIds": ["p1", "p2"] } ]
+        }));
+        assert_eq!(resolve_values(&t).unwrap_err(), "не введено значение секретной переменной «token»");
+        t.run_values.insert("token".into(), "s3cr3t".into());
+        let (v, secrets) = resolve_values(&t).unwrap();
+        assert_eq!(v["ver"], "1.0");
+        assert_eq!(secrets, vec!["s3cr3t"]);
+        assert_eq!(effective_servers(&t), vec!["a"]);
+        t.run_profile = Some("prod".into());
+        assert_eq!(resolve_values(&t).unwrap().0["ver"], "2.0", "среда перекрывает умолчание");
+        assert_eq!(effective_servers(&t), vec!["p1", "p2"]);
+        t.run_values.insert("ver".into(), "3.0".into());
+        assert_eq!(resolve_values(&t).unwrap().0["ver"], "3.0", "введённое перекрывает среду");
+        assert_eq!(mask("token=s3cr3t ok", &secrets), "token=•••• ok");
+        t.run_profile = Some("stage".into());
+        assert!(resolve_values(&t).unwrap_err().contains("stage"));
+    }
+
+    #[test]
+    fn проверка_переменных_и_шагов_с_шаблонами() {
+        let base = |steps: Value, vars: Value| task(json!({ "name": "t", "serverIds": ["a"], "steps": steps, "variables": vars }));
+        let templated = base(json!([{ "kind": "service", "service": "{{svc}}", "action": "restart" }]), json!([{ "name": "svc", "default": "nginx" }]));
+        assert!(validate(&templated).is_ok(), "служба-шаблон проверяется после подстановки");
+        assert_eq!(
+            validate(&base(json!([{ "kind": "command", "command": "echo {{x}}" }]), json!([]))).unwrap_err(),
+            "Шаг 1: неизвестная переменная «x»"
+        );
+        assert!(validate(&base(json!([{ "kind": "command", "command": "echo {{server.host}}" }]), json!([]))).is_ok());
+        assert!(validate(&base(json!([{ "kind": "command", "command": "echo" }]), json!([{ "name": "server.x" }]))).unwrap_err().contains("заняты"));
+        assert!(validate(&base(json!([{ "kind": "command", "command": "echo" }]), json!([{ "name": "a" }, { "name": "a" }]))).unwrap_err().contains("дважды"));
+        let bad = BTreeMap::from([("svc".to_owned(), "bad name; rm".to_owned())]);
+        assert!(prepare_step(&templated.steps[0], &bad).is_err(), "после подстановки поля проверяются как обычно");
+    }
+
+    #[test]
+    fn секреты_не_сохраняются() {
+        let mut v = json!({ "name": "t", "steps": [], "runValues": { "token": "x" }, "runProfile": "prod",
+            "variables": [ { "name": "token", "secret": true, "default": "leak" }, { "name": "ver", "default": "1" } ],
+            "profiles": [ { "name": "prod", "values": { "token": "leak", "ver": "2" } } ] });
+        sanitize_for_save(&mut v);
+        assert!(v.get("runValues").is_none() && v.get("runProfile").is_none());
+        assert_eq!(v["variables"][0]["default"], "");
+        assert_eq!(v["profiles"][0]["values"], json!({ "ver": "2" }));
+    }
+
+    #[test]
+    fn выгрузка_и_загрузка_находят_серверы_по_адресу_и_имени() {
+        let here = vec![json!({ "id": "a1", "name": "prod", "host": "10.0.0.5", "port": 22, "username": "deploy" })];
+        let t = task(json!({ "id": "t1", "name": "Выкладка", "serverIds": ["a1"], "steps": [{ "kind": "command", "command": "uptime" }],
+            "variables": [ { "name": "token", "secret": true } ],
+            "profiles": [ { "name": "stage", "values": {}, "serverIds": ["a1"] } ] }));
+        let out = export_task(&t, &here);
+        assert_eq!(out["format"], "serein-task");
+        assert!(out["task"]["id"].is_null());
+        assert_eq!(out["task"]["servers"][0]["host"], "10.0.0.5");
+        let there = vec![
+            json!({ "id": "b7", "name": "prod-renamed", "host": "10.0.0.5", "port": 22, "username": "deploy" }),
+            json!({ "id": "c9", "name": "other", "host": "10.0.0.9", "port": 22 }),
+        ];
+        let (body, missing) = import_task(&out, &there).unwrap();
+        assert_eq!(body["serverIds"], json!(["b7"]), "по адресу, хотя имя другое");
+        assert_eq!(body["profiles"][0]["serverIds"], json!(["b7"]));
+        assert!(missing.is_empty());
+        let (_, missing) = import_task(&out, &[]).unwrap();
+        assert_eq!(missing, vec!["prod (deploy@10.0.0.5)"]);
+        assert!(import_task(&json!({ "format": "other" }), &here).is_err());
     }
 }

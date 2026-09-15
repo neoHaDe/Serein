@@ -8,11 +8,15 @@ import {
   STEP_KINDS,
   STEP_KIND_LABEL,
   STEP_STATE_LABEL,
+  TEMPLATES,
   WHEN_LABEL,
   applyProgress,
+  effectiveServers,
+  initialValues,
   moveStep,
   newStep,
   progressFromReport,
+  promptVariables,
   runSummary,
   stepLabel,
   taskProblem,
@@ -23,7 +27,9 @@ import {
   type StepKind,
   type StepWhen,
   type TaskDef,
-  type TaskStep
+  type TaskProfile,
+  type TaskStep,
+  type TaskVariable
 } from '../taskModel'
 
 interface Props {
@@ -220,12 +226,16 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
   const [draft, setDraft] = useState<TaskDef | null>(null)
   const [dirty, setDirty] = useState(false)
   const [error, setError] = useState('')
+  const [note, setNote] = useState('')
   const [addKind, setAddKind] = useState<StepKind>('command')
   const [serverFilter, setServerFilter] = useState('')
   const [running, setRunning] = useState(false)
   const [dryRun, setDryRun] = useState(false)
   const [progress, setProgress] = useState<ServerProgress[]>([])
   const [report, setReport] = useState<RunReport | null>(null)
+  const [runProfile, setRunProfile] = useState('')
+  // Окно ввода значений перед запуском: какой прогон и что уже введено.
+  const [asking, setAsking] = useState<{ dry: boolean; values: Record<string, string> } | null>(null)
   const runIdRef = useRef<string | null>(null)
 
   const load = async (): Promise<void> => {
@@ -254,14 +264,19 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
     [runs, draft?.id]
   )
 
-  const select = (t: TaskDef | null): void => {
-    if (running) return
-    if (dirty && !confirm('Изменения задачи не сохранены. Бросить их?')) return
+  /** Открыть задачу в редакторе. `false` - человек не захотел бросать несохранённое. */
+  const select = (t: TaskDef | null): boolean => {
+    if (running) return false
+    if (dirty && !confirm('Изменения задачи не сохранены. Бросить их?')) return false
     setDraft(t ? withStepIds(structuredClone(t)) : null)
     setDirty(false)
     setError('')
+    setNote('')
     setProgress([])
     setReport(null)
+    setRunProfile('')
+    setAsking(null)
+    return true
   }
 
   const patch = (p: Partial<TaskDef>): void => {
@@ -277,6 +292,29 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
       return { ...d, steps }
     })
     setDirty(true)
+  }
+
+  const variables = draft?.variables ?? []
+  const profiles = draft?.profiles ?? []
+
+  const patchVar = (i: number, p: Partial<TaskVariable>): void => {
+    const next = [...variables]
+    next[i] = { ...next[i], ...p }
+    patch({ variables: next })
+  }
+
+  const patchProfile = (i: number, p: Partial<TaskProfile>): void => {
+    const next = [...profiles]
+    next[i] = { ...next[i], ...p }
+    patch({ profiles: next })
+  }
+
+  /** Пустое значение среды - «не задано», а не пустая строка: иначе оно перекрыло бы умолчание. */
+  const setProfileValue = (i: number, name: string, value: string): void => {
+    const values = { ...profiles[i].values }
+    if (value === '') delete values[name]
+    else values[name] = value
+    patchProfile(i, { values })
   }
 
   const toggleServer = (id: string): void => {
@@ -312,36 +350,63 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
     }
   }
 
-  const start = async (dry: boolean): Promise<void> => {
-    if (!draft) return
-    const problem = taskProblem(draft)
-    if (problem) {
-      setError(problem)
-      return
+  const fromTemplate = (id: string): void => {
+    const tpl = TEMPLATES.find((x) => x.id === id)
+    if (tpl && select(tpl.make())) {
+      setDirty(true)
+      setNote(`Задача из шаблона «${tpl.label}». Отметьте серверы, проверьте значения и сохраните.`)
     }
-    if (
-      !dry &&
-      !confirm(
-        `Запустить «${draft.name}» на ${draft.serverIds.length} серверах?\n\nПробный прогон покажет, что будет сделано, ничего не меняя.`
+  }
+
+  const importTask = async (): Promise<void> => {
+    if (running || (dirty && !confirm('Изменения задачи не сохранены. Бросить их?'))) return
+    try {
+      const r = await window.api.tasks.importFrom()
+      if (!r.imported || !r.task) return
+      await load()
+      setDirty(false)
+      select(r.task)
+      setNote(
+        r.missing && r.missing.length > 0
+          ? `Задача загружена. На этой машине не нашлись серверы: ${r.missing.join(', ')} - отметьте нужные вручную.`
+          : 'Задача загружена.'
       )
-    ) {
-      return
+    } catch (e) {
+      setError(errText(e))
     }
+  }
+
+  const exportTask = async (): Promise<void> => {
+    const t = dirty || !draft?.id ? await save() : draft
+    if (!t?.id) return
+    try {
+      const r = await window.api.tasks.exportTo(t.id, t.name)
+      if (r.saved) setNote(`Задача выгружена: ${r.path}. Секретов в файле нет.`)
+    } catch (e) {
+      setError(errText(e))
+    }
+  }
+
+  const execute = async (dry: boolean, values: Record<string, string>): Promise<void> => {
+    if (!draft) return
     const task = dirty || !draft.id ? await save() : draft
     if (!task) return
     const runId = crypto.randomUUID()
     runIdRef.current = runId
     setError('')
+    setNote('')
     setReport(null)
     setProgress([])
     setDryRun(dry)
     setRunning(true)
+    setAsking(null)
     // Подписка - до запуска: первые события приходят раньше, чем отрисуется окно.
     const off = window.api.tasks.onProgress((ev) =>
       setProgress((prev) => applyProgress(prev, ev, runId, task.steps.length))
     )
     try {
-      const r = await window.api.tasks.run(task, runId, dry)
+      // Значения запуска идут только в сам запуск: в файл задачи они не попадают.
+      const r = await window.api.tasks.run({ ...task, runProfile: runProfile || undefined, runValues: values }, runId, dry)
       setReport(r)
       setProgress(progressFromReport(r, task.steps.length))
       if (!dry) setRuns(await window.api.tasks.runs())
@@ -352,6 +417,33 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
       runIdRef.current = null
       setRunning(false)
     }
+  }
+
+  const start = (dry: boolean): void => {
+    if (!draft) return
+    const problem = taskProblem(draft)
+    if (problem) {
+      setError(problem)
+      return
+    }
+    const targets = effectiveServers(draft, runProfile || undefined)
+    if (targets.length === 0) {
+      setError('Не выбран ни один сервер')
+      return
+    }
+    if (
+      !dry &&
+      !confirm(
+        `Запустить «${draft.name}»${runProfile ? ` в среде «${runProfile}»` : ''} на ${targets.length} серверах?\n\nПробный прогон покажет, что будет сделано, ничего не меняя.`
+      )
+    ) {
+      return
+    }
+    if (promptVariables(draft).length > 0) {
+      setAsking({ dry, values: initialValues(draft, runProfile || undefined) })
+      return
+    }
+    void execute(dry, {})
   }
 
   const stop = (): void => {
@@ -368,15 +460,31 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
     report?.servers[serverIdx]?.steps.find((s) => s.index === stepIdx)?.label ??
     (draft?.steps[stepIdx] ? stepLabel(draft.steps[stepIdx]) : `Шаг ${stepIdx + 1}`)
 
+  const askVars = draft ? promptVariables(draft) : []
+  const askReady = !!asking && askVars.every((v) => !v.secret || (asking.values[v.name] ?? '') !== '')
+
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && !running && onClose()}>
       <div className="modal tasks-modal" onClick={(e) => e.stopPropagation()}>
         <h2>Задачи</h2>
         <div className="tasks-layout">
           <div className="tasks-list">
-            <button className="primary" disabled={running} onClick={() => select(emptyTask())}>
-              Новая задача
-            </button>
+            <div className="tasks-list-tools">
+              <button className="primary" disabled={running} onClick={() => select(emptyTask())}>
+                Новая задача
+              </button>
+              <select value="" disabled={running} onChange={(e) => fromTemplate(e.target.value)} title="Готовые сценарии">
+                <option value="">Из шаблона…</option>
+                {TEMPLATES.map((t) => (
+                  <option key={t.id} value={t.id} title={t.hint}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+              <button disabled={running} onClick={() => void importTask()}>
+                Загрузить из файла…
+              </button>
+            </div>
             {tasks.length === 0 && <div className="hint">Задач пока нет.</div>}
             {tasks.map((t) => (
               <button
@@ -388,13 +496,14 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
                 <span className="tasks-list-name">{t.name}</span>
                 <span className="tasks-list-meta">
                   шагов {t.steps.length} · серверов {t.serverIds.length}
+                  {(t.profiles ?? []).length > 0 ? ` · сред ${(t.profiles ?? []).length}` : ''}
                 </span>
               </button>
             ))}
           </div>
 
           <div className="tasks-editor">
-            {!draft && <div className="hint">Выберите задачу слева или создайте новую.</div>}
+            {!draft && <div className="hint">Выберите задачу слева, создайте новую или возьмите шаблон.</div>}
             {draft && (
               <>
                 <div className="task-head">
@@ -407,6 +516,9 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
                   <button disabled={running || !dirty} onClick={() => void save()}>
                     Сохранить
                   </button>
+                  <button disabled={running} onClick={() => void exportTask()} title="Файл для другой машины, без секретов">
+                    Выгрузить…
+                  </button>
                   {draft.id && (
                     <button className="danger" disabled={running} onClick={() => void remove()}>
                       Удалить
@@ -414,6 +526,7 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
                   )}
                 </div>
                 {error && <div className="settings-msg err">{error}</div>}
+                {note && <div className="settings-msg ok">{note}</div>}
 
                 <fieldset className="task-section" disabled={running}>
                   <legend>Шаги - по порядку на каждом сервере</legend>
@@ -504,6 +617,134 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
                 </fieldset>
 
                 <fieldset className="task-section" disabled={running}>
+                  <legend>Переменные</legend>
+                  <div className="hint">
+                    В полях шагов пишите {'{{имя}}'}. Встроенные, свои у каждого сервера: {'{{server.name}}'},{' '}
+                    {'{{server.host}}'}, {'{{server.user}}'}. Секрет не сохраняется: его спросят перед запуском, а в
+                    выводе он заменится на ••••.
+                  </div>
+                  {variables.map((v, i) => (
+                    <div key={i} className="task-var">
+                      <input
+                        placeholder="имя"
+                        value={v.name}
+                        spellCheck={false}
+                        onChange={(e) => patchVar(i, { name: e.target.value })}
+                      />
+                      {v.secret ? (
+                        <input disabled placeholder="спросится при запуске" />
+                      ) : (
+                        <input
+                          placeholder="значение по умолчанию"
+                          value={v.default ?? ''}
+                          spellCheck={false}
+                          onChange={(e) => patchVar(i, { default: e.target.value })}
+                        />
+                      )}
+                      <label className="checkbox-row">
+                        <input
+                          type="checkbox"
+                          checked={!!v.ask || !!v.secret}
+                          disabled={!!v.secret}
+                          onChange={(e) => patchVar(i, { ask: e.target.checked })}
+                        />
+                        спрашивать
+                      </label>
+                      <label className="checkbox-row">
+                        <input
+                          type="checkbox"
+                          checked={!!v.secret}
+                          onChange={(e) => patchVar(i, { secret: e.target.checked, default: e.target.checked ? '' : v.default })}
+                        />
+                        секрет
+                      </label>
+                      <button
+                        className="mini danger"
+                        title="Убрать переменную"
+                        onClick={() => patch({ variables: variables.filter((_, k) => k !== i) })}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                  <div className="task-add">
+                    <button onClick={() => patch({ variables: [...variables, { name: '', default: '' }] })}>
+                      Добавить переменную
+                    </button>
+                  </div>
+                </fieldset>
+
+                <fieldset className="task-section" disabled={running}>
+                  <legend>Среды</legend>
+                  <div className="hint">
+                    Prod, stage, dev: у каждой свои значения переменных и, если нужно, свои серверы. Пустое поле - берётся
+                    значение по умолчанию.
+                  </div>
+                  {profiles.map((p, i) => (
+                    <div key={i} className="task-profile">
+                      <div className="task-profile-head">
+                        <input
+                          placeholder="название среды"
+                          value={p.name}
+                          onChange={(e) => {
+                            if (runProfile === p.name) setRunProfile(e.target.value)
+                            patchProfile(i, { name: e.target.value })
+                          }}
+                        />
+                        <span className="hint">
+                          {p.serverIds.length > 0 ? `свои серверы: ${p.serverIds.length}` : 'серверы задачи'}
+                        </span>
+                        <button
+                          className="mini"
+                          disabled={draft.serverIds.length === 0}
+                          title="Запомнить для этой среды серверы, отмеченные ниже"
+                          onClick={() => patchProfile(i, { serverIds: [...draft.serverIds] })}
+                        >
+                          Взять отмеченные серверы
+                        </button>
+                        {p.serverIds.length > 0 && (
+                          <button className="mini" onClick={() => patchProfile(i, { serverIds: [] })}>
+                            Сбросить серверы
+                          </button>
+                        )}
+                        <button
+                          className="mini danger"
+                          title="Убрать среду"
+                          onClick={() => {
+                            if (runProfile === p.name) setRunProfile('')
+                            patch({ profiles: profiles.filter((_, k) => k !== i) })
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      {variables.some((v) => !v.secret && v.name.trim()) && (
+                        <div className="task-profile-values">
+                          {variables
+                            .filter((v) => !v.secret && v.name.trim())
+                            .map((v) => (
+                              <label key={v.name} className="task-field">
+                                {v.name}
+                                <input
+                                  value={p.values[v.name] ?? ''}
+                                  placeholder={v.default ?? ''}
+                                  spellCheck={false}
+                                  onChange={(e) => setProfileValue(i, v.name, e.target.value)}
+                                />
+                              </label>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  <div className="task-add">
+                    <button onClick={() => patch({ profiles: [...profiles, { name: '', values: {}, serverIds: [] }] })}>
+                      Добавить среду
+                    </button>
+                  </div>
+                </fieldset>
+
+                <fieldset className="task-section" disabled={running}>
                   <legend>
                     Серверы - выбрано {draft.serverIds.length}, по{' '}
                     <select
@@ -537,11 +778,54 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
                   </div>
                 </fieldset>
 
+                {asking && (
+                  <div className="task-ask">
+                    <div className="settings-section-title">
+                      {asking.dry ? 'Значения для пробного прогона' : 'Значения для запуска'}
+                    </div>
+                    {askVars.map((v) => (
+                      <label key={v.name} className="task-field wide">
+                        {v.name}
+                        {v.secret ? ' (секрет - не сохраняется)' : ''}
+                        <input
+                          type={v.secret ? 'password' : 'text'}
+                          autoFocus={v === askVars[0]}
+                          spellCheck={false}
+                          value={asking.values[v.name] ?? ''}
+                          onChange={(e) => setAsking({ ...asking, values: { ...asking.values, [v.name]: e.target.value } })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && askReady) void execute(asking.dry, asking.values)
+                          }}
+                        />
+                      </label>
+                    ))}
+                    <div className="task-ask-actions">
+                      <button className="primary" disabled={!askReady} onClick={() => void execute(asking.dry, asking.values)}>
+                        {asking.dry ? 'Пробный прогон' : 'Запустить'}
+                      </button>
+                      <button onClick={() => setAsking(null)}>Отмена</button>
+                      {!askReady && <span className="hint">Секретные значения нужно ввести.</span>}
+                    </div>
+                  </div>
+                )}
+
                 <div className="task-run">
-                  <button disabled={running} onClick={() => void start(true)}>
+                  {profiles.length > 0 && (
+                    <select value={runProfile} disabled={running} onChange={(e) => setRunProfile(e.target.value)} title="Среда запуска">
+                      <option value="">Без среды</option>
+                      {profiles
+                        .filter((p) => p.name.trim())
+                        .map((p) => (
+                          <option key={p.name} value={p.name}>
+                            Среда: {p.name}
+                          </option>
+                        ))}
+                    </select>
+                  )}
+                  <button disabled={running || !!asking} onClick={() => start(true)}>
                     Пробный прогон
                   </button>
-                  <button className="primary" disabled={running} onClick={() => void start(false)}>
+                  <button className="primary" disabled={running || !!asking} onClick={() => start(false)}>
                     Запустить
                   </button>
                   {running && (

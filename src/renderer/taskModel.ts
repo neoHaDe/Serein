@@ -32,12 +32,35 @@ export interface TaskStep {
   intervalSec?: number
 }
 
+/** Переменная задачи: `{{имя}}` в полях шагов. */
+export interface TaskVariable {
+  name: string
+  default?: string
+  /** Спросить перед запуском, подставив умолчание. */
+  ask?: boolean
+  /** Не хранится: вводится перед каждым запуском, в выводе заменяется на ••••. */
+  secret?: boolean
+  description?: string
+}
+
+/** Среда: свои значения переменных и, если заданы, свои серверы. */
+export interface TaskProfile {
+  name: string
+  values: Record<string, string>
+  serverIds: string[]
+}
+
 export interface TaskDef {
   id?: string
   name: string
   steps: TaskStep[]
   serverIds: string[]
   concurrency?: number
+  variables?: TaskVariable[]
+  profiles?: TaskProfile[]
+  /** Только на время запуска: выбранная среда и введённые значения. Не сохраняются. */
+  runProfile?: string
+  runValues?: Record<string, string>
 }
 
 export const STEP_KINDS: StepKind[] = ['command', 'upload', 'download', 'sync', 'service', 'docker', 'healthcheck']
@@ -126,7 +149,11 @@ const blank = (v?: string): boolean => !v || !v.trim()
 export function taskProblem(t: TaskDef): string | null {
   if (blank(t.name)) return 'У задачи нет названия'
   if (t.steps.length === 0) return 'В задаче нет шагов'
-  if (t.serverIds.length === 0) return 'Не выбран ни один сервер'
+  if (t.serverIds.length === 0 && !(t.profiles ?? []).some((p) => p.serverIds.length > 0)) {
+    return 'Не выбран ни один сервер'
+  }
+  const varProblem = variableProblem(t)
+  if (varProblem) return varProblem
   for (let i = 0; i < t.steps.length; i++) {
     const s = t.steps[i]
     const n = `Шаг ${i + 1}: `
@@ -148,10 +175,10 @@ export function taskProblem(t: TaskDef): string | null {
         break
       case 'healthcheck':
         if (blank(s.target)) return n + 'не указано, что проверять'
-        if (s.check === 'port' && !/^.+:\d{1,5}$/.test((s.target ?? '').trim())) {
+        if (s.check === 'port' && references(s.target ?? '').length === 0 && !/^.+:\d{1,5}$/.test((s.target ?? '').trim())) {
           return n + 'порт указывается как адрес:порт'
         }
-        if (s.check === 'http' && !/^https?:\/\//.test((s.target ?? '').trim())) {
+        if (s.check === 'http' && references(s.target ?? '').length === 0 && !/^https?:\/\//.test((s.target ?? '').trim())) {
           return n + 'адрес начинается с http:// или https://'
         }
         break
@@ -292,3 +319,156 @@ export function progressFromReport(r: RunReport, stepCount: number): ServerProgr
 export function withStepIds(t: TaskDef): TaskDef {
   return { ...t, steps: t.steps.map((s) => (s.id ? s : { ...s, id: newStep(s.kind).id })) }
 }
+
+// ---- Переменные, среды, шаблоны ----
+
+/** Встроенные переменные - свои у каждого сервера. */
+export const BUILTIN_VARS = ['server.name', 'server.host', 'server.user']
+
+const NAME_RE = /^[A-Za-z_][A-Za-z0-9_.-]*$/
+
+/** Имена переменных в тексте - по тем же правилам, что у бэкенда: `{{.Names}}` не переменная. */
+export function references(text: string): string[] {
+  const out: string[] = []
+  let rest = text
+  for (;;) {
+    const start = rest.indexOf('{{')
+    if (start < 0) break
+    const after = rest.slice(start + 2)
+    const end = after.indexOf('}}')
+    if (end < 0) break
+    const name = after.slice(0, end).trim()
+    if (NAME_RE.test(name)) out.push(name)
+    rest = after.slice(end + 2)
+  }
+  return out
+}
+
+function stepTexts(s: TaskStep): string[] {
+  return [s.command, s.localPath, s.remotePath, s.service, s.action, s.container, s.target].filter(
+    (x): x is string => typeof x === 'string'
+  )
+}
+
+/** Ошибка в переменных и средах или `null`. */
+export function variableProblem(t: TaskDef): string | null {
+  const names = new Set<string>()
+  for (const v of t.variables ?? []) {
+    const n = v.name.trim()
+    if (!NAME_RE.test(n)) return `Переменная «${v.name}»: имя из букв, цифр, «_», «.», «-», начиная с буквы`
+    if (n.startsWith('server.')) return `Переменная «${n}»: имена server.* заняты встроенными`
+    if (names.has(n)) return `Переменная «${n}» объявлена дважды`
+    names.add(n)
+  }
+  const profiles = new Set<string>()
+  for (const p of t.profiles ?? []) {
+    const n = p.name.trim()
+    if (!n) return 'У среды нет названия'
+    if (profiles.has(n)) return `Среда «${n}» объявлена дважды`
+    profiles.add(n)
+  }
+  for (let i = 0; i < t.steps.length; i++) {
+    for (const text of stepTexts(t.steps[i])) {
+      for (const r of references(text)) {
+        if (!names.has(r) && !BUILTIN_VARS.includes(r)) return `Шаг ${i + 1}: неизвестная переменная «${r}»`
+      }
+    }
+  }
+  return null
+}
+
+/** Серверы запуска: у выбранной среды свои, если заданы. */
+export function effectiveServers(t: TaskDef, profile?: string): string[] {
+  const p = profile ? (t.profiles ?? []).find((x) => x.name === profile) : undefined
+  return p && p.serverIds.length > 0 ? p.serverIds : t.serverIds
+}
+
+/** Что спросить перед запуском: помеченные «спрашивать» и все секретные. */
+export function promptVariables(t: TaskDef): TaskVariable[] {
+  return (t.variables ?? []).filter((v) => v.ask || v.secret)
+}
+
+/** Начальные значения окна запуска: умолчание, затем среда. Секреты всегда пустые. */
+export function initialValues(t: TaskDef, profile?: string): Record<string, string> {
+  const p = profile ? (t.profiles ?? []).find((x) => x.name === profile) : undefined
+  const out: Record<string, string> = {}
+  for (const v of t.variables ?? []) out[v.name] = v.secret ? '' : (p?.values[v.name] ?? v.default ?? '')
+  return out
+}
+
+export interface TaskTemplate {
+  id: string
+  label: string
+  hint: string
+  make: () => TaskDef
+}
+
+const tplStep = (kind: StepKind, p: Partial<TaskStep>): TaskStep => ({ ...newStep(kind), ...p })
+
+/** Готовые задачи: частые сценарии, в которых остаётся подставить свои значения. */
+export const TEMPLATES: TaskTemplate[] = [
+  {
+    id: 'service-restart',
+    label: 'Перезапуск службы с проверкой',
+    hint: 'restart службы, проверка адреса, при ошибке - последние строки её журнала',
+    make: () => ({
+      name: 'Перезапуск службы',
+      serverIds: [],
+      concurrency: 1,
+      variables: [
+        { name: 'service', default: 'nginx', ask: true },
+        { name: 'url', default: 'http://127.0.0.1/' }
+      ],
+      steps: [
+        tplStep('service', { service: '{{service}}', action: 'restart' }),
+        tplStep('healthcheck', { check: 'http', target: '{{url}}', attempts: 5, intervalSec: 3 }),
+        tplStep('command', {
+          name: 'Журнал службы при ошибке',
+          command: 'journalctl -u {{service}} -n 50 --no-pager',
+          when: 'failure'
+        })
+      ]
+    })
+  },
+  {
+    id: 'deploy',
+    label: 'Выкладка: залить, перезапустить, проверить',
+    hint: 'синхронизация своей папки на сервер, restart службы, проверка адреса',
+    make: () => ({
+      name: 'Выкладка',
+      serverIds: [],
+      concurrency: 1,
+      variables: [
+        { name: 'localDir', default: '', ask: true },
+        { name: 'remoteDir', default: '/var/www/site' },
+        { name: 'service', default: 'nginx' },
+        { name: 'url', default: 'http://127.0.0.1/' }
+      ],
+      steps: [
+        tplStep('sync', { localPath: '{{localDir}}', remotePath: '{{remoteDir}}' }),
+        tplStep('service', { service: '{{service}}', action: 'restart' }),
+        tplStep('healthcheck', { check: 'http', target: '{{url}}', attempts: 5, intervalSec: 3 })
+      ]
+    })
+  },
+  {
+    id: 'compose-update',
+    label: 'Обновить контейнеры Docker Compose',
+    hint: 'pull и up -d в каталоге проекта, затем проверка, что ни один контейнер не остановился',
+    make: () => ({
+      name: 'Обновление Compose',
+      serverIds: [],
+      concurrency: 1,
+      variables: [{ name: 'dir', default: '/opt/app', ask: true }],
+      steps: [
+        tplStep('command', { command: 'cd {{dir}} && docker compose pull && docker compose up -d' }),
+        tplStep('healthcheck', {
+          check: 'command',
+          target: 'cd {{dir}} && test -z "$(docker compose ps --status exited -q)"',
+          attempts: 3,
+          intervalSec: 5
+        })
+      ]
+    })
+  }
+]

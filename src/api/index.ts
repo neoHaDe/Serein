@@ -366,6 +366,33 @@ export const api = {
     save: (t: import('../renderer/taskModel').TaskDef): Promise<import('../renderer/taskModel').TaskDef> =>
       invoke('tasks_save', { t }),
     remove: (id: string): Promise<void> => invoke('tasks_delete', { id }),
+    /** Выгрузить задачу файлом: без секретов, серверы - адресом и именем. */
+    exportTo: async (id: string, name: string): Promise<{ saved: boolean; path?: string }> => {
+      const path = await saveDialog({
+        title: 'Выгрузить задачу',
+        defaultPath: `${name}.serein-task.json`,
+        filters: [{ name: 'Задача Serein', extensions: ['json'] }]
+      })
+      if (!path) return { saved: false }
+      await invoke('tasks_export', { id, path })
+      return { saved: true, path }
+    },
+    /** Загрузить задачу из файла: серверы находятся по адресу и имени, ненайденные - в `missing`. */
+    importFrom: async (): Promise<{
+      imported: boolean
+      task?: import('../renderer/taskModel').TaskDef
+      missing?: string[]
+    }> => {
+      const sel = await openDialog({
+        title: 'Загрузить задачу',
+        multiple: false,
+        directory: false,
+        filters: [{ name: 'Задача Serein', extensions: ['json'] }]
+      })
+      if (typeof sel !== 'string') return { imported: false }
+      const r = await invoke<{ task: import('../renderer/taskModel').TaskDef; missing: string[] }>('tasks_import', { path: sel })
+      return { imported: true, task: r.task, missing: r.missing }
+    },
     runs: (): Promise<import('../renderer/taskModel').RunReport[]> => invoke('task_runs_list'),
     run: (
       task: import('../renderer/taskModel').TaskDef,
