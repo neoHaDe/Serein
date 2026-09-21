@@ -40,11 +40,15 @@ pub fn unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
+// Заглушка для систем без DPAPI: секреты там лежат в keyring, и эта ветка не вызывается.
+#[cfg_attr(not(windows), allow(dead_code))]
 #[cfg(not(windows))]
 pub fn protect(_data: &[u8]) -> Result<Vec<u8>, String> {
     Err("DPAPI доступен только на Windows".into())
 }
 
+// Заглушка для систем без DPAPI: секреты там лежат в keyring, и эта ветка не вызывается.
+#[cfg_attr(not(windows), allow(dead_code))]
 #[cfg(not(windows))]
 pub fn unprotect(_data: &[u8]) -> Result<Vec<u8>, String> {
     Err("DPAPI доступен только на Windows".into())

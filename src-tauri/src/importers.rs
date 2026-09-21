@@ -133,6 +133,8 @@ fn urldecode(s: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
+// Нужно только на Windows: на других системах не вызывается, и это не долг, а платформа.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn save_imported_server(
     name: &str,
     host: &str,
@@ -157,6 +159,8 @@ fn save_imported_server(
     store::servers_save(srv).map(|_| ())
 }
 
+// Нужно только на Windows: на других системах не вызывается, и это не долг, а платформа.
+#[cfg_attr(not(windows), allow(dead_code))]
 /// MobaXterm: закладка SSH - `#109#0%host%port%user%...`
 pub fn parse_mobaxterm_ssh_bookmark(name: &str, val: &str, _group: &str) -> Option<(String, String, u16, String)> {
     if !val.contains("#109#") {
@@ -181,6 +185,8 @@ pub fn parse_mobaxterm_ssh_bookmark(name: &str, val: &str, _group: &str) -> Opti
     Some((display, host.to_string(), port, username))
 }
 
+// Нужно только на Windows: на других системах не вызывается, и это не долг, а платформа.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn import_mobaxterm_text(txt: &str, default_group: &str) -> usize {
     let mut group = default_group.to_string();
     let mut count = 0usize;
@@ -253,6 +259,8 @@ fn mobaxterm_config_paths() -> Vec<PathBuf> {
     paths
 }
 
+// Нужно только на Windows: на других системах не вызывается, и это не долг, а платформа.
+#[cfg_attr(not(windows), allow(dead_code))]
 /// XShell `.xsh`: секции `[CONNECTION]` и `[CONNECTION:AUTHENTICATION]`.
 pub fn parse_xshell_session(
     content: &str,
@@ -310,6 +318,8 @@ pub fn parse_xshell_session(
     Some((name, host, port, user, key_path))
 }
 
+// Нужно только на Windows: на других системах не вызывается, и это не долг, а платформа.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn import_xshell_file(content: &str, fallback_name: &str, group: &str) -> bool {
     let Some((name, host, port, username, key_path)) = parse_xshell_session(content, fallback_name) else {
         return false;
@@ -372,6 +382,8 @@ fn xshell_session_roots() -> Vec<PathBuf> {
     roots
 }
 
+// Нужно только на Windows: на других системах не вызывается, и это не долг, а платформа.
+#[cfg_attr(not(windows), allow(dead_code))]
 /// SecureCRT: построчно `H:`, `P:`, `U:`, `S:`, `D:` (SSH2).
 pub fn parse_securecrt_session(content: &str, fallback_name: &str) -> Option<(String, String, u16, String)> {
     let mut name = fallback_name.to_string();
@@ -417,6 +429,8 @@ pub fn parse_securecrt_session(content: &str, fallback_name: &str) -> Option<(St
     Some((display, host, port, username))
 }
 
+// Нужно только на Windows: на других системах не вызывается, и это не долг, а платформа.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn import_securecrt_file(content: &str, fallback_name: &str, group: &str) -> bool {
     let Some((name, host, port, username)) = parse_securecrt_session(content, fallback_name) else {
         return false;
@@ -458,6 +472,8 @@ fn securecrt_sessions_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|c| c.join("VanDyke").join("Config").join("Sessions"))
 }
 
+// Нужно только на Windows: на других системах не вызывается, и это не долг, а платформа.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn collect_files_with_ext(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
     let Ok(read) = std::fs::read_dir(dir) else {
         return;

@@ -1,5 +1,7 @@
 //! Native Windows clipboard. WebView2 navigator.clipboard often fails silently.
 
+// Нужно только на Windows: на других системах не вызывается, и это не долг, а платформа.
+#[cfg_attr(not(windows), allow(dead_code))]
 const CF_UNICODETEXT: u32 = 13;
 
 #[cfg(windows)]

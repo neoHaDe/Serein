@@ -109,6 +109,8 @@ pub fn move_into_downloads(tmp: &Path) -> Result<PathBuf, String> {
     Ok(dest_dir)
 }
 
+// Нужно только на Windows: на других системах не вызывается, и это не долг, а платформа.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn mouse_left_down() -> bool {
     #[cfg(windows)]
     unsafe {

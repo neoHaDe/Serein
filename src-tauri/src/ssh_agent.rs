@@ -6,6 +6,8 @@ use russh::keys::agent::client::AgentClient;
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+// Нужно только на Windows: на других системах не вызывается, и это не долг, а платформа.
+#[cfg_attr(not(windows), allow(dead_code))]
 const WIN_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
 const MAX_AGENT_REPLY: usize = 256 * 1024;
 
@@ -21,7 +23,7 @@ pub async fn connect_agent_stream() -> Result<impl AsyncRead + AsyncWrite + Unpi
     #[cfg(unix)]
     {
         let path = std::env::var("SSH_AUTH_SOCK").map_err(|_| agent_unavailable_hint().to_string())?;
-        tokio::net::UnixStream::connect(path).await.map_err(|e| agent_err(e))
+        tokio::net::UnixStream::connect(path).await.map_err(agent_err)
     }
     #[cfg(windows)]
     {
