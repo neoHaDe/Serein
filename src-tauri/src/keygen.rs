@@ -62,25 +62,35 @@ fn ensure_nl(s: &str) -> String {
 /// Правим через `icacls`: снимаем наследование и оставляем полный доступ только текущему
 /// пользователю. Аргументы передаём отдельными, без оболочки, - путь может содержать
 /// пробелы и любые символы.
-fn restrict_private_key(path: &str) {
+fn restrict_private_key(path: &str) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("ключ записан, но права на него закрыть не удалось: {e}"))?;
     }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let Ok(user) = std::env::var("USERNAME") else { return };
-        let _ = std::process::Command::new("icacls")
+        let user = std::env::var("USERNAME")
+            .map_err(|_| "ключ записан, но имя пользователя неизвестно - права не закрыть".to_owned())?;
+        let out = std::process::Command::new("icacls")
             .arg(path)
             .arg("/inheritance:r")
             .arg("/grant:r")
             .arg(format!("{user}:F"))
             .creation_flags(CREATE_NO_WINDOW)
-            .output();
+            .output()
+            .map_err(|e| format!("ключ записан, но icacls не запустился: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "ключ записан, но права на него закрыть не удалось: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
     }
+    Ok(())
 }
 
 pub fn save_to(path: &str, key: &Value) -> Result<Value, String> {
@@ -89,7 +99,7 @@ pub fn save_to(path: &str, key: &Value) -> Result<Value, String> {
     let pub_path = format!("{path}.pub");
     std::fs::write(path, ensure_nl(private)).map_err(|e| e.to_string())?;
     std::fs::write(&pub_path, ensure_nl(public)).map_err(|e| e.to_string())?;
-    restrict_private_key(path);
+    restrict_private_key(path)?;
     Ok(json!({ "saved": true, "privatePath": path, "publicPath": pub_path }))
 }
 

@@ -72,14 +72,20 @@ fn harden(d: &std::path::Path) {
 fn harden(_d: &std::path::Path) {}
 
 /// То же для файла: секреты и профили не должны быть доступны на чтение всем.
+///
+/// Ошибку возвращаем, а не глотаем: файл с секретами, который не удалось закрыть, лучше
+/// не оставлять на диске молча - иначе о правах `644` на `secrets.json` не узнает никто.
 #[cfg(unix)]
-pub(crate) fn restrict_file(p: &std::path::Path) {
+pub(crate) fn restrict_file(p: &std::path::Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
-    let _ = fs::set_permissions(p, fs::Permissions::from_mode(0o600));
+    fs::set_permissions(p, fs::Permissions::from_mode(0o600))
+        .map_err(|e| format!("не закрыть права файла {}: {e}", p.display()))
 }
 
 #[cfg(not(unix))]
-pub(crate) fn restrict_file(_p: &std::path::Path) {}
+pub(crate) fn restrict_file(_p: &std::path::Path) -> Result<(), String> {
+    Ok(())
+}
 
 fn dir() -> PathBuf {
     config_dir()
@@ -121,7 +127,11 @@ fn write_value(name: &str, v: &Value) -> Result<(), String> {
     let tmp = dir().join(format!(".{name}.tmp-{}", Uuid::new_v4().simple()));
     let mut f = fs::File::create(&tmp).map_err(|e| format!("не создать временный файл: {e}"))?;
     // Права закрываем до записи содержимого: иначе секреты успевают полежать доступными.
-    restrict_file(&tmp);
+    if let Err(e) = restrict_file(&tmp) {
+        drop(f);
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
     let written = f
         .write_all(txt.as_bytes())
         .and_then(|_| f.flush())
@@ -137,8 +147,7 @@ fn write_value(name: &str, v: &Value) -> Result<(), String> {
         let _ = fs::remove_file(&tmp);
         return Err(format!("не заменить {name}: {e}"));
     }
-    restrict_file(&path);
-    Ok(())
+    restrict_file(&path)
 }
 
 #[cfg(all(test, unix))]

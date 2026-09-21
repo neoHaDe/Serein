@@ -172,7 +172,7 @@ impl EditManager {
         let local_str = local.to_string_lossy().to_string();
 
         remote_fs::download_file(&remote_fs, &handle, &remote, &local_str).await?;
-        crate::store::restrict_file(&local);
+        crate::store::restrict_file(&local)?;
         // Время правки на сервере запоминаем до начала слежки: с ним мы потом сверяемся,
         // чтобы не затереть чужую правку своей.
         let mut remote_seen = remote_fs::remote_mtime(&remote_fs, &handle, &remote)

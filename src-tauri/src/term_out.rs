@@ -341,7 +341,7 @@ pub fn log_start(id: &str, title: &str) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     // В лог попадает всё, что напечатал сервер, - в том числе то, что там показали
     // случайно. Читать его должен только владелец, а не любой пользователь машины.
-    crate::store::restrict_file(&path);
+    crate::store::restrict_file(&path)?;
     let header = format!("# Serein - лог сессии «{title}», начат {} UTC\n", stamp_utc());
     file.write_all(header.as_bytes()).map_err(|e| e.to_string())?;
     let path_str = path.to_string_lossy().to_string();

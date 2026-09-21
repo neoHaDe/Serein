@@ -35,6 +35,11 @@ export interface ActionLogStatus {
   syslog: { host: string; port: number; tcp: boolean } | null
   syslogSent: number
   syslogFailed: number
+  /** Сколько записей не легло на диск и почему не легла последняя. */
+  writeFailed: number
+  lastWriteError: string | null
+  /** Сколько раз замок достался отравленным: где-то паника прервала правку состояния. */
+  locksPoisoned: number
 }
 
 const LABELS: Record<string, string> = {

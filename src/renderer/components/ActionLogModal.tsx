@@ -80,12 +80,19 @@ export function ActionLogModal({ onClose }: { onClose: () => void }): JSX.Elemen
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal modal-wide action-log" onClick={(e) => e.stopPropagation()}>
         <h2>Журнал действий</h2>
+        {status && status.writeFailed > 0 && (
+          <div className="settings-msg err">
+            Журнал не пишется: {status.lastWriteError ?? 'причина неизвестна'}. Записей не легло:{' '}
+            {status.writeFailed}. Пока это так, журнал неполон - в нём нет части действий.
+          </div>
+        )}
         {status && (
           <div className="hint">
             {status.enabled ? 'Журнал ведётся' : 'Журнал выключен в настройках'} · {status.dir}
             {status.syslog &&
               ` · syslog ${status.syslog.tcp ? 'TCP' : 'UDP'} ${status.syslog.host}:${status.syslog.port}, отправлено ${status.syslogSent}` +
                 (status.syslogFailed > 0 ? `, не ушло ${status.syslogFailed}` : '')}
+            {status.locksPoisoned > 0 && ` · внутренних сбоев состояния: ${status.locksPoisoned}`}
           </div>
         )}
         <div className="ws-toolbar">

@@ -155,7 +155,10 @@ pub fn enable(password: &str) -> Value {
     if let Err(e) = std::fs::write(vault_path(), serde_json::to_string_pretty(&cfg).unwrap()) {
         return json!({ "ok": false, "error": e.to_string() });
     }
-    crate::store::restrict_file(&vault_path());
+    if let Err(e) = crate::store::restrict_file(&vault_path()) {
+        let _ = std::fs::remove_file(vault_path());
+        return json!({ "ok": false, "error": e });
+    }
     vaultkey::set(Some(key));
     if let Err(e) = crate::store::import_all_secrets(&plain) {
         // Откат: секреты остались под прежним слоем, значит и мастер-пароль включать

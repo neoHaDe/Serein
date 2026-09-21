@@ -39,6 +39,8 @@ static LINES: Mutex<Option<HashMap<String, LineBuf>>> = Mutex::new(None);
 static SYSLOG: Mutex<Option<(SyslogCfg, Sender<String>)>> = Mutex::new(None);
 static SYSLOG_SENT: AtomicU64 = AtomicU64::new(0);
 static SYSLOG_FAILED: AtomicU64 = AtomicU64::new(0);
+static WRITE_FAILED: AtomicU64 = AtomicU64::new(0);
+static LAST_WRITE_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -184,6 +186,27 @@ fn resume() -> Chain {
     }
 }
 
+/// Журнал перестал писаться - это само по себе событие.
+///
+/// Снаружи «журнал не пишется» выглядит ровно как «ничего не происходило», поэтому неудачи
+/// считаются, последняя причина держится для окна, а при настроенном syslog уходит и туда:
+/// там как раз тот, кому положено об этом узнать.
+fn note_write_failure(t: &str, reason: &str) {
+    WRITE_FAILED.fetch_add(1, Ordering::Relaxed);
+    *lock(&LAST_WRITE_ERROR) = Some(reason.to_owned());
+    eprintln!("журнал действий: запись не легла: {reason}");
+    if let Some((_, tx)) = lock(&SYSLOG).as_ref() {
+        let body = json!({
+            "t": t,
+            "actor": actor(),
+            "action": "journal.write.failed",
+            "ok": false,
+            "error": reason,
+        });
+        let _ = tx.send(syslog_message(&body));
+    }
+}
+
 fn write_entry(
     server: Option<&str>,
     session: Option<&str>,
@@ -223,7 +246,7 @@ fn write_entry(
             chain.last = hash;
         }
         // Не записали - цепочку не двигаем: следующая запись продолжит от последней на диске.
-        Err(e) => eprintln!("журнал действий: запись не легла: {e}"),
+        Err(e) => note_write_failure(&t, &e.to_string()),
     }
     drop(guard);
     if let Some((_, tx)) = lock(&SYSLOG).as_ref() {
@@ -603,12 +626,28 @@ pub fn status() -> Value {
         "syslog": lock(&SYSLOG).as_ref().map(|(c, _)| json!({ "host": c.host, "port": c.port, "tcp": c.tcp })),
         "syslogSent": SYSLOG_SENT.load(Ordering::Relaxed),
         "syslogFailed": SYSLOG_FAILED.load(Ordering::Relaxed),
+        "writeFailed": WRITE_FAILED.load(Ordering::Relaxed),
+        "lastWriteError": lock(&LAST_WRITE_ERROR).clone(),
+        // Замок, доставшийся отравленным, означает панику в критической секции: состояние
+        // могло остаться на половине правки, и это стоит видеть рядом с журналом.
+        "locksPoisoned": crate::sync::poisoned_count(),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn сбой_записи_журнала_виден_в_статусе() {
+        // Раньше о неудаче знала только консоль, которой у приложения нет: журнал,
+        // переставший писаться, выглядел как журнал, в котором ничего не происходило.
+        let было = status()["writeFailed"].as_u64().unwrap_or(0);
+        note_write_failure("2026-09-21T00:00:00.000Z", "каталог только для чтения");
+        let s = status();
+        assert_eq!(s["writeFailed"].as_u64(), Some(было + 1));
+        assert_eq!(s["lastWriteError"].as_str(), Some("каталог только для чтения"));
+    }
 
     #[test]
     fn набранная_строка_собирается_по_enter_с_правкой_и_отменой() {

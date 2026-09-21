@@ -30,9 +30,19 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
   const [knownHosts, setKnownHosts] = useState<KnownHostEntry[]>([])
   const [hostsMsg, setHostsMsg] = useState('')
   const [platform, setPlatform] = useState<'windows' | 'linux' | 'other'>('windows')
+  // Журнал, который не пишется, снаружи неотличим от журнала, в котором ничего не было.
+  // Поэтому о неудачах записи говорим там же, где журнал включают.
+  const [logTrouble, setLogTrouble] = useState<{ count: number; reason: string | null } | null>(null)
 
   useEffect(() => {
     void appPlatform().then(setPlatform)
+  }, [])
+
+  useEffect(() => {
+    void window.api.actionLog
+      .status()
+      .then((s) => setLogTrouble(s.writeFailed > 0 ? { count: s.writeFailed, reason: s.lastWriteError } : null))
+      .catch(() => setLogTrouble(null))
   }, [])
 
   const reloadKnownHosts = async (): Promise<void> => {
@@ -628,6 +638,11 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
             />
             Вести журнал действий
           </label>
+          {logTrouble && (
+            <div className="settings-msg err">
+              Журнал не пишется: {logTrouble.reason ?? 'причина неизвестна'}. Записей не легло: {logTrouble.count}.
+            </div>
+          )}
           <div className="settings-row-desc" style={{ marginTop: -8, marginBottom: 10 }}>
             Подключения, файлы, службы, контейнеры, базы, Fleet, задачи и строки, набранные в терминале.
             Строка после запроса пароля не пишется. Каждая запись ссылается на предыдущую по хешу:
