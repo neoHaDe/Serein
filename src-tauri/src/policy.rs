@@ -203,15 +203,40 @@ pub fn from_registry_values(dwords: &[(&str, u32)], strings: &[(&str, String)], 
     (!obj.is_empty()).then(|| Value::Object(obj).to_string())
 }
 
-fn file_path() -> std::path::PathBuf {
+/// Путь к файлу политики.
+///
+/// На Windows каталог спрашивается у системы, а не у переменной окружения `ProgramData`:
+/// переменную задаёт кто угодно в своём сеансе, и с подменённой политика администратора
+/// просто «не находилась» - то есть снималась без единого следа. Отката на переменную нет
+/// намеренно: не узнали путь - политика из файла не применяется, и об этом видно.
+fn file_path() -> Result<std::path::PathBuf, String> {
     #[cfg(windows)]
     {
-        let base = std::env::var_os("ProgramData").unwrap_or_else(|| "C:\\ProgramData".into());
-        std::path::PathBuf::from(base).join("Serein").join("policy.json")
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::System::Com::CoTaskMemFree;
+        use windows::Win32::UI::Shell::{SHGetKnownFolderPath, FOLDERID_ProgramData, KF_FLAG_DEFAULT};
+
+        // SAFETY: GUID и флаг - константы самой системы, токен нулевой (текущий
+        // пользователь). Строку система выделяет своим аллокатором, поэтому её
+        // освобождает `CoTaskMemFree`, и делаем это сразу после копирования.
+        let base = unsafe {
+            let p = SHGetKnownFolderPath(&FOLDERID_ProgramData, KF_FLAG_DEFAULT, HANDLE::default())
+                .map_err(|e| format!("не узнать каталог ProgramData: {e}"))?;
+            if p.is_null() {
+                return Err("система не вернула каталог ProgramData".into());
+            }
+            let s = String::from_utf16_lossy(p.as_wide());
+            CoTaskMemFree(Some(p.0 as *const _));
+            s
+        };
+        if base.trim().is_empty() {
+            return Err("система вернула пустой каталог ProgramData".into());
+        }
+        Ok(std::path::PathBuf::from(base).join("Serein").join("policy.json"))
     }
     #[cfg(not(windows))]
     {
-        std::path::PathBuf::from("/etc/serein/policy.json")
+        Ok(std::path::PathBuf::from("/etc/serein/policy.json"))
     }
 }
 
@@ -438,9 +463,14 @@ fn registry_values() -> Result<Option<String>, String> {
 }
 
 fn load() -> Policy {
-    let path = file_path();
+    // Не узнали путь - это не «файла нет»: иначе подмена окружения выглядела бы как
+    // отсутствие политики. Источник объявляется с ошибкой, и она видна в настройках.
+    let (name, text) = match file_path() {
+        Ok(path) => (path.to_string_lossy().into_owned(), file_text(&path)),
+        Err(e) => ("каталог ProgramData".to_owned(), Err(e)),
+    };
     build(&[
-        (path.to_string_lossy().into_owned(), file_text(&path)),
+        (name, text),
         ("HKLM\\SOFTWARE\\Policies\\Serein\\Policy".to_owned(), registry_json()),
         ("HKLM\\SOFTWARE\\Policies\\Serein (групповые политики)".to_owned(), registry_values()),
     ])
@@ -529,6 +559,26 @@ pub fn check_host(host: &str) -> Result<(), String> {
     check_host_with(current(), host)
 }
 
+/// Адрес назначения для всего, что открывает соединение мимо профиля сервера: туннели,
+/// базы, рабочие столы, утилиты.
+///
+/// Раньше политика стояла только на самих SSH-подключениях, и запрещённый адрес спокойно
+/// открывался туннелем через разрешённый сервер, запросом к базе или проверкой порта.
+/// Отказ пишется в журнал действий: иначе о запрете знает только тот, кто нажал кнопку.
+pub fn check_target(host: &str, what: &str) -> Result<(), String> {
+    let r = check_host(host);
+    if let Err(e) = &r {
+        crate::actionlog::record(
+            None,
+            None,
+            "policy.deny",
+            json!({ "host": host, "what": what }),
+            Err(e.clone()),
+        );
+    }
+    r
+}
+
 pub fn forbids_legacy_algorithms() -> bool {
     current().forbid_legacy_algorithms
 }
@@ -570,6 +620,38 @@ mod tests {
 
     fn src(name: &str, text: &str) -> Source {
         (name.to_owned(), Ok(Some(text.to_owned())))
+    }
+
+    #[test]
+    fn проверка_адреса_назначения_совпадает_с_проверкой_подключения() {
+        // `check_target` - тот же список, только с записью отказа в журнал. Сам список
+        // проверяется отдельно, здесь важно, что разрешение и запрет совпадают.
+        let p = build(&[src("file", r#"{ "allowedHosts": ["10.0.0.0/8", "*.corp.local"] }"#)]);
+        assert!(check_host_with(&p, "10.1.2.3").is_ok());
+        assert!(check_host_with(&p, "db.corp.local").is_ok());
+        let err = check_host_with(&p, "8.8.8.8").unwrap_err();
+        assert!(err.contains("запрещено политикой"), "{err}");
+        assert!(check_host_with(&p, "corp.local.evil.com").is_err(), "подстрока домена - не домен");
+    }
+
+    #[test]
+    fn путь_политики_не_зависит_от_переменной_окружения() {
+        let before = file_path().expect("система обязана знать этот каталог");
+        // SAFETY: одна переменная, читателей у неё в коде больше нет - путь берётся у
+        // системы. Возвращаем прежнее значение сразу после проверки.
+        let old = std::env::var_os("ProgramData");
+        unsafe { std::env::set_var("ProgramData", "C:\\Users\\кто-угодно\\подмена") };
+        let after = file_path().expect("путь берётся у системы");
+        match old {
+            Some(v) => unsafe { std::env::set_var("ProgramData", v) },
+            None => unsafe { std::env::remove_var("ProgramData") },
+        }
+        assert_eq!(before, after, "подменённая ProgramData не должна уводить политику");
+        assert!(
+            !after.to_string_lossy().contains("подмена"),
+            "путь политики взят из окружения: {}",
+            after.display()
+        );
     }
 
     #[test]

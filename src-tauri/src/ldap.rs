@@ -52,6 +52,28 @@ pub fn check_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Узел из адреса каталога: политика администратора смотрит на адрес, а не на URL целиком.
+///
+/// Разбор нарочно простой - схема, узел, необязательный порт. Всё остальное (путь, фильтр)
+/// в адресе каталога не участвует, а тащить сюда полноценный разборщик URL ради одного
+/// поля значило бы завести вторую правду о том, что считается узлом.
+pub fn host_of(url: &str) -> String {
+    let rest = url.trim().split_once("://").map_or(url.trim(), |(_, r)| r);
+    let rest = rest.split(['/', '?']).next().unwrap_or("");
+    // IPv6 в адресе пишется в скобках: `[fe80::1]:636`.
+    if let Some(v6) = rest.strip_prefix('[') {
+        return v6.split(']').next().unwrap_or("").to_owned();
+    }
+    // Двоеточие отрезаем, только если за ним номер порта: в имени оно не встречается,
+    // а вот в голом IPv6 без скобок - сколько угодно.
+    let (head, tail) = rest.rsplit_once(':').unwrap_or((rest, ""));
+    if !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()) {
+        head.to_owned()
+    } else {
+        rest.to_owned()
+    }
+}
+
 pub async fn search(p: Params) -> Result<Value, String> {
     check_url(&p.url)?;
     let base = p.base.as_deref().unwrap_or("").trim().to_string();
@@ -130,6 +152,17 @@ pub async fn search(p: Params) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn узел_из_адреса_каталога() {
+        // Политика администратора смотрит на адрес, поэтому его нужно достать одинаково
+        // из всех видов записи.
+        assert_eq!(host_of("ldap://dc.corp.local"), "dc.corp.local");
+        assert_eq!(host_of("ldaps://dc.corp.local:636"), "dc.corp.local");
+        assert_eq!(host_of("ldap://dc.corp.local:389/dc=corp,dc=local"), "dc.corp.local");
+        assert_eq!(host_of("ldap://[fe80::1]:389"), "fe80::1");
+        assert_eq!(host_of("dc.corp.local"), "dc.corp.local");
+    }
 
     #[test]
     fn чужая_схема_отвергается_до_подключения() {

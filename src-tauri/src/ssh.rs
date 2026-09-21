@@ -78,18 +78,51 @@ pub enum Trust {
 }
 
 impl Trust {
-    /// Политика для фоновых подключений.
-    ///
-    /// Обычно - строго по подтверждённым. Исключение одно и оно объявляется явно:
-    /// переменная `SEREIN_TRUST_NEW_HOSTS` для стенда, где серверы поднимаются заново на
-    /// каждый прогон и подтверждать их вручную некому. Без такой отдельной политики
-    /// «удобно для тестов» пришлось бы оставить в самом приложении.
-    pub fn background() -> Self {
-        if std::env::var_os("SEREIN_TRUST_NEW_HOSTS").is_some() {
+    /// Решение по лазейке - отдельно и без чтения окружения: так его можно проверить
+    /// тестом, не подменяя переменные всему процессу.
+    fn from_override(requested: bool) -> Self {
+        if requested {
             Trust::AcceptNewForTests
         } else {
             Trust::KnownOnly
         }
+    }
+
+    /// Просит ли окружение принимать незнакомые ключи. Только в отладочной сборке.
+    ///
+    /// В релизной сборке этой ветки нет вовсе - вместе с именем переменной. Раньше она
+    /// работала и в поставляемом приложении: кто мог выставить переменную в сеансе
+    /// пользователя (ярлык, скрипт запуска, родительский процесс), тот молча снимал
+    /// проверку ключей хостов у Fleet, восстановления туннелей и задач.
+    #[cfg(debug_assertions)]
+    fn override_requested() -> bool {
+        std::env::var_os("SEREIN_TRUST_NEW_HOSTS").is_some()
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn override_requested() -> bool {
+        false
+    }
+
+    /// Политика для фоновых подключений.
+    ///
+    /// Обычно - строго по подтверждённым. Исключение одно, оно объявляется явно и живёт
+    /// только в отладочной сборке: переменная `SEREIN_TRUST_NEW_HOSTS` для стенда, где
+    /// серверы поднимаются заново на каждый прогон и подтверждать их вручную некому.
+    pub fn background() -> Self {
+        let trust = Self::from_override(Self::override_requested());
+        if matches!(trust, Trust::AcceptNewForTests) {
+            // Даже на стенде это должно оставлять след: иначе «почему подключилось к
+            // неизвестному серверу» выясняется только чтением кода.
+            crate::actionlog::record(
+                None,
+                None,
+                "ssh.trust.test-mode",
+                json!({ "var": "SEREIN_TRUST_NEW_HOSTS" }),
+                Ok(()),
+            );
+        }
+        trust
     }
 }
 
@@ -1345,6 +1378,19 @@ impl OpHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn лазейка_доверия_ключам_живёт_только_в_отладочной_сборке() {
+        // Решение отделено от чтения окружения, поэтому проверяется без подмены переменных.
+        assert!(matches!(Trust::from_override(true), Trust::AcceptNewForTests));
+        assert!(matches!(Trust::from_override(false), Trust::KnownOnly));
+        // А вот сам вопрос «просили ли лазейку» в релизной сборке не задаётся никогда:
+        // ветки с именем переменной там нет вовсе.
+        if !cfg!(debug_assertions) {
+            assert!(!Trust::override_requested(), "в релизной сборке лазейки быть не должно");
+            assert!(matches!(Trust::background(), Trust::KnownOnly));
+        }
+    }
 
     fn rt() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread()

@@ -101,7 +101,9 @@ replace:
 - `%ProgramData%\Serein\policy.json` on Windows, `/etc/serein/policy.json` on Linux — **only if the
   file and its folder are protected.** A location alone guarantees nothing: any user can create a
   folder in `ProgramData` and would then own it and could swap the file an administrator later
-  puts there. On Windows the file and folder must be owned by Administrators, SYSTEM or
+  puts there. The folder itself is asked of the system (`FOLDERID_ProgramData`), never taken from
+  the `ProgramData` environment variable, which any user can set for their own session; if the
+  system does not answer, the file is not used and the error is shown in settings. On Windows the file and folder must be owned by Administrators, SYSTEM or
   TrustedInstaller, and no one else may write, delete or change permissions; on Linux they must
   be owned by root and not writable by group or others. Otherwise the file is not applied.
 
@@ -123,10 +125,15 @@ The registry value overrides the file key by key.
 }
 ```
 
-- `allowedHosts` — SSH, telnet and TCP connections only to these addresses: a full name, all
-  subdomains (`*.corp.local`), a subnet or `*`. Every jump host is checked too. The address is
-  compared as written in the server profile; names are not resolved, so a subnet matches only an
-  address written as an IP, and a DNS alias of a forbidden host is not caught.
+- `allowedHosts` — connections only to these addresses: a full name, all subdomains
+  (`*.corp.local`), a subnet or `*`. Checked on **every** path that opens a connection the user
+  chose: SSH (including every jump host), telnet and raw TCP, the target of a local port forward,
+  each destination requested through a SOCKS5 forward, databases, RDP and VNC, and the utilities —
+  port check and range, DNS, TLS certificate, HTTP request, traceroute, LDAP — both from this
+  machine and from the server. A refusal is written to the action log. A remote forward (`-R`) is
+  not checked: its target is the server's own loopback, chosen by the server, not by the user. The
+  address is compared as written; names are not resolved, so a subnet matches only an address
+  written as an IP, and a DNS alias of a forbidden host is not caught.
 - `forbidSavedPasswords` — passwords and key passphrases are not saved and saved ones are not
   used; they are asked for on connection. Saved ones already on disk are left in place, unused.
 - `requireMasterPassword` — the master password cannot be turned off, and secrets are not saved

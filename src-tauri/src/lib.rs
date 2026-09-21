@@ -1019,6 +1019,7 @@ async fn db_open(
     session_id: String,
     params: db::Params,
 ) -> Result<Value, String> {
+    policy::check_target(params.host(), "база данных")?;
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let id = format!("db-{}", uuid::Uuid::new_v4());
     let journal = json!({ "database": params.database, "user": params.user });
@@ -1244,6 +1245,8 @@ async fn vnc_open(
     let id = format!("vnc-{}", uuid::Uuid::new_v4());
     // Tight и ZRLE уже сжаты zlib: второй раз сжимать их на уровне SSH - пустая работа.
     let link = desktop_link(&s.server_id, DESKTOP_WINDOW_VNC, false).await;
+    policy::check_target(host.as_deref().unwrap_or("127.0.0.1"), "рабочий стол VNC")
+        .map_err(vnc::OpenError::from)?;
     let journal = json!({ "host": host.as_deref().unwrap_or("127.0.0.1"), "port": port.unwrap_or(5900) });
     let target = vnc::Target::Ssh {
         handle: link.as_ref().map_or_else(|| s.handle.clone(), |l| l.handle.clone()),
@@ -1488,6 +1491,7 @@ async fn rdp_open(
         rdp::NetworkProfile::Vpn => desktop_link(&s.server_id, DESKTOP_WINDOW_VPN, true).await,
         rdp::NetworkProfile::Lan => desktop_link(&s.server_id, DESKTOP_WINDOW_LAN, false).await,
     };
+    policy::check_target(host.as_deref().unwrap_or("127.0.0.1"), "рабочий стол RDP")?;
     let journal = json!({
         "host": host.as_deref().unwrap_or("127.0.0.1"),
         "port": port.unwrap_or(3389),
@@ -2333,6 +2337,13 @@ async fn tunnel_open(
         })
         .cloned()
         .ok_or("Конфиг туннеля не найден")?;
+    // Политика администратора. У `-L` адрес назначения выбирает человек - его и проверяем;
+    // у `-R` цель это петля самого сервера, проверять нечего; у SOCKS5 адрес приходит в
+    // каждом запросе клиента, поэтому там проверка на соединение (`tunnels.rs`).
+    if cfg.get("type").and_then(|v| v.as_str()).unwrap_or("local") == "local" {
+        let target = cfg.get("remoteHost").and_then(|v| v.as_str()).unwrap_or("");
+        policy::check_target(target, "туннель")?;
+    }
     let journal = (
         session_id.clone(),
         json!({
@@ -2524,14 +2535,17 @@ async fn tools_port_test(
     port: u16,
     timeout_ms: Option<u64>,
 ) -> Result<Value, String> {
+    policy::check_target(&host, "проверка порта")?;
     tools::port_test(host, port, timeout_ms).await
 }
 #[tauri::command]
 async fn tools_dns_lookup(name: String) -> Result<Value, String> {
+    policy::check_target(name.trim().trim_end_matches('.'), "запрос DNS")?;
     tools::dns_lookup(name).await
 }
 #[tauri::command]
 async fn tools_tls_cert(host: String, port: Option<u16>) -> Result<Value, String> {
+    policy::check_target(&host, "сертификат TLS")?;
     tools::tls_cert(host, port).await
 }
 /// HTTP-запрос со своей машины: код ответа, заголовки, время и цепочка переходов.
@@ -2541,6 +2555,7 @@ async fn tools_http(
     method: Option<String>,
     max_redirects: Option<u8>,
 ) -> Result<Value, String> {
+    policy::check_target(&tools::parse_url(&url)?.host, "запрос HTTP")?;
     tools::http_probe(url, method, max_redirects).await
 }
 
@@ -2555,6 +2570,7 @@ async fn tools_http_on(
     // Адрес уходит в командную строку, поэтому проверяем его тем же разбором, что и для
     // своей стороны: узел через `check_host`, схема - только http и https.
     let u = tools::parse_url(&url)?;
+    policy::check_target(&u.host, "запрос HTTP с сервера")?;
     let method = method.unwrap_or_else(|| "GET".into()).to_uppercase();
     if !matches!(method.as_str(), "GET" | "HEAD") {
         return Err("Пока умеем только GET и HEAD".into());
@@ -2649,12 +2665,15 @@ async fn tools_diff(state: State<'_, AppState>, a: DiffSide, b: DiffSide) -> Res
 /// второго варианта несоразмерно пользе. В интерфейсе об этом сказано прямо.
 #[tauri::command]
 async fn tools_ldap(params: ldap::Params) -> Result<Value, String> {
+    ldap::check_url(&params.url)?;
+    policy::check_target(&ldap::host_of(&params.url), "каталог LDAP")?;
     ldap::search(params).await
 }
 
 /// Маршрут до адреса со своей машины.
 #[tauri::command]
 async fn tools_trace(host: String, hops: Option<u8>) -> Result<Value, String> {
+    policy::check_target(&host, "трассировка")?;
     tools::trace(host, hops).await
 }
 
@@ -2669,6 +2688,7 @@ async fn tools_trace_on(
 ) -> Result<Value, String> {
     let (host, _) = tools::parse_host_port(&host, 0)?;
     tools::remote::check_host(&host)?;
+    policy::check_target(&host, "утилита с сервера")?;
     let hops = hops.unwrap_or(15).clamp(1, 30);
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let (kind, _) = platform::of_session(&session_id, &s.handle).await;
@@ -2688,6 +2708,7 @@ async fn tools_port_scan(
     to: u16,
     timeout_ms: Option<u64>,
 ) -> Result<Value, String> {
+    policy::check_target(&host, "просмотр диапазона портов")?;
     tools::port_scan(host, from, to, timeout_ms).await
 }
 
@@ -2705,6 +2726,7 @@ async fn tools_port_scan_on(
 ) -> Result<Value, String> {
     let (host, _) = tools::parse_host_port(&host, from)?;
     tools::remote::check_host(&host)?;
+    policy::check_target(&host, "утилита с сервера")?;
     let (from, to) = tools::parse_range(from, to)?;
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let (kind, _) = platform::of_session(&session_id, &s.handle).await;
@@ -2730,6 +2752,7 @@ async fn tools_port_test_on(
 ) -> Result<Value, String> {
     let (host, port) = tools::parse_host_port(&host, port)?;
     tools::remote::check_host(&host)?;
+    policy::check_target(&host, "утилита с сервера")?;
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let (kind, _) = platform::of_session(&session_id, &s.handle).await;
     let cmd = match kind {
@@ -2749,6 +2772,7 @@ async fn tools_dns_lookup_on(
 ) -> Result<Value, String> {
     let name = name.trim().trim_end_matches('.').to_string();
     tools::remote::check_host(&name)?;
+    policy::check_target(&name, "запрос DNS с сервера")?;
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let (kind, _) = platform::of_session(&session_id, &s.handle).await;
     let cmd = match kind {

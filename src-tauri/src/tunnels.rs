@@ -277,6 +277,15 @@ async fn handle_socks5(
     sock.read_exact(&mut pbuf).await.map_err(|e| e.to_string())?;
     let port = u16::from_be_bytes(pbuf) as u32;
 
+    // Политика администратора. У динамического туннеля адрес выбирает не конфиг, а сам
+    // клиент в каждом запросе, поэтому проверка здесь, а не при открытии туннеля.
+    if let Err(e) = crate::policy::check_target(&host, "туннель SOCKS5") {
+        // 0x02 - «соединение запрещено правилами»: браузер покажет отказ сразу, а не
+        // будет ждать таймаута.
+        sock.write_all(&[0x05, 0x02, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await.ok();
+        return Err(e);
+    }
+
     let ch = {
         let g = handle.lock().await;
         g.channel_open_direct_tcpip(host.as_str(), port, "127.0.0.1", 0).await
