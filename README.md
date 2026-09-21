@@ -271,6 +271,7 @@ complain (*More info → Run anyway*).
 
 Release notes: [RELEASE_NOTES_v1.5.0.md](docs/RELEASE_NOTES_v1.5.0.md).
 Security policy and threat model: [SECURITY.md](SECURITY.md).
+History of releases: [CHANGELOG.md](CHANGELOG.md). How to send a fix: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Auto-update checks GitHub Releases first and falls back to our own mirror
 (`nehade.xyz/updates/terminal/`) when GitHub does not answer. Both manifests carry the same
@@ -352,12 +353,19 @@ npm run smoke
 ### Tests
 
 ```bash
-npm test                                          # frontend, ~100 tests
-cargo test --manifest-path src-tauri/Cargo.toml --lib
+npm test                                          # frontend, 219 tests
+npm run lint                                      # eslint: React hooks and regex traps
+cargo test --manifest-path src-tauri/Cargo.toml --lib   # 351 tests
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-Integration tests run against **real SSH servers in Docker** - Debian, Alpine/BusyBox, and one
-with the SFTP subsystem removed on purpose:
+All five run in CI on every push, and a new warning fails the build.
+
+Integration tests run against **real SSH servers in Docker**: Debian, Alpine/BusyBox, one with
+the SFTP subsystem removed on purpose, one port that accepts a password only through
+keyboard-interactive, a desktop over VNC, seven databases and a directory — plus login through a
+real `ssh-agent`:
 
 ```bash
 ./scripts/ssh-stand/up.sh
@@ -392,6 +400,8 @@ stripped; there is no application-wide log file yet - for that, use `npm run tau
 ## Known limitations
 
 - The Windows build is **unsigned** - SmartScreen will fight you. Verify the SHA-256 sums.
+- **The interface and all messages are in Russian.** There is no localisation yet: this README
+  is translated, the application is not.
 - No **macOS** build. It needs a Mac to even test the launch, so it waits for hardware.
 - No **X11 forwarding**.
 - No external penetration test or independent review of the crypto layer yet.

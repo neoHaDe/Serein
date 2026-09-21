@@ -274,6 +274,7 @@ Windows · без своего Chromium (системный WebView2) ·
 
 Что нового - [release notes](docs/RELEASE_NOTES_v1.5.0.md) и описание выпуска на GitHub.
 Политика безопасности и модель угроз - [SECURITY.md](SECURITY.md).
+История выпусков - [CHANGELOG.md](CHANGELOG.md). Как прислать правку - [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Автообновление сначала спрашивает GitHub Releases, а если он не ответил - своё зеркало
 (`nehade.xyz/updates/terminal/`). Подписи minisign в обоих манифестах одинаковые; ключ подписи
@@ -354,12 +355,19 @@ npm run smoke
 ### Тесты
 
 ```bash
-npm test                                          # фронтенд, ~100 тестов
-cargo test --manifest-path src-tauri/Cargo.toml --lib
+npm test                                          # фронтенд, 219 тестов
+npm run lint                                      # eslint: хуки React и ловушки выражений
+cargo test --manifest-path src-tauri/Cargo.toml --lib   # 351 тест
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-Интеграционные идут против **настоящих SSH-серверов в Docker** - Debian, Alpine/BusyBox и
-один с намеренно вырезанной подсистемой SFTP:
+Все пять гоняются в CI на каждый пуш, и новое предупреждение роняет сборку.
+
+Интеграционные идут против **настоящих SSH-серверов в Docker**: Debian, Alpine/BusyBox, один с
+намеренно вырезанной подсистемой SFTP, порт, где пароль принимается только через
+keyboard-interactive, рабочий стол по VNC, семь баз и каталог - плюс вход через настоящий
+`ssh-agent`:
 
 ```bash
 ./scripts/ssh-stand/up.sh
@@ -393,6 +401,8 @@ cargo test --manifest-path src-tauri/Cargo.toml -- --ignored --test-threads=1
 ## Известные ограничения
 
 - Сборка под Windows **без цифровой подписи** - SmartScreen будет спорить. Сверяй SHA-256.
+- **Интерфейс и все сообщения - на русском.** Локализации пока нет: переведён этот README,
+  а не приложение.
 - Нет сборки под **macOS**: там без мака не проверить даже запуск, ждём железо.
 - Нет **X11 forwarding**.
 - Внешнего пентеста и независимого ревью крипто-слоя пока не было.

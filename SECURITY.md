@@ -136,6 +136,11 @@ The registry value overrides the file key by key.
   written as an IP, and a DNS alias of a forbidden host is not caught.
 - `forbidSavedPasswords` — passwords and key passphrases are not saved and saved ones are not
   used; they are asked for on connection. Saved ones already on disk are left in place, unused.
+  Note how a saved password is used when it *is* allowed: it answers a keyboard-interactive
+  password prompt as well, once per connection, so servers with `PasswordAuthentication no` and
+  the password behind PAM work unattended. A prompt that is not a password — a second-factor
+  code, an expiring "new password" — is always shown to the person, and a password the server
+  has already refused is not sent again.
 - `requireMasterPassword` — the master password cannot be turned off, and secrets are not saved
   until it is on.
 - `forbidLocalTerminal`, `forbidSessionRecording` — no local shell, no recording terminal output
