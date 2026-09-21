@@ -108,9 +108,9 @@ fn read_checked(name: &str) -> Result<Option<Value>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("файл {name} не читается: {e}")),
     };
-    serde_json::from_str(&txt).map(Some).map_err(|e| {
-        format!("файл {name} повреждён ({e}) - он не перезаписан, разберитесь с ним сначала")
-    })
+    serde_json::from_str(&txt)
+        .map(Some)
+        .map_err(|e| format!("файл {name} повреждён ({e}) - он не перезаписан, разберитесь с ним сначала"))
 }
 
 /// Пишет файл профиля целиком или не пишет вовсе.
@@ -347,9 +347,7 @@ pub fn settings_set(mut patch: Value) -> Result<Value, String> {
 // ---------- Универсальный список объектов с полем id ----------
 
 fn list_items(name: &str) -> Vec<Value> {
-    read_value(name)
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default()
+    read_value(name).and_then(|v| v.as_array().cloned()).unwrap_or_default()
 }
 
 /// То же, но для записи: непрочитанный файл - причина отказаться, а не начать с нуля.
@@ -415,9 +413,9 @@ fn encrypt_secret(value: &str) -> Result<Option<String>, String> {
         ),
         None => value.to_string(),
     };
-    os_protect(&v).map(Some).ok_or_else(|| {
-        "хранилище секретов системы не приняло пароль - он не сохранён".to_owned()
-    })
+    os_protect(&v)
+        .map(Some)
+        .ok_or_else(|| "хранилище секретов системы не приняло пароль - он не сохранён".to_owned())
 }
 
 /// Расшифровывает секрет, различая «его нет» и «он недоступен».
@@ -428,9 +426,7 @@ fn read_secret_field(holder: &Value, field: &str) -> Result<Option<String>, Stri
     match holder.get(field).and_then(|v| v.as_str()) {
         None => Ok(None),
         Some(enc) => decrypt_secret(enc).map(Some).ok_or_else(|| {
-            format!(
-                "секрет «{field}» не расшифровывается: закрыто хранилище системы или не введён мастер-пароль"
-            )
+            format!("секрет «{field}» не расшифровывается: закрыто хранилище системы или не введён мастер-пароль")
         }),
     }
 }
@@ -549,12 +545,22 @@ pub fn servers_save(mut cfg: Value) -> Result<Value, String> {
     let prev = secrets.get(&id).cloned().unwrap_or_else(|| json!({}));
     let mut next = Map::new();
     let pw = if had_password {
-        password.as_deref().map(encrypt_secret).transpose()?.flatten().map(Value::String)
+        password
+            .as_deref()
+            .map(encrypt_secret)
+            .transpose()?
+            .flatten()
+            .map(Value::String)
     } else {
         prev.get("password").cloned()
     };
     let pp = if had_passphrase {
-        passphrase.as_deref().map(encrypt_secret).transpose()?.flatten().map(Value::String)
+        passphrase
+            .as_deref()
+            .map(encrypt_secret)
+            .transpose()?
+            .flatten()
+            .map(Value::String)
     } else {
         prev.get("passphrase").cloned()
     };
@@ -664,7 +670,6 @@ pub fn import_all_secrets(map: &Map<String, Value>) -> Result<(), String> {
     }
     write_value("secrets.json", &secrets)
 }
-
 
 // ---------- Сниппеты ----------
 

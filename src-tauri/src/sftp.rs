@@ -164,7 +164,19 @@ async fn wait_if_paused(
         return Ok(());
     }
     if let Some(app) = app {
-        emit_transfer(app, item_id, session_id, direction, local, remote, rel, size, transferred, PAUSED, None);
+        emit_transfer(
+            app,
+            item_id,
+            session_id,
+            direction,
+            local,
+            remote,
+            rel,
+            size,
+            transferred,
+            PAUSED,
+            None,
+        );
     }
     while c.is_paused() {
         gone(alive, xfer)?;
@@ -175,7 +187,19 @@ async fn wait_if_paused(
     }
     gone(alive, xfer)?;
     if let Some(app) = app {
-        emit_transfer(app, item_id, session_id, direction, local, remote, rel, size, transferred, "active", None);
+        emit_transfer(
+            app,
+            item_id,
+            session_id,
+            direction,
+            local,
+            remote,
+            rel,
+            size,
+            transferred,
+            "active",
+            None,
+        );
     }
     Ok(())
 }
@@ -187,10 +211,7 @@ pub(crate) fn dup_key(session_id: &str, direction: &str, local: &str, remote: &s
         let dest = local.replace('\\', "/");
         return format!("download|{}", if cfg!(windows) { dest.to_lowercase() } else { dest });
     }
-    format!(
-        "{session_id}|{direction}|{}|{remote}",
-        local.replace('\\', "/")
-    )
+    format!("{session_id}|{direction}|{}|{remote}", local.replace('\\', "/"))
 }
 
 pub struct TransferHub {
@@ -407,7 +428,11 @@ pub fn check_remote_path(p: &str) -> Result<(), String> {
 
 pub async fn list(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, path: &str) -> Result<Value, String> {
     let sftp = open(handle).await?;
-    let target = if path.is_empty() { ".".to_string() } else { path.to_string() };
+    let target = if path.is_empty() {
+        ".".to_string()
+    } else {
+        path.to_string()
+    };
     let abs = sftp.canonicalize(target).await.map_err(|e| e.to_string())?;
     let mut entries: Vec<Value> = Vec::new();
     let rd = sftp.read_dir(&abs).await.map_err(|e| e.to_string())?;
@@ -450,15 +475,18 @@ pub async fn list(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, pa
     entries.sort_by(|a, b| {
         let ad = a["type"] == json!("dir");
         let bd = b["type"] == json!("dir");
-        bd.cmp(&ad).then_with(|| {
-            a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
-        })
+        bd.cmp(&ad)
+            .then_with(|| a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or("")))
     });
     Ok(json!({ "path": abs, "entries": entries }))
 }
 
 /// Скачивает один удалённый файл в локальный путь (без событий) - для внешнего редактора.
-pub async fn download_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str, local: &str) -> Result<(), String> {
+pub async fn download_file(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    remote: &str,
+    local: &str,
+) -> Result<(), String> {
     download_file_while(handle, remote, local, None).await
 }
 
@@ -476,7 +504,11 @@ pub async fn download_file_while(
 }
 
 /// Заливает один локальный файл на удалённый путь (без событий).
-pub async fn put_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, local: &str, remote: &str) -> Result<(), String> {
+pub async fn put_file(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    local: &str,
+    remote: &str,
+) -> Result<(), String> {
     put_file_while(handle, local, remote, None).await
 }
 
@@ -508,7 +540,11 @@ pub async fn mkdir(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, p
 /// в реальных каталогах, и заведомо меньше, чем нужно, чтобы уйти в бесконечность.
 const MAX_REMOVE_DEPTH: usize = 30;
 
-pub async fn remove(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, path: &str, is_dir: bool) -> Result<(), String> {
+pub async fn remove(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    path: &str,
+    is_dir: bool,
+) -> Result<(), String> {
     check_remote_path(path)?;
     let sftp = open(handle).await?;
     if is_dir {
@@ -568,14 +604,22 @@ async fn remove_dir_all(sftp: &SftpSession, root: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn rename(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, from: &str, to: &str) -> Result<(), String> {
+pub async fn rename(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    from: &str,
+    to: &str,
+) -> Result<(), String> {
     check_remote_path(from)?;
     check_remote_path(to)?;
     let sftp = open(handle).await?;
     sftp.rename(from, to).await.map_err(|e| e.to_string())
 }
 
-pub async fn chmod(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, path: &str, mode: u32) -> Result<(), String> {
+pub async fn chmod(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    path: &str,
+    mode: u32,
+) -> Result<(), String> {
     check_remote_path(path)?;
     let sftp = open(handle).await?;
     let meta = sftp.symlink_metadata(path).await.map_err(|e| e.to_string())?;
@@ -607,10 +651,7 @@ pub(crate) fn walk_too_big() -> String {
 /// Возвращает прочитанное и признак «влезло не всё». Проверять только размер из `stat`
 /// нельзя: он может врать (сервер не обязан говорить правду), а у растущего файла или
 /// файла из `/proc` размер вообще ничего не значит - там ноль, а читается бесконечно.
-async fn read_capped(
-    file: &mut russh_sftp::client::fs::File,
-    limit: u64,
-) -> Result<(Vec<u8>, bool), String> {
+async fn read_capped(file: &mut russh_sftp::client::fs::File, limit: u64) -> Result<(Vec<u8>, bool), String> {
     let cap = usize::try_from(limit).unwrap_or(usize::MAX);
     let mut buf = Vec::new();
     let mut chunk = vec![0u8; 64 * 1024];
@@ -627,7 +668,10 @@ async fn read_capped(
     }
 }
 
-pub async fn preview(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str) -> Result<Value, String> {
+pub async fn preview(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    remote: &str,
+) -> Result<Value, String> {
     check_remote_path(remote)?;
     let sftp = open(handle).await?;
     let meta = sftp.metadata(remote).await.map_err(|e| e.to_string())?;
@@ -664,7 +708,10 @@ pub async fn remote_mtime(
     Ok(meta.mtime.map(|t| t as u64 * 1000))
 }
 
-pub async fn read_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str) -> Result<Value, String> {
+pub async fn read_file(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    remote: &str,
+) -> Result<Value, String> {
     check_remote_path(remote)?;
     let sftp = open(handle).await?;
     let meta = sftp.metadata(remote).await.map_err(|e| e.to_string())?;
@@ -685,7 +732,11 @@ pub async fn read_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>
     }
     let text = String::from_utf8_lossy(&buf).to_string();
     let eol = if text.contains("\r\n") { "crlf" } else { "lf" };
-    let content = if eol == "crlf" { text.replace("\r\n", "\n") } else { text };
+    let content = if eol == "crlf" {
+        text.replace("\r\n", "\n")
+    } else {
+        text
+    };
     Ok(json!({ "content": content, "eol": eol, "mode": mode, "mtime": mtime }))
 }
 
@@ -748,9 +799,19 @@ pub async fn write_file(
             return Ok(json!({ "ok": false, "conflict": true }));
         }
     }
-    let data = if eol == "crlf" { content.replace('\n', "\r\n") } else { content.to_string() };
-    let dir = Path::new(remote).parent().map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
-    let base = Path::new(remote).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let data = if eol == "crlf" {
+        content.replace('\n', "\r\n")
+    } else {
+        content.to_string()
+    };
+    let dir = Path::new(remote)
+        .parent()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default();
+    let base = Path::new(remote)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
     // Имя временного файла своё на каждое сохранение. Постоянное имя два открытых
     // редактора делили между собой, и кто сохранял вторым - затирал первого.
     let stamp = uuid::Uuid::new_v4().simple().to_string();
@@ -816,7 +877,10 @@ async fn copy_remote_to_local(
     alive: Option<&AtomicBool>,
     xfer: Option<&XferCtrl>,
 ) -> Result<u64, String> {
-    copy_remote_to_local_inner(ssh, sftp, app, item_id, session_id, remote, local, rel, size, alive, xfer).await
+    copy_remote_to_local_inner(
+        ssh, sftp, app, item_id, session_id, remote, local, rel, size, alive, xfer,
+    )
+    .await
 }
 
 async fn copy_remote_to_local_inner(
@@ -841,9 +905,15 @@ async fn copy_remote_to_local_inner(
     // от целого нельзя ничем: размер совпадёт, как только дойдёт последний байт.
     let part = part_path(local);
     let result = if size >= PIPELINE_AFTER {
-        pipelined_download(ssh, app, item_id, session_id, remote, local, &part, rel, size, alive, xfer).await
+        pipelined_download(
+            ssh, app, item_id, session_id, remote, local, &part, rel, size, alive, xfer,
+        )
+        .await
     } else {
-        sequential_download(sftp, app, item_id, session_id, remote, local, &part, rel, size, alive, xfer).await
+        sequential_download(
+            sftp, app, item_id, session_id, remote, local, &part, rel, size, alive, xfer,
+        )
+        .await
     };
     match result {
         Ok(n) => {
@@ -906,7 +976,20 @@ async fn sequential_download(
     let mut last_emit: u64 = 0;
     loop {
         gone(alive, xfer)?;
-        wait_if_paused(app, alive, xfer, item_id, session_id, "download", local, remote, rel, size, transferred).await?;
+        wait_if_paused(
+            app,
+            alive,
+            xfer,
+            item_id,
+            session_id,
+            "download",
+            local,
+            remote,
+            rel,
+            size,
+            transferred,
+        )
+        .await?;
         let n = tokio::select! {
             _ = wait_cancel(alive, xfer) => return Err(CANCELLED.into()),
             n = rf.read(&mut buf) => n.map_err(|e| e.to_string())?,
@@ -919,7 +1002,19 @@ async fn sequential_download(
         if let Some(app) = app {
             if transferred - last_emit >= 262144 {
                 last_emit = transferred;
-                emit_transfer(app, item_id, session_id, "download", local, remote, rel, size, transferred, "active", None);
+                emit_transfer(
+                    app,
+                    item_id,
+                    session_id,
+                    "download",
+                    local,
+                    remote,
+                    rel,
+                    size,
+                    transferred,
+                    "active",
+                    None,
+                );
             }
         }
     }
@@ -959,10 +1054,7 @@ async fn pipelined_download(
         .await
         .map_err(|e| e.to_string())?;
     let fh = opened.handle;
-    let mut lf = BufWriter::with_capacity(
-        1024 * 1024,
-        create_part(part).await?,
-    );
+    let mut lf = BufWriter::with_capacity(1024 * 1024, create_part(part).await?);
     let mut next_send = 0u64;
     let mut next_write = 0u64;
     let mut transferred = 0u64;
@@ -973,7 +1065,20 @@ async fn pipelined_download(
 
     loop {
         gone(alive, xfer)?;
-        wait_if_paused(app, alive, xfer, item_id, session_id, "download", local, remote, rel, size, transferred).await?;
+        wait_if_paused(
+            app,
+            alive,
+            xfer,
+            item_id,
+            session_id,
+            "download",
+            local,
+            remote,
+            rel,
+            size,
+            transferred,
+        )
+        .await?;
         while !eof
             && !xfer.is_some_and(|c| c.is_paused())
             && inflight.len() < READ_INFLIGHT
@@ -1019,8 +1124,17 @@ async fn pipelined_download(
                         if transferred - last_emit >= 1024 * 1024 {
                             last_emit = transferred;
                             emit_transfer(
-                                app, item_id, session_id, "download", local, remote, rel, size,
-                                transferred, "active", None,
+                                app,
+                                item_id,
+                                session_id,
+                                "download",
+                                local,
+                                remote,
+                                rel,
+                                size,
+                                transferred,
+                                "active",
+                                None,
                             );
                         }
                     }
@@ -1083,8 +1197,14 @@ async fn copy_local_to_remote_inner(
     // (`sites-enabled/site` -> `sites-available/site`) молча разошлась бы со ссылкой.
     let existing = sftp.symlink_metadata(remote).await.ok();
     let is_link = existing.as_ref().is_some_and(|m| m.is_symlink());
-    let dir = Path::new(remote).parent().map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
-    let base = Path::new(remote).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let dir = Path::new(remote)
+        .parent()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default();
+    let base = Path::new(remote)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
     let tag: String = uuid::Uuid::new_v4().simple().to_string().chars().take(8).collect();
     let tmp = format!("{dir}/.{base}.serein-{tag}.part");
     let (mut rf, staged) = if is_link {
@@ -1104,7 +1224,20 @@ async fn copy_local_to_remote_inner(
         let mut last_emit: u64 = 0;
         loop {
             gone(alive, xfer)?;
-            wait_if_paused(app, alive, xfer, item_id, session_id, "upload", local, remote, rel, size, transferred).await?;
+            wait_if_paused(
+                app,
+                alive,
+                xfer,
+                item_id,
+                session_id,
+                "upload",
+                local,
+                remote,
+                rel,
+                size,
+                transferred,
+            )
+            .await?;
             let n = tokio::select! {
                 _ = wait_cancel(alive, xfer) => return Err(CANCELLED.into()),
                 n = lf.read(&mut buf) => n.map_err(|e| e.to_string())?,
@@ -1120,7 +1253,19 @@ async fn copy_local_to_remote_inner(
             if let Some(app) = app {
                 if transferred - last_emit >= 262144 {
                     last_emit = transferred;
-                    emit_transfer(app, item_id, session_id, "upload", local, remote, rel, size, transferred, "active", None);
+                    emit_transfer(
+                        app,
+                        item_id,
+                        session_id,
+                        "upload",
+                        local,
+                        remote,
+                        rel,
+                        size,
+                        transferred,
+                        "active",
+                        None,
+                    );
                 }
             }
         }
@@ -1230,16 +1375,19 @@ pub async fn upload_path(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "file".into());
     let mut files: Vec<(String, String, String, u64)> = Vec::new();
-    collect_local(&local, &join_remote(remote_dir, &root_name), &root_name, &mut files, Some(alive.as_ref())).await?;
+    collect_local(
+        &local,
+        &join_remote(remote_dir, &root_name),
+        &root_name,
+        &mut files,
+        Some(alive.as_ref()),
+    )
+    .await?;
 
     let sftp = open(handle.as_ref()).await?;
     let mut parents: Vec<String> = files
         .iter()
-        .filter_map(|(_, rp, _, _)| {
-            Path::new(rp)
-                .parent()
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
-        })
+        .filter_map(|(_, rp, _, _)| Path::new(rp).parent().map(|p| p.to_string_lossy().replace('\\', "/")))
         .collect();
     parents.sort_by_key(|p| p.len());
     parents.dedup();
@@ -1272,11 +1420,33 @@ pub async fn upload_path(
                 if !ctrl.is_live() || !alive.load(Ordering::Relaxed) {
                     hub.finish(&id);
                     emit_transfer(
-                        &app, &id, &session_id, "upload", &lp, &rp, &rel, size, 0, "canceled", None,
+                        &app,
+                        &id,
+                        &session_id,
+                        "upload",
+                        &lp,
+                        &rp,
+                        &rel,
+                        size,
+                        0,
+                        "canceled",
+                        None,
                     );
                     return;
                 }
-                emit_transfer(&app, &id, &session_id, "upload", &lp, &rp, &rel, size, 0, "active", None);
+                emit_transfer(
+                    &app,
+                    &id,
+                    &session_id,
+                    "upload",
+                    &lp,
+                    &rp,
+                    &rel,
+                    size,
+                    0,
+                    "active",
+                    None,
+                );
                 let result = match open(handle.as_ref()).await {
                     Ok(sftp) => {
                         copy_local_to_remote(
@@ -1298,13 +1468,43 @@ pub async fn upload_path(
                 hub.finish(&id);
                 match result {
                     Ok(_) => emit_transfer(
-                        &app, &id, &session_id, "upload", &lp, &rp, &rel, size, size, "done", None,
+                        &app,
+                        &id,
+                        &session_id,
+                        "upload",
+                        &lp,
+                        &rp,
+                        &rel,
+                        size,
+                        size,
+                        "done",
+                        None,
                     ),
                     Err(e) if e == CANCELLED => emit_transfer(
-                        &app, &id, &session_id, "upload", &lp, &rp, &rel, size, 0, "canceled", None,
+                        &app,
+                        &id,
+                        &session_id,
+                        "upload",
+                        &lp,
+                        &rp,
+                        &rel,
+                        size,
+                        0,
+                        "canceled",
+                        None,
                     ),
                     Err(e) => emit_transfer(
-                        &app, &id, &session_id, "upload", &lp, &rp, &rel, size, 0, "error", Some(&e),
+                        &app,
+                        &id,
+                        &session_id,
+                        "upload",
+                        &lp,
+                        &rp,
+                        &rel,
+                        size,
+                        0,
+                        "error",
+                        Some(&e),
                     ),
                 }
             }
@@ -1401,7 +1601,16 @@ pub async fn download_path(
     for (rel, why) in plan.refused {
         let id = uuid::Uuid::new_v4().to_string();
         emit_transfer(
-            &app, &id, session_id, "download", "", remote, &rel, 0, 0, "error",
+            &app,
+            &id,
+            session_id,
+            "download",
+            "",
+            remote,
+            &rel,
+            0,
+            0,
+            "error",
             Some(&format!("не сохранено: {why}")),
         );
     }
@@ -1422,7 +1631,9 @@ pub async fn download_path(
         let Some(ctrl) = hub.start(&id, session_id, key) else {
             continue;
         };
-        emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "queued", None);
+        emit_transfer(
+            &app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "queued", None,
+        );
         jobs.push((id, ctrl, lp, rp, rel, size));
     }
 
@@ -1439,7 +1650,17 @@ pub async fn download_path(
                 if !ctrl.is_live() || !alive.load(Ordering::Relaxed) {
                     hub.finish(&id);
                     emit_transfer(
-                        &app, &id, &session_id, "download", &lp, &rp, &rel, size, 0, "canceled", None,
+                        &app,
+                        &id,
+                        &session_id,
+                        "download",
+                        &lp,
+                        &rp,
+                        &rel,
+                        size,
+                        0,
+                        "canceled",
+                        None,
                     );
                     return;
                 }
@@ -1447,12 +1668,32 @@ pub async fn download_path(
                 if let Err(e) = crate::localname::no_links_below(Path::new(local_dir), Path::new(&lp)) {
                     hub.finish(&id);
                     emit_transfer(
-                        &app, &id, &session_id, "download", &lp, &rp, &rel, size, 0, "error", Some(&e),
+                        &app,
+                        &id,
+                        &session_id,
+                        "download",
+                        &lp,
+                        &rp,
+                        &rel,
+                        size,
+                        0,
+                        "error",
+                        Some(&e),
                     );
                     return;
                 }
                 emit_transfer(
-                    &app, &id, &session_id, "download", &lp, &rp, &rel, size, 0, "active", None,
+                    &app,
+                    &id,
+                    &session_id,
+                    "download",
+                    &lp,
+                    &rp,
+                    &rel,
+                    size,
+                    0,
+                    "active",
+                    None,
                 );
                 let result = match open(handle.as_ref()).await {
                     Ok(sftp) => {
@@ -1476,13 +1717,43 @@ pub async fn download_path(
                 hub.finish(&id);
                 match result {
                     Ok(n) => emit_transfer(
-                        &app, &id, &session_id, "download", &lp, &rp, &rel, size, n, "done", None,
+                        &app,
+                        &id,
+                        &session_id,
+                        "download",
+                        &lp,
+                        &rp,
+                        &rel,
+                        size,
+                        n,
+                        "done",
+                        None,
                     ),
                     Err(e) if e == CANCELLED => emit_transfer(
-                        &app, &id, &session_id, "download", &lp, &rp, &rel, size, 0, "canceled", None,
+                        &app,
+                        &id,
+                        &session_id,
+                        "download",
+                        &lp,
+                        &rp,
+                        &rel,
+                        size,
+                        0,
+                        "canceled",
+                        None,
                     ),
                     Err(e) => emit_transfer(
-                        &app, &id, &session_id, "download", &lp, &rp, &rel, size, 0, "error", Some(&e),
+                        &app,
+                        &id,
+                        &session_id,
+                        "download",
+                        &lp,
+                        &rp,
+                        &rel,
+                        size,
+                        0,
+                        "error",
+                        Some(&e),
                     ),
                 }
             }
@@ -1606,10 +1877,7 @@ fn collect_remote_at<'a>(
         let meta = if meta.file_type().is_symlink() {
             match sftp.metadata(remote).await {
                 Ok(target) if target.file_type().is_dir() => {
-                    refused.push((
-                        rel.to_owned(),
-                        "это ссылка на каталог - внутрь не заходим".to_owned(),
-                    ));
+                    refused.push((rel.to_owned(), "это ссылка на каталог - внутрь не заходим".to_owned()));
                     return Ok(());
                 }
                 Err(e) => {
@@ -1638,7 +1906,12 @@ fn collect_remote_at<'a>(
                 collect_remote_at(sftp, &rp, &lp, &r, out, refused, alive, depth + 1).await?;
             }
         } else {
-            out.push((local.to_string(), remote.to_string(), rel.to_string(), meta.size.unwrap_or(0)));
+            out.push((
+                local.to_string(),
+                remote.to_string(),
+                rel.to_string(),
+                meta.size.unwrap_or(0),
+            ));
         }
         Ok(())
     })
@@ -1712,7 +1985,10 @@ mod walk_tests {
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("sub").join("a.txt"), "x").unwrap();
         let root = dir.to_string_lossy().replace('\\', "/");
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
 
         let closed = AtomicBool::new(false);
         let mut out = Vec::new();
@@ -1723,7 +1999,8 @@ mod walk_tests {
         assert!(out.is_empty(), "после закрытия сессии обход ничего не набирает");
 
         let open = AtomicBool::new(true);
-        rt.block_on(collect_local(&root, "/r", "root", &mut out, Some(&open))).unwrap();
+        rt.block_on(collect_local(&root, "/r", "root", &mut out, Some(&open)))
+            .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].2, "root/sub/a.txt");
         let _ = std::fs::remove_dir_all(dir);
@@ -1739,7 +2016,10 @@ mod part_tests {
         let a = part_path("C:/Загрузки/отчёт");
         let b = part_path("C:/Загрузки/отчёт");
         assert_ne!(a, b, "две передачи в один файл не делят временное имя");
-        assert!(a.starts_with("C:/Загрузки/отчёт.serein-") && a.ends_with(".part"), "{a}");
+        assert!(
+            a.starts_with("C:/Загрузки/отчёт.serein-") && a.ends_with(".part"),
+            "{a}"
+        );
         assert_ne!(a, "C:/Загрузки/отчёт.part", "файл человека «отчёт.part» не трогаем");
     }
 
@@ -1749,7 +2029,10 @@ mod part_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let taken = dir.join("занято.part");
         std::fs::write(&taken, "важное").unwrap();
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         assert!(rt.block_on(create_part(&taken.to_string_lossy())).is_err());
         assert_eq!(std::fs::read_to_string(&taken).unwrap(), "важное");
         let _ = std::fs::remove_dir_all(dir);
@@ -1762,6 +2045,9 @@ mod part_tests {
             dup_key("s2", "download", "C:/a/файл", "/srv/y"),
             "источник и сессия не важны - важен конечный файл"
         );
-        assert_ne!(dup_key("s1", "upload", "C:/a/файл", "/srv/x"), dup_key("s1", "upload", "C:/a/файл", "/srv/y"));
+        assert_ne!(
+            dup_key("s1", "upload", "C:/a/файл", "/srv/x"),
+            dup_key("s1", "upload", "C:/a/файл", "/srv/y")
+        );
     }
 }

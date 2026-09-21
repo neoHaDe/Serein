@@ -57,7 +57,9 @@ pub fn unlock(password: &str) -> bool {
     let Some(cfg) = read_config() else { return false };
     let salt = cfg.get("salt").and_then(|v| v.as_str()).unwrap_or("");
     let verifier = cfg.get("verifier").and_then(|v| v.as_str()).unwrap_or("");
-    let Some(key) = key_from(password, salt, kdf_of(&cfg)) else { return false };
+    let Some(key) = key_from(password, salt, kdf_of(&cfg)) else {
+        return false;
+    };
     match crypto::aes_decrypt(verifier, &key) {
         Ok(t) if t == VERIFY_TOKEN => {
             vaultkey::set(Some(key));
@@ -80,8 +82,16 @@ const MIN_MASTER_LEN: usize = 12;
 /// Пароли, которые подбирают первыми. Список короткий намеренно: полный словарь утечек
 /// сюда не поместится, а смысл - отсечь очевидное, не создавая иллюзии полной проверки.
 const WORST: &[&str] = &[
-    "password", "пароль", "123456789012", "qwertyuiop", "qwerty123456",
-    "administrator", "changeme", "letmein12345", "iloveyou1234", "welcome12345",
+    "password",
+    "пароль",
+    "123456789012",
+    "qwertyuiop",
+    "qwerty123456",
+    "administrator",
+    "changeme",
+    "letmein12345",
+    "iloveyou1234",
+    "welcome12345",
 ];
 
 /// Годится ли пароль в мастер-пароль.
@@ -228,7 +238,10 @@ mod tests {
     #[test]
     fn worst_known_passwords_are_refused_even_when_long_enough() {
         assert!(check_master_password("123456789012").is_err());
-        assert!(check_master_password("QwErTyUiOp").is_err(), "регистр не должен помогать");
+        assert!(
+            check_master_password("QwErTyUiOp").is_err(),
+            "регистр не должен помогать"
+        );
     }
 
     #[test]

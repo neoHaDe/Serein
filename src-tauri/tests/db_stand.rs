@@ -34,7 +34,9 @@ async fn open(s: &Stand, p: Params) -> String {
         .await
         .expect("подключение к серверу");
     let id = format!("test-{}", uuid::Uuid::new_v4());
-    db::open(id.clone(), "сессия-стенда", &h, p).await.expect("подключение к базе");
+    db::open(id.clone(), "сессия-стенда", &h, p)
+        .await
+        .expect("подключение к базе");
     id
 }
 
@@ -48,7 +50,12 @@ fn postgres_отвечает_через_ssh_канал() {
             .await
             .expect("запрос");
 
-        let cols: Vec<&str> = out["columns"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
+        let cols: Vec<&str> = out["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
         assert_eq!(cols, vec!["число", "текст"], "колонки пришли не те");
 
         let rows = shown(&out)["rows"].as_array().unwrap();
@@ -85,7 +92,9 @@ fn postgres_возвращает_число_изменённых_строк() {
     let s = Stand::from_env();
     rt().block_on(async {
         let id = open(&s, params(Kind::Postgres, &s.pg_host, "probe", Some("probe"))).await;
-        db::query(&id, "CREATE TEMP TABLE проба (имя text)").await.expect("создание");
+        db::query(&id, "CREATE TEMP TABLE проба (имя text)")
+            .await
+            .expect("создание");
         let out = db::query(&id, "INSERT INTO проба VALUES ('раз'), ('два')")
             .await
             .expect("вставка");
@@ -171,7 +180,9 @@ fn базы_в_стенде_не_публикуют_порты_наружу() {
     let text = std::fs::read_to_string(path).expect("файл стенда");
 
     for name in ["postgres:", "redis:"] {
-        let from = text.find(name).unwrap_or_else(|| panic!("сервис {name} пропал из стенда"));
+        let from = text
+            .find(name)
+            .unwrap_or_else(|| panic!("сервис {name} пропал из стенда"));
         // Читаем до начала следующего сервиса — им считается строка с двумя пробелами.
         let rest = &text[from..];
         let till = rest[1..].find(SERVICE_SEP).map(|k| k + 1).unwrap_or(rest.len());
@@ -208,12 +219,16 @@ async fn проверить_mysql(s: &Stand, host: &str) {
     assert_eq!(rows[0]["текст"], "привет");
 
     // NULL обязан отличаться от пустой строки — иначе по таблице нельзя судить о данных.
-    let out = db::query(&id, "SELECT NULL AS пусто, '' AS строка").await.expect("запрос");
+    let out = db::query(&id, "SELECT NULL AS пусто, '' AS строка")
+        .await
+        .expect("запрос");
     assert!(shown(&out)["rows"][0]["пусто"].is_null(), "NULL приехал не как NULL");
     assert_eq!(shown(&out)["rows"][0]["строка"], "");
 
     // Запрос без выборки сообщает про изменённые строки, а не про пустую таблицу.
-    db::query(&id, "CREATE TEMPORARY TABLE проба (id INT)").await.expect("создание таблицы");
+    db::query(&id, "CREATE TEMPORARY TABLE проба (id INT)")
+        .await
+        .expect("создание таблицы");
     let out = db::query(&id, "INSERT INTO проба VALUES (1), (2), (3)")
         .await
         .expect("вставка");
@@ -267,7 +282,10 @@ fn длинный_ответ_mysql_не_рвётся_на_границе_пак�
         // Склейка проверяется не длиной показанного, а тем, что мы знаем полную длину:
         // значение обрезается для показа (иначе таблица получила бы мегабайты в одной
         // ячейке), но в пометке стоит настоящий размер - 400000 символов по два байта.
-        assert!(v.contains("обрезано"), "длинное значение обязано быть помечено: {v:.80}");
+        assert!(
+            v.contains("обрезано"),
+            "длинное значение обязано быть помечено: {v:.80}"
+        );
         assert!(
             v.contains(&(400000 * 2).to_string()),
             "в пометке должен стоять полный размер значения: {:.120}",
@@ -277,7 +295,9 @@ fn длинный_ответ_mysql_не_рвётся_на_границе_пак�
 
         // И главное: соединение после большого ответа осталось исправным. Разъехавшаяся
         // склейка проявилась бы именно здесь - следующий запрос прочёл бы хвост прошлого.
-        let after = db::query(&id, "SELECT 7 AS сверка").await.expect("запрос после большого ответа");
+        let after = db::query(&id, "SELECT 7 AS сверка")
+            .await
+            .expect("запрос после большого ответа");
         assert_eq!(shown(&after)["rows"][0]["сверка"], "7");
         db::close(&id);
     });
@@ -293,7 +313,9 @@ fn неверный_пароль_mysql_отвергается_с_текстом(
             .expect("подключение к серверу");
         let mut p = params(Kind::Mysql, &s.mariadb_host, "probe", Some("probe"));
         p.password = Some("не тот пароль".into());
-        let err = db::open("test-bad-mysql".into(), "сессия-стенда", &h, p).await.unwrap_err();
+        let err = db::open("test-bad-mysql".into(), "сессия-стенда", &h, p)
+            .await
+            .unwrap_err();
         // Пустая строка вместо причины оставила бы человека гадать.
         assert!(!err.trim().is_empty(), "отказ без объяснения");
         assert!(
@@ -313,7 +335,9 @@ fn хранимая_процедура_не_разъезжает_соедине�
     rt().block_on(async {
         let id = open(&s, params(Kind::Mysql, &s.mariadb_host, "probe", Some("probe"))).await;
 
-        db::query(&id, "DROP PROCEDURE IF EXISTS проба_двух").await.expect("уборка");
+        db::query(&id, "DROP PROCEDURE IF EXISTS проба_двух")
+            .await
+            .expect("уборка");
         db::query(&id, "CREATE PROCEDURE проба_двух() BEGIN SELECT 1 AS первый; END")
             .await
             .expect("создание процедуры");
@@ -426,8 +450,18 @@ fn несколько_выборок_в_одном_запросе_не_смеш�
 
         let sets = out["sets"].as_array().expect("наборы");
         assert_eq!(sets.len(), 2, "две выборки - два набора: {out}");
-        let first: Vec<&str> = sets[0]["columns"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
-        let second: Vec<&str> = sets[1]["columns"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
+        let first: Vec<&str> = sets[0]["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
+        let second: Vec<&str> = sets[1]["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
         assert_eq!(first, vec!["a", "b"]);
         assert_eq!(second, vec!["c"], "у второй выборки свои колонки");
         assert_eq!(sets[1]["rows"][0]["c"], "3");
@@ -435,7 +469,12 @@ fn несколько_выборок_в_одном_запросе_не_смеш�
         // Одинаковые имена колонок не съедают друг друга: строка - словарь, и второе
         // значение затирало первое.
         let dup = db::query(&id, "SELECT 1 AS a, 2 AS a").await.expect("одинаковые имена");
-        let cols: Vec<&str> = dup["columns"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
+        let cols: Vec<&str> = dup["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
         assert_eq!(cols, vec!["a", "a#2"]);
         assert_eq!(shown(&dup)["rows"][0]["a"], "1");
         assert_eq!(shown(&dup)["rows"][0]["a#2"], "2");
@@ -443,7 +482,6 @@ fn несколько_выборок_в_одном_запросе_не_смеш�
         db::close(&id);
     });
 }
-
 
 fn mssql_params(s: &Stand) -> Params {
     // Пароль свой: SQL Server не стартует с простым, поэтому общий пароль стенда ему не годится.
@@ -478,7 +516,9 @@ fn sql_server_отвечает_через_ssh_канал() {
         assert_eq!(row["пустая_строка"], "", "пустая строка - не NULL");
 
         // Номер ошибки в тексте: по нему ошибку ищут, текст бывает переведён.
-        let err = db::query(&id, "SELECT * FROM нет_такой_таблицы").await.expect_err("ошибка");
+        let err = db::query(&id, "SELECT * FROM нет_такой_таблицы")
+            .await
+            .expect_err("ошибка");
         assert!(err.contains("208"), "ожидался номер ошибки 208: {err}");
         db::close(&id);
     });
@@ -514,7 +554,6 @@ fn sql_server_отдаёт_наборы_даты_и_числа() {
         db::close(&id);
     });
 }
-
 
 #[test]
 #[ignore = "нужен стенд: scripts/ssh-stand/up.sh"]
@@ -586,7 +625,6 @@ fn sqlite_читается_через_sqlite3_на_сервере() {
         assert_eq!(exists.trim(), "нет", "пустой файл не должен появиться");
     });
 }
-
 
 fn mongo_params(s: &Stand, user: &str, password: &str) -> Params {
     Params {
@@ -733,12 +771,22 @@ fn базы_сами_останавливают_долгий_запрос() {
 
         // У MariaDB и MySQL переменные разные - проверяем каждую на своей базе.
         let maria = open(&s, params(Kind::Mysql, &s.mariadb_host, "probe", Some("probe"))).await;
-        let out = db::query(&maria, "SELECT @@max_statement_time AS предел").await.expect("mariadb");
-        assert!(shown(&out)["rows"][0]["предел"].as_str().unwrap_or("").starts_with("28"), "{out}");
+        let out = db::query(&maria, "SELECT @@max_statement_time AS предел")
+            .await
+            .expect("mariadb");
+        assert!(
+            shown(&out)["rows"][0]["предел"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("28"),
+            "{out}"
+        );
         db::close(&maria);
 
         let mysql = open(&s, params(Kind::Mysql, &s.mysql_host, "probe", Some("probe"))).await;
-        let out = db::query(&mysql, "SELECT @@max_execution_time AS предел").await.expect("mysql");
+        let out = db::query(&mysql, "SELECT @@max_execution_time AS предел")
+            .await
+            .expect("mysql");
         assert_eq!(shown(&out)["rows"][0]["предел"], "28000", "{out}");
         db::close(&mysql);
     });
@@ -761,8 +809,13 @@ fn запрос_останавливается_по_просьбе() {
         assert!(db::cancel(&pg), "соединение есть");
         let err = running.await.expect("задача").expect_err("запрос остановлен");
         assert_eq!(err, "Запрос остановлен");
-        assert!(started.elapsed() < std::time::Duration::from_secs(10), "остановка не ждёт конца запроса");
-        let after = db::query(&pg, "SELECT 1 AS n").await.expect("соединение цело после отмены");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "остановка не ждёт конца запроса"
+        );
+        let after = db::query(&pg, "SELECT 1 AS n")
+            .await
+            .expect("соединение цело после отмены");
         assert_eq!(shown(&after)["rows"][0]["n"], "1");
         db::close(&pg);
 

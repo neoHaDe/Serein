@@ -246,9 +246,7 @@ async fn machine_limit<T>(
     let (human_before, _) = pause.state();
     loop {
         let (human, waiting) = pause.state();
-        let used = started
-            .elapsed()
-            .saturating_sub(human.saturating_sub(human_before));
+        let used = started.elapsed().saturating_sub(human.saturating_sub(human_before));
         let nap = if waiting {
             std::time::Duration::from_millis(250)
         } else if used >= limit {
@@ -432,13 +430,13 @@ impl Handler for ClientHandler {
         reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        let local_port = crate::sync::lock(&self.remote_forwards)
-            .get(&connected_port)
-            .copied();
+        let local_port = crate::sync::lock(&self.remote_forwards).get(&connected_port).copied();
         // Канал теперь надо подтвердить явно: без accept он отклоняется при сбросе `reply`.
         // Нет маршрута на этот порт - так и отклоняем, а не открываем «в никуда».
         if local_port.is_none() {
-            reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await;
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
             return Ok(());
         }
         reply.accept().await;
@@ -619,11 +617,7 @@ impl DesktopLink {
 /// Вход только без вопросов: пароль, ключ, агент. Если серверу нужен второй фактор,
 /// соединения не будет, и рабочий стол пойдёт общим каналом сессии - вызывающий об этом
 /// знает по ошибке.
-pub async fn connect_desktop(
-    chain: Vec<Value>,
-    window: u32,
-    compress: bool,
-) -> crate::error::Result<DesktopLink> {
+pub async fn connect_desktop(chain: Vec<Value>, window: u32, compress: bool) -> crate::error::Result<DesktopLink> {
     if chain.is_empty() {
         return Err(crate::error::SereinError::EmptyChain);
     }
@@ -700,16 +694,14 @@ async fn request_ki(app: &AppHandle, ki: &KiBridge, id: &str, prompts: Vec<Value
 fn is_password_prompt(prompt: &str) -> bool {
     let p = prompt.to_lowercase();
     (p.contains("password") || p.contains("пароль"))
-        && !["new", "нов", "code", "код", "otp", "token"].iter().any(|w| p.contains(w))
+        && !["new", "нов", "code", "код", "otp", "token"]
+            .iter()
+            .any(|w| p.contains(w))
 }
 
 /// Аутентификация одного хопа. Для целевого сервера (есть `id`/`ki`) - с поддержкой 2FA.
 fn wants_agent_forward(server: &Value) -> bool {
-    server
-        .get("agentForward")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-        || field(server, "authType") == Some("agent")
+    server.get("agentForward").and_then(|v| v.as_bool()).unwrap_or(false) || field(server, "authType") == Some("agent")
 }
 
 async fn authenticate(
@@ -741,8 +733,13 @@ async fn authenticate(
                 (Err(russh::keys::Error::KeyIsEncrypted), Some(app), Some(sid)) if passphrase.is_none() => {
                     let answers = {
                         let _waiting = pause.begin();
-                        request_ki(app, ki, sid, vec![json!({ "prompt": format!("Парольная фраза ключа {raw}: "), "echo": false })])
-                            .await
+                        request_ki(
+                            app,
+                            ki,
+                            sid,
+                            vec![json!({ "prompt": format!("Парольная фраза ключа {raw}: "), "echo": false })],
+                        )
+                        .await
                     };
                     let phrase = answers.into_iter().next().unwrap_or_default();
                     load_secret_key(&path, Some(&phrase))
@@ -800,8 +797,13 @@ async fn authenticate(
                             if let (Some(app), Some(sid)) = (app.filter(|_| pass.is_empty()), id) {
                                 let answers = {
                                     let _waiting = pause.begin();
-                                    request_ki(app, ki, sid, vec![json!({ "prompt": format!("Пароль для {user}: "), "echo": false })])
-                                        .await
+                                    request_ki(
+                                        app,
+                                        ki,
+                                        sid,
+                                        vec![json!({ "prompt": format!("Пароль для {user}: "), "echo": false })],
+                                    )
+                                    .await
                                 };
                                 if let Some(p) = answers.into_iter().next().filter(|p| !p.is_empty()) {
                                     return handle
@@ -904,8 +906,7 @@ async fn connect_one(
     trust: Trust,
     pause: &HumanPause,
 ) -> crate::error::Result<client::Handle<ClientHandler>> {
-    let host = field(server, "host")
-        .ok_or_else(|| crate::error::SereinError::Config("Не задан host".into()))?;
+    let host = field(server, "host").ok_or_else(|| crate::error::SereinError::Config("Не задан host".into()))?;
     let label = host_label(server);
     let handler = ClientHandler {
         host_id: knownhosts::host_id(host, port_of(server)),
@@ -918,8 +919,8 @@ async fn connect_one(
 
     if let Some(cmd) = field(server, "proxyCommand").map(str::trim).filter(|c| !c.is_empty()) {
         let user = field(server, "username").unwrap_or("root");
-        let stream = crate::proxycmd::spawn(cmd, host, port_of(server), user)
-            .map_err(crate::error::SereinError::Config)?;
+        let stream =
+            crate::proxycmd::spawn(cmd, host, port_of(server), user).map_err(crate::error::SereinError::Config)?;
         let fut = client::connect_stream(config, stream, handler);
         return match machine_limit(pause, timeout, fut).await {
             Ok(r) => r.map_err(|e| crate::error::SereinError::ConnectFailed {
@@ -1016,7 +1017,7 @@ pub async fn connect_chain(
             trust: ask.clone(),
             remote_forwards: remote_forwards.clone(),
             cancel: cancel_rx.clone(),
-                agent_lock: Arc::new(tokio::sync::Mutex::new(())),
+            agent_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
         let mut nh = jump_handshake(next, nhost, config, channel, handler, &pause).await?;
         let is_target = i == 0;
@@ -1049,9 +1050,15 @@ pub async fn connect_chain(
         .await
         .map_err(|e| shell_err(e.to_string()))?;
     if wants_agent_forward(&target) {
-        channel.agent_forward(true).await.map_err(|e| shell_err(e.to_string()))?;
+        channel
+            .agent_forward(true)
+            .await
+            .map_err(|e| shell_err(e.to_string()))?;
     }
-    channel.request_shell(true).await.map_err(|e| shell_err(e.to_string()))?;
+    channel
+        .request_shell(true)
+        .await
+        .map_err(|e| shell_err(e.to_string()))?;
 
     let handle: SharedHandle = Arc::new(tokio::sync::Mutex::new(cur));
     let (tx, mut rx) = mpsc::unbounded_channel::<SshCmd>();
@@ -1160,7 +1167,7 @@ pub async fn connect_client(chain: Vec<Value>) -> crate::error::Result<SharedHan
             trust: Trust::background(),
             remote_forwards: remote_forwards.clone(),
             cancel: cancel_rx.clone(),
-                agent_lock: Arc::new(tokio::sync::Mutex::new(())),
+            agent_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
         let mut nh = jump_handshake(next, nhost, config, channel, handler, &pause).await?;
         if !authenticate_within(&mut nh, next, None, &dummy_ki, None, &pause).await? {
@@ -1409,7 +1416,10 @@ mod tests {
         assert_eq!(session.window_size, 32 * 1024 * 1024);
         assert_eq!(desk.window_size, 128 * 1024);
         assert!(desk.channel_buffer_size < session.channel_buffer_size);
-        assert!(session.nodelay && desk.nodelay, "мелкие пакеты не должно придерживать ядро");
+        assert!(
+            session.nodelay && desk.nodelay,
+            "мелкие пакеты не должно придерживать ядро"
+        );
         assert_eq!(desk.preferred.compression[0].as_ref(), "zlib");
         assert_ne!(session.preferred.compression[0].as_ref(), "zlib");
     }
@@ -1519,7 +1529,10 @@ mod limit_tests {
     use std::time::Duration;
 
     fn runtime() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
     }
 
     #[test]
@@ -1565,6 +1578,9 @@ mod limit_tests {
             };
             machine_limit(&pause, Duration::from_millis(100), work).await
         });
-        assert!(r.is_err(), "сервер замолчал после ответа человека - срок обязан сработать");
+        assert!(
+            r.is_err(),
+            "сервер замолчал после ответа человека - срок обязан сработать"
+        );
     }
 }

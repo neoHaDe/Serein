@@ -19,9 +19,7 @@
 use mysql_common::auth::plugins::{AuthProc, ChallengeResponsePlugin, Context, Response};
 use mysql_common::constants::{CapabilityFlags, StatusFlags};
 use mysql_common::io::ParseBuf;
-use mysql_common::packets::{
-    AuthPlugin, AuthSwitchRequest, Column, ErrPacket, HandshakePacket, HandshakeResponse,
-};
+use mysql_common::packets::{AuthPlugin, AuthSwitchRequest, Column, ErrPacket, HandshakePacket, HandshakeResponse};
 use mysql_common::proto::{MyDeserialize, MySerialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -121,8 +119,7 @@ impl<S> Conn<S> {
     /// круг чтения повесил бы панель, а это хуже, чем показать один результат.
     fn status_of(&self, p: &[u8]) -> StatusFlags {
         let mut b = &p[1..];
-        let ok_shape =
-            p.first() == Some(&0x00) || self.capabilities.contains(CapabilityFlags::CLIENT_DEPRECATE_EOF);
+        let ok_shape = p.first() == Some(&0x00) || self.capabilities.contains(CapabilityFlags::CLIENT_DEPRECATE_EOF);
         if ok_shape {
             if lenenc(&mut b).is_none() || lenenc(&mut b).is_none() {
                 return StatusFlags::empty();
@@ -142,13 +139,12 @@ impl<S> Conn<S> {
 
 impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
     /// Проходит рукопожатие и вход. Возвращает готовое к запросам соединение.
-    pub async fn connect(
-        stream: S,
-        user: &str,
-        password: &str,
-        database: Option<&str>,
-    ) -> Result<Self, String> {
-        let mut c = Conn { stream, seq: 0, capabilities: CapabilityFlags::empty() };
+    pub async fn connect(stream: S, user: &str, password: &str, database: Option<&str>) -> Result<Self, String> {
+        let mut c = Conn {
+            stream,
+            seq: 0,
+            capabilities: CapabilityFlags::empty(),
+        };
 
         let greeting = c.read_packet().await?;
         let hs = HandshakePacket::deserialize((), &mut ParseBuf(&greeting))
@@ -160,9 +156,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
             scramble: hs.nonce(),
             server_key: None,
         };
-        let mut proc = AuthProc::init(&plugin).map_err(|e| {
-            format!("Сервер требует способ входа, который мы не поддерживаем: {e}")
-        })?;
+        let mut proc = AuthProc::init(&plugin)
+            .map_err(|e| format!("Сервер требует способ входа, который мы не поддерживаем: {e}"))?;
 
         let first = proc
             .run(&ctx, &ctx.scramble.clone())
@@ -201,8 +196,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
                         .map_err(|e| format!("Непонятная смена способа входа: {e}"))?;
                     let plugin = sw.auth_plugin().into_owned();
                     ctx.scramble = sw.plugin_data().to_vec();
-                    *proc = AuthProc::init(&plugin)
-                        .map_err(|e| format!("Способ входа не поддерживается: {e}"))?;
+                    *proc = AuthProc::init(&plugin).map_err(|e| format!("Способ входа не поддерживается: {e}"))?;
                     let challenge = ctx.scramble.clone();
                     self.step(proc, ctx, &challenge).await?;
                 }
@@ -223,15 +217,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
     }
 
     /// Один шаг плагина: посчитать ответ и отправить, если он есть.
-    async fn step(
-        &mut self,
-        proc: &mut AuthProc,
-        ctx: &AuthCtx,
-        challenge: &[u8],
-    ) -> Result<(), String> {
-        let r: Response = proc
-            .run(ctx, challenge)
-            .map_err(|e| format!("Вход не удался: {e}"))?;
+    async fn step(&mut self, proc: &mut AuthProc, ctx: &AuthCtx, challenge: &[u8]) -> Result<(), String> {
+        let r: Response = proc.run(ctx, challenge).map_err(|e| format!("Вход не удался: {e}"))?;
         if let Some(data) = r.data() {
             let data = data.to_vec();
             self.write_packet(&data).await?;
@@ -274,7 +261,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
                 let mut buf = &head[1..];
                 let affected = lenenc(&mut buf).unwrap_or(0);
                 let status = self.status_of(&head);
-                return Ok((QueryOut { columns: Vec::new(), rows: Vec::new(), affected }, status));
+                return Ok((
+                    QueryOut {
+                        columns: Vec::new(),
+                        rows: Vec::new(),
+                        affected,
+                    },
+                    status,
+                ));
             }
             // Сервер просит прислать локальный файл. Мы этого не делаем: команда
             // читала бы файлы с машины пользователя по указанию сервера.
@@ -318,7 +312,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
             }
             rows.push(row);
         };
-        Ok((QueryOut { columns, rows, affected: 0 }, status))
+        Ok((
+            QueryOut {
+                columns,
+                rows,
+                affected: 0,
+            },
+            status,
+        ))
     }
 
     /// Читает один логический пакет, склеивая продолжения.
@@ -517,9 +518,15 @@ mod tests {
     #[test]
     fn флаги_состояния_читаются_из_обоих_видов_конца() {
         // EOF старого образца: 0xFE, предупреждения, флаги.
-        let old_conn = Conn { stream: (), seq: 0, capabilities: CapabilityFlags::CLIENT_PROTOCOL_41 };
+        let old_conn = Conn {
+            stream: (),
+            seq: 0,
+            capabilities: CapabilityFlags::CLIENT_PROTOCOL_41,
+        };
         let eof = [0xFE, 0x00, 0x00, 0x08, 0x00];
-        assert!(old_conn.status_of(&eof).contains(StatusFlags::SERVER_MORE_RESULTS_EXISTS));
+        assert!(old_conn
+            .status_of(&eof)
+            .contains(StatusFlags::SERVER_MORE_RESULTS_EXISTS));
 
         // OK нового образца: 0xFE, изменённые строки, идентификатор, флаги.
         let new_conn = Conn {
@@ -528,16 +535,24 @@ mod tests {
             capabilities: CapabilityFlags::CLIENT_DEPRECATE_EOF,
         };
         let ok = [0xFE, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00];
-        assert!(new_conn.status_of(&ok).contains(StatusFlags::SERVER_MORE_RESULTS_EXISTS));
+        assert!(new_conn
+            .status_of(&ok)
+            .contains(StatusFlags::SERVER_MORE_RESULTS_EXISTS));
 
         // Продолжения нет - и выдумывать его нельзя, иначе повиснем на лишнем чтении.
         let done = [0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-        assert!(!new_conn.status_of(&done).contains(StatusFlags::SERVER_MORE_RESULTS_EXISTS));
+        assert!(!new_conn
+            .status_of(&done)
+            .contains(StatusFlags::SERVER_MORE_RESULTS_EXISTS));
     }
 
     #[test]
     fn обрезанный_конец_не_выдумывает_продолжение() {
-        let c = Conn { stream: (), seq: 0, capabilities: CapabilityFlags::CLIENT_DEPRECATE_EOF };
+        let c = Conn {
+            stream: (),
+            seq: 0,
+            capabilities: CapabilityFlags::CLIENT_DEPRECATE_EOF,
+        };
         assert_eq!(c.status_of(&[0xFE]), StatusFlags::empty());
         assert_eq!(c.status_of(&[0xFE, 0x00]), StatusFlags::empty());
     }

@@ -78,7 +78,9 @@ fn прерванная_заливка_оставляет_прежний_фай�
         let _ = sftp::remove(&h, &dir, true).await;
         sftp::mkdir(&h, &dir).await.expect("каталог");
         let file = format!("{dir}/данные.bin");
-        sftp::write_file(&h, &file, "оригинал", 0o640, 0, "lf").await.expect("оригинал");
+        sftp::write_file(&h, &file, "оригинал", 0o640, 0, "lf")
+            .await
+            .expect("оригинал");
 
         let local_dir = local_scratch("прерванная-заливка");
         let local = local_dir.join("данные.bin");
@@ -91,7 +93,11 @@ fn прерванная_заливка_оставляет_прежний_фай�
         let r = sftp::put_file_while(&h, &local, &file, Some(&stopped)).await;
         assert!(r.is_err(), "отменённая заливка не может закончиться успехом");
         assert_eq!(remote_text(&h, &file).await, "оригинал");
-        assert_eq!(names_in(&h, &dir).await, vec!["данные.bin"], "временный файл обязан убираться");
+        assert_eq!(
+            names_in(&h, &dir).await,
+            vec!["данные.bin"],
+            "временный файл обязан убираться"
+        );
 
         // Отмена посреди передачи. Успеть может любая сторона, поэтому проверяем то, что
         // верно в обоих случаях: файл либо прежний, либо новый целиком - и ничего лишнего.
@@ -100,8 +106,14 @@ fn прерванная_заливка_оставляет_прежний_фай�
         let r = sftp::put_file_while(&h, &local, &file, Some(&alive)).await;
         match r {
             Ok(()) => {
-                let (_, size, _) = ssh::exec(&h, &format!("stat -c %s '{file}'"), None).await.expect("размер");
-                assert_eq!(size.trim(), payload.len().to_string(), "успешная заливка - файл целиком");
+                let (_, size, _) = ssh::exec(&h, &format!("stat -c %s '{file}'"), None)
+                    .await
+                    .expect("размер");
+                assert_eq!(
+                    size.trim(),
+                    payload.len().to_string(),
+                    "успешная заливка - файл целиком"
+                );
             }
             Err(_) => assert_eq!(remote_text(&h, &file).await, "оригинал", "после отмены - прежний файл"),
         }
@@ -124,12 +136,16 @@ fn заливка_поверх_файла_сохраняет_его_права()
         let _ = sftp::remove(&h, &dir, true).await;
         sftp::mkdir(&h, &dir).await.expect("каталог");
         let file = format!("{dir}/секрет.conf");
-        sftp::write_file(&h, &file, "старое", 0o600, 0, "lf").await.expect("прежний файл");
+        sftp::write_file(&h, &file, "старое", 0o600, 0, "lf")
+            .await
+            .expect("прежний файл");
 
         let local_dir = local_scratch("права-заливки");
         let local = local_dir.join("секрет.conf");
         std::fs::write(&local, "новое").expect("свой файл");
-        sftp::put_file(&h, &local.to_string_lossy(), &file).await.expect("заливка");
+        sftp::put_file(&h, &local.to_string_lossy(), &file)
+            .await
+            .expect("заливка");
 
         let read = sftp::read_file(&h, &file).await.expect("чтение");
         assert_eq!(read.get("content").and_then(|v| v.as_str()), Some("новое"));
@@ -156,7 +172,9 @@ fn заливка_в_ссылку_меняет_цель_и_не_ломает_с�
         let h = connect(&s).await;
         let _ = sftp::remove(&h, &dir, true).await;
         sftp::mkdir(&h, &dir).await.expect("каталог");
-        sftp::write_file(&h, &format!("{dir}/цель.conf"), "было", 0o644, 0, "lf").await.expect("цель");
+        sftp::write_file(&h, &format!("{dir}/цель.conf"), "было", 0o644, 0, "lf")
+            .await
+            .expect("цель");
         let (code, _, err) = ssh::exec(&h, &format!("cd '{dir}' && ln -s цель.conf ссылка.conf"), None)
             .await
             .expect("ссылка");
@@ -165,7 +183,9 @@ fn заливка_в_ссылку_меняет_цель_и_не_ломает_с�
         let local_dir = local_scratch("заливка-в-ссылку");
         let local = local_dir.join("ссылка.conf");
         std::fs::write(&local, "стало").expect("свой файл");
-        sftp::put_file(&h, &local.to_string_lossy(), &format!("{dir}/ссылка.conf")).await.expect("заливка");
+        sftp::put_file(&h, &local.to_string_lossy(), &format!("{dir}/ссылка.conf"))
+            .await
+            .expect("заливка");
 
         let (code, out, _) = ssh::exec(&h, &format!("cd '{dir}' && test -L ссылка.conf && cat цель.conf"), None)
             .await
@@ -189,7 +209,9 @@ fn совпадения_имён_ищутся_по_имени_файла() {
         let h = connect(&s).await;
         let _ = sftp::remove(&h, &dir, true).await;
         sftp::mkdir(&h, &dir).await.expect("каталог");
-        sftp::write_file(&h, &format!("{dir}/отчёт.txt"), "есть", 0o644, 0, "lf").await.expect("файл");
+        sftp::write_file(&h, &format!("{dir}/отчёт.txt"), "есть", 0o644, 0, "lf")
+            .await
+            .expect("файл");
         sftp::mkdir(&h, &format!("{dir}/папка")).await.expect("папка");
 
         let names: Vec<String> = [r"C:\Users\me\отчёт.txt", "/home/me/папка", "новый.txt", "..", ""]
@@ -299,20 +321,13 @@ fn broken_symlink_does_not_break_the_whole_listing() {
             .await
             .expect("обычный файл");
         // Симлинк на несуществующее — через exec: в SFTP-обёртке создания ссылок нет.
-        let (code, _, err) = ssh::exec(
-            &h,
-            &format!("ln -sfn /такого/пути/нет '{dir}/битая-ссылка'"),
-            None,
-        )
-        .await
-        .expect("создание ссылки");
+        let (code, _, err) = ssh::exec(&h, &format!("ln -sfn /такого/пути/нет '{dir}/битая-ссылка'"), None)
+            .await
+            .expect("создание ссылки");
         assert_eq!(code, 0, "не удалось создать битую ссылку: {err}");
 
         let listed = sftp::list(&h, &dir).await.expect("листинг с битой ссылкой");
-        let entries = listed
-            .get("entries")
-            .and_then(|v| v.as_array())
-            .expect("entries");
+        let entries = listed.get("entries").and_then(|v| v.as_array()).expect("entries");
         assert_eq!(entries.len(), 2, "битая ссылка не должна скрывать соседей");
 
         sftp::remove(&h, &dir, true).await.expect("уборка");
@@ -411,7 +426,9 @@ fn rename_and_chmod_take_effect() {
 
         let from = format!("{dir}/было.txt");
         let to = format!("{dir}/стало.txt");
-        sftp::write_file(&h, &from, "текст", 0o644, 0, "lf").await.expect("файл");
+        sftp::write_file(&h, &from, "текст", 0o644, 0, "lf")
+            .await
+            .expect("файл");
         sftp::rename(&h, &from, &to).await.expect("переименование");
         sftp::chmod(&h, &to, 0o600).await.expect("права");
 
@@ -505,10 +522,7 @@ fn имена_с_сервера_не_выводят_запись_за_папку
         }
         for (lp, ..) in &plan.jobs {
             assert!(
-                serein_lib::localname::under_root(
-                    std::path::Path::new(&local_dir),
-                    std::path::Path::new(lp)
-                ),
+                serein_lib::localname::under_root(std::path::Path::new(&local_dir), std::path::Path::new(lp)),
                 "задание «{lp}» выходит за папку скачивания"
             );
         }
@@ -531,7 +545,9 @@ fn сохранение_сохраняет_права_и_не_теряет_ор�
         sftp::mkdir(&h, &dir).await.expect("каталог");
 
         let file = format!("{dir}/секрет.conf");
-        sftp::write_file(&h, &file, "было", 0o600, 0, "lf").await.expect("первая запись");
+        sftp::write_file(&h, &file, "было", 0o600, 0, "lf")
+            .await
+            .expect("первая запись");
         let before = sftp::list(&h, &dir).await.expect("листинг");
         assert!(
             format!("{before:?}").contains("секрет.conf"),
@@ -540,7 +556,9 @@ fn сохранение_сохраняет_права_и_не_теряет_ор�
 
         // Второй раз - как это делает панель после правки: права не передаются, их
         // полагается сохранить от прежнего файла.
-        let saved = sftp::write_file(&h, &file, "стало", 0, 0, "lf").await.expect("вторая запись");
+        let saved = sftp::write_file(&h, &file, "стало", 0, 0, "lf")
+            .await
+            .expect("вторая запись");
         assert_eq!(saved.get("ok").and_then(|v| v.as_bool()), Some(true));
 
         let read = sftp::read_file(&h, &file).await.expect("чтение");
@@ -577,13 +595,17 @@ fn время_правки_файла_читается_с_сервера() {
         let _ = sftp::remove(&h, &dir, true).await;
         sftp::mkdir(&h, &dir).await.expect("каталог");
         let file = format!("{dir}/файл.txt");
-        sftp::write_file(&h, &file, "раз", 0o644, 0, "lf").await.expect("запись");
+        sftp::write_file(&h, &file, "раз", 0o644, 0, "lf")
+            .await
+            .expect("запись");
 
         let было = sftp::remote_mtime(&h, &file).await.expect("запрос времени");
         let было = было.expect("сервер обязан сообщить время правки файла");
         // Секунда - шаг времени в SFTP: чтобы вторая правка отличалась, надо переждать его.
         tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-        sftp::write_file(&h, &file, "два", 0o644, 0, "lf").await.expect("вторая запись");
+        sftp::write_file(&h, &file, "два", 0o644, 0, "lf")
+            .await
+            .expect("вторая запись");
         let стало = sftp::remote_mtime(&h, &file)
             .await
             .expect("запрос времени")
@@ -626,7 +648,10 @@ fn ссылки_не_закручивают_обход_дерева() {
 
         let пути: Vec<&str> = план.jobs.iter().map(|(lp, ..)| lp.as_str()).collect();
         assert!(пути.iter().any(|p| p.ends_with("файл.txt")), "обычный файл: {пути:?}");
-        assert!(пути.iter().any(|p| p.ends_with("на-файл")), "ссылка на файл забирается: {пути:?}");
+        assert!(
+            пути.iter().any(|p| p.ends_with("на-файл")),
+            "ссылка на файл забирается: {пути:?}"
+        );
         assert!(
             !пути.iter().any(|p| p.contains("петля")),
             "в ссылку на каталог заходить нельзя: {пути:?}"

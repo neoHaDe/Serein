@@ -76,9 +76,6 @@ fn server_offers_password_authentication() {
 
         let mut types = vec![0u8; count[0] as usize];
         stream.read_exact(&mut types).await.expect("список типов");
-        assert!(
-            types.contains(&2),
-            "ожидали VncAuth (2), сервер предлагает {types:?}"
-        );
+        assert!(types.contains(&2), "ожидали VncAuth (2), сервер предлагает {types:?}");
     });
 }

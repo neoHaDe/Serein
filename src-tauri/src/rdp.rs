@@ -51,7 +51,10 @@ pub(crate) fn log(line: &str) {
     // Журнал не растёт без конца. Метрики пишутся каждые пять секунд всё время, пока открыт
     // рабочий стол: за сутки это десятки мегабайт в профиле, и никто их не убирает.
     // Предыдущий держим одним файлом - для разбора неполадки хватает, а место конечно.
-    if std::fs::metadata(&path).map(|m| m.len() > LOG_MAX_BYTES).unwrap_or(false) {
+    if std::fs::metadata(&path)
+        .map(|m| m.len() > LOG_MAX_BYTES)
+        .unwrap_or(false)
+    {
         let _ = std::fs::rename(&path, dir.join("rdp.log.1"));
     }
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
@@ -201,11 +204,7 @@ struct CountingReader<R> {
 }
 
 impl<R: AsyncRead + Unpin> AsyncRead for CountingReader<R> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
         let before = buf.filled().len();
         let result = Pin::new(&mut self.inner).poll_read(cx, buf);
         if matches!(result, Poll::Ready(Ok(()))) {
@@ -224,27 +223,19 @@ impl<R: AsyncRead + Unpin> AsyncRead for CountingReader<R> {
 fn helper_path() -> Result<std::path::PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("не найти себя на диске: {e}"))?;
     let dir = exe.parent().ok_or("у приложения нет каталога")?;
-    let name = if cfg!(windows) {
-        "serein-rdp.exe"
-    } else {
-        "serein-rdp"
-    };
+    let name = if cfg!(windows) { "serein-rdp.exe" } else { "serein-rdp" };
     let p = dir.join(name);
     if p.exists() {
         return Ok(p);
     }
     // При запуске из исходников помощник лежит в своей цели сборки.
-    let dev = dir.parent().and_then(|d| d.parent()).map(|root| {
-        root.join("rdp-helper")
-            .join("target")
-            .join("release")
-            .join(name)
-    });
+    let dev = dir
+        .parent()
+        .and_then(|d| d.parent())
+        .map(|root| root.join("rdp-helper").join("target").join("release").join(name));
     match dev {
         Some(d) if d.exists() => Ok(d),
-        _ => Err(format!(
-            "рядом с приложением нет {name}: поставка собрана не полностью"
-        )),
+        _ => Err(format!("рядом с приложением нет {name}: поставка собрана не полностью")),
     }
 }
 
@@ -347,11 +338,7 @@ pub async fn open(
         .arg(port.to_string())
         .arg("--user")
         .arg(&user)
-        .args(
-            domain
-                .iter()
-                .flat_map(|d| ["--domain".to_owned(), d.clone()]),
-        )
+        .args(domain.iter().flat_map(|d| ["--domain".to_owned(), d.clone()]))
         .arg("--width")
         .arg(size.0.to_string())
         .arg("--height")
@@ -431,16 +418,7 @@ pub async fn open(
     spawn_pipes(id.clone(), child, stdin, stdout, rx, stop_rx, out.clone());
 
     crate::deskout::remember(&ssh_id, crate::deskout::Kind::Rdp, &id);
-    with_sessions(|m| {
-        m.insert(
-            id,
-            Live {
-                input: tx,
-                out,
-                stop,
-            },
-        )
-    });
+    with_sessions(|m| m.insert(id, Live { input: tx, out, stop }));
     Ok(())
 }
 
@@ -597,7 +575,10 @@ fn spawn_pipes(
             if body.first() == Some(&9) {
                 said_closed = true;
                 if body.len() > 9 {
-                    log(&format!("помощник закрыл сеанс: {}", String::from_utf8_lossy(&body[9..])));
+                    log(&format!(
+                        "помощник закрыл сеанс: {}",
+                        String::from_utf8_lossy(&body[9..])
+                    ));
                 }
             }
             if out.send(InvokeResponseBody::Raw(body)).is_err() {
@@ -666,10 +647,7 @@ pub fn wheel(id: &str, vertical: bool, delta: i16) {
 /// Защищённая последовательность отправляется одним элементом очереди, чтобы между
 /// нажатиями не вклинилось движение мыши или другая клавиша из интерфейса.
 pub fn secure_attention(id: &str) {
-    send(
-        id,
-        "k 29 1\nk 56 1\nk 57427 1\nk 57427 0\nk 56 0\nk 29 0\n".to_owned(),
-    );
+    send(id, "k 29 1\nk 56 1\nk 57427 1\nk 57427 0\nk 56 0\nk 29 0\n".to_owned());
 }
 
 /// Переводит выдачу кадров в другое окно и просит перерисовать экран целиком.
@@ -740,7 +718,10 @@ mod tests {
         // Сокет слушает петлю, и постучаться в него может любой процесс этой машины. Раньше
         // первый подключившийся получал готовый канал к рабочему столу сервера, открытый
         // нашими правами.
-        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let pass = one_time_pass();
             assert_eq!(pass.len(), PASS_LEN, "пропуск нужной длины");

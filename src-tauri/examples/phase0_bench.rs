@@ -39,10 +39,16 @@ fn pick_server() -> Result<String, String> {
     let args: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
     let list = store::servers_list();
     if let Some(a) = args.first() {
-        if list.iter().any(|s| s.get("id").and_then(|v| v.as_str()) == Some(a.as_str())) {
+        if list
+            .iter()
+            .any(|s| s.get("id").and_then(|v| v.as_str()) == Some(a.as_str()))
+        {
             return Ok(a.clone());
         }
-        if let Some(s) = list.iter().find(|s| s.get("name").and_then(|v| v.as_str()) == Some(a.as_str())) {
+        if let Some(s) = list
+            .iter()
+            .find(|s| s.get("name").and_then(|v| v.as_str()) == Some(a.as_str()))
+        {
             return Ok(s["id"].as_str().unwrap().to_string());
         }
         return Err(format!("нет сервера {a}"));
@@ -71,12 +77,7 @@ async fn copy_up(sftp: &SftpSession, local: &str, remote: &str) -> Result<u64, S
     sftp::copy_file_up(sftp, local, remote).await
 }
 
-async fn copy_down(
-    h: &ssh::SharedHandle,
-    sftp: &SftpSession,
-    remote: &str,
-    local: &str,
-) -> Result<u64, String> {
+async fn copy_down(h: &ssh::SharedHandle, sftp: &SftpSession, remote: &str, local: &str) -> Result<u64, String> {
     sftp::copy_file_down(h, sftp, remote, local).await
 }
 
@@ -174,7 +175,11 @@ async fn run_file_batches(
                 true,
                 json!({ "files": n, "ms": dt.as_millis(), "files_s": n as f64 / dt.as_secs_f64().max(1e-6) }),
             ),
-            Some(e) => rec(&format!("sftp_files_{label}"), false, json!({ "error": e, "ms": dt.as_millis() })),
+            Some(e) => rec(
+                &format!("sftp_files_{label}"),
+                false,
+                json!({ "error": e, "ms": dt.as_millis() }),
+            ),
         }
         let _ = std::fs::remove_dir_all(&dir);
         match reopen(h, sftp).await {
@@ -202,7 +207,11 @@ async fn main() {
         .and_then(|s| s["name"].as_str())
         .unwrap_or("?")
         .to_string();
-    rec("init", true, json!({ "server": name, "note": "russh path, no WebView" }));
+    rec(
+        "init",
+        true,
+        json!({ "server": name, "note": "russh path, no WebView" }),
+    );
 
     let chain = match jump_chain(&sid) {
         Ok(c) => c,
@@ -339,14 +348,22 @@ async fn main() {
         sftp = match reopen(&h, sftp).await {
             Ok(s) => s,
             Err(e) => {
-                rec("sftp_reopen", false, json!({ "error": e, "after": format!("up_{mb}m") }));
+                rec(
+                    "sftp_reopen",
+                    false,
+                    json!({ "error": e, "after": format!("up_{mb}m") }),
+                );
                 return;
             }
         };
         let down = local_root.join(format!("down-{fname}"));
         rec("sftp_down_start", true, json!({ "mb": mb }));
         let t = Instant::now();
-        let down_limit = if mb >= 1024 { Duration::from_secs(600) } else { Duration::from_secs(180) };
+        let down_limit = if mb >= 1024 {
+            Duration::from_secs(600)
+        } else {
+            Duration::from_secs(180)
+        };
         let down_res = tokio::time::timeout(down_limit, copy_down(&h, &sftp, &rp, &down.to_string_lossy())).await;
         match down_res {
             Ok(Ok(n)) => {
@@ -369,7 +386,11 @@ async fn main() {
         sftp = match reopen(&h, sftp).await {
             Ok(s) => s,
             Err(e) => {
-                rec("sftp_reopen", false, json!({ "error": e, "after": format!("down_{mb}m") }));
+                rec(
+                    "sftp_reopen",
+                    false,
+                    json!({ "error": e, "after": format!("down_{mb}m") }),
+                );
                 return;
             }
         };
@@ -379,7 +400,11 @@ async fn main() {
     h = match ssh::connect_client(chain.clone()).await {
         Ok(x) => x,
         Err(e) => {
-            rec("ssh_reconnect", false, json!({ "error": e.to_string(), "after": "before_files" }));
+            rec(
+                "ssh_reconnect",
+                false,
+                json!({ "error": e.to_string(), "after": "before_files" }),
+            );
             return;
         }
     };

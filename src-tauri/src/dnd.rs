@@ -124,11 +124,7 @@ pub fn mouse_left_down() -> bool {
 }
 
 #[cfg(windows)]
-pub fn start_files(
-    window: &tauri::WebviewWindow,
-    paths: Vec<PathBuf>,
-    tmp: PathBuf,
-) -> Result<(), String> {
+pub fn start_files(window: &tauri::WebviewWindow, paths: Vec<PathBuf>, tmp: PathBuf) -> Result<(), String> {
     if paths.is_empty() {
         return Err("Нечего перетаскивать".into());
     }
@@ -161,10 +157,6 @@ pub fn start_files(
 }
 
 #[cfg(not(windows))]
-pub fn start_files(
-    _window: &tauri::WebviewWindow,
-    _paths: Vec<PathBuf>,
-    _tmp: PathBuf,
-) -> Result<(), String> {
+pub fn start_files(_window: &tauri::WebviewWindow, _paths: Vec<PathBuf>, _tmp: PathBuf) -> Result<(), String> {
     Err("Перетаскивание файлов наружу пока только на Windows".into())
 }

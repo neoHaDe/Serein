@@ -77,7 +77,9 @@ fn classify(known: Option<&str>, fp: &str) -> HostKeyStatus {
     match known {
         None => HostKeyStatus::New,
         Some(k) if k == fp => HostKeyStatus::Trusted,
-        Some(k) => HostKeyStatus::Changed { previous: k.to_string() },
+        Some(k) => HostKeyStatus::Changed {
+            previous: k.to_string(),
+        },
     }
 }
 
@@ -106,12 +108,7 @@ pub fn list() -> Vec<Value> {
                 .collect()
         })
         .unwrap_or_default();
-    out.sort_by(|a, b| {
-        a["host"]
-            .as_str()
-            .unwrap_or("")
-            .cmp(b["host"].as_str().unwrap_or(""))
-    });
+    out.sort_by(|a, b| a["host"].as_str().unwrap_or("").cmp(b["host"].as_str().unwrap_or("")));
     out
 }
 
@@ -139,8 +136,7 @@ pub fn parse_openssh_line(line: &str) -> Vec<(String, String)> {
         return Vec::new();
     }
     let mut parts = line.split_whitespace();
-    let (Some(hosts), Some(_keytype), Some(blob)) = (parts.next(), parts.next(), parts.next())
-    else {
+    let (Some(hosts), Some(_keytype), Some(blob)) = (parts.next(), parts.next(), parts.next()) else {
         return Vec::new();
     };
     // Ключ приходит в base64 - тот же формат, из которого мы считаем отпечаток.
@@ -171,8 +167,7 @@ pub fn import_openssh() -> Result<usize, String> {
     let path = dirs::home_dir()
         .map(|h| h.join(".ssh").join("known_hosts"))
         .ok_or("Не найден домашний каталог")?;
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Не удалось прочитать {}: {e}", path.display()))?;
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("Не удалось прочитать {}: {e}", path.display()))?;
 
     let _guard = lock().lock().unwrap_or_else(|e| e.into_inner());
     let mut data = read_result()?;
@@ -235,7 +230,9 @@ mod tests {
         assert_eq!(classify(None, "SHA256:aaa"), HostKeyStatus::New);
         assert_eq!(
             classify(Some("SHA256:bbb"), "SHA256:aaa"),
-            HostKeyStatus::Changed { previous: "SHA256:bbb".into() },
+            HostKeyStatus::Changed {
+                previous: "SHA256:bbb".into()
+            },
             "несовпадение - это смена ключа, а не новый хост"
         );
     }
@@ -249,7 +246,9 @@ mod tests {
         //
         // Само чтение и его отказы проверены в `store` (там же, где повреждённый JSON);
         // здесь важно, что у состояния есть отдельный вариант и он не равен `New`.
-        let unreadable = HostKeyStatus::Unreadable { why: "файл повреждён".into() };
+        let unreadable = HostKeyStatus::Unreadable {
+            why: "файл повреждён".into(),
+        };
         assert_ne!(unreadable, HostKeyStatus::New);
         assert_ne!(unreadable, HostKeyStatus::Trusted);
     }

@@ -100,7 +100,11 @@ fn quoting_survives_a_name_that_looks_like_a_shell_trick() {
             .iter()
             .filter_map(|e| e.get("name").and_then(|v| v.as_str()).map(str::to_string))
             .collect();
-        assert_eq!(names, vec![evil.to_string()], "имя файла на сервере разошлось с заданным");
+        assert_eq!(
+            names,
+            vec![evil.to_string()],
+            "имя файла на сервере разошлось с заданным"
+        );
 
         let read = remote_fs::read_file(&fs, &h, &tricky).await.expect("чтение");
         assert_eq!(read.get("content").and_then(|v| v.as_str()), Some("безобидно"));
@@ -136,7 +140,9 @@ fn время_правки_читается_и_без_подсистемы_sftp(
         let _ = remote_fs::remove(&fs, &h, &dir, true).await;
         remote_fs::mkdir(&fs, &h, &dir).await.expect("каталог");
         let file = format!("{dir}/файл.txt");
-        remote_fs::write_file(&fs, &h, &file, "раз", 0o644, 0, "lf").await.expect("запись");
+        remote_fs::write_file(&fs, &h, &file, "раз", 0o644, 0, "lf")
+            .await
+            .expect("запись");
 
         let t = remote_fs::remote_mtime(&fs, &h, &file)
             .await
@@ -169,7 +175,9 @@ fn обход_scp_не_заходит_в_ссылки_и_сообщает_о_н�
         assert_eq!(jobs.len(), 1, "один настоящий файл: {jobs:?}");
         assert_eq!(jobs[0].2, "обход/sub/f.txt");
         assert!(
-            refused.iter().any(|(r, why)| r == "обход/sub/loop" && why.contains("ссылка")),
+            refused
+                .iter()
+                .any(|(r, why)| r == "обход/sub/loop" && why.contains("ссылка")),
             "ссылка названа в отказах: {refused:?}"
         );
     });
@@ -196,22 +204,40 @@ fn большой_файл_по_scp_идёт_потоком_и_возвраща�
         remote_fs::mkdir(&fs, &h, &dir).await.expect("каталог");
         let local = local_scratch("поток");
         let src = local.join("big.bin");
-        let data: Vec<u8> = (0..5 * 1024 * 1024 + 7u64).map(|i| ((i * 2_654_435_761) >> 13) as u8).collect();
+        let data: Vec<u8> = (0..5 * 1024 * 1024 + 7u64)
+            .map(|i| ((i * 2_654_435_761) >> 13) as u8)
+            .collect();
         std::fs::write(&src, &data).unwrap();
 
         let remote = format!("{dir}/big.bin");
         let mut seen = 0;
-        scp::put_file_ctl(&h, src.to_str().unwrap(), &remote, &|| true, &mut |done: u64, _: u64| seen = done)
-            .await
-            .expect("заливка");
+        scp::put_file_ctl(
+            &h,
+            src.to_str().unwrap(),
+            &remote,
+            &|| true,
+            &mut |done: u64, _: u64| seen = done,
+        )
+        .await
+        .expect("заливка");
         assert_eq!(seen, data.len() as u64, "ход передачи дошёл до конца");
 
         let back = local.join("back.bin");
-        scp::download_file(&h, &remote, back.to_str().unwrap()).await.expect("скачивание");
-        assert!(std::fs::read(&back).unwrap() == data, "содержимое вернулось без искажений");
+        scp::download_file(&h, &remote, back.to_str().unwrap())
+            .await
+            .expect("скачивание");
+        assert!(
+            std::fs::read(&back).unwrap() == data,
+            "содержимое вернулось без искажений"
+        );
 
         let listed = remote_fs::list(&fs, &h, &dir).await.expect("листинг");
-        let names: Vec<&str> = listed["entries"].as_array().unwrap().iter().filter_map(|e| e["name"].as_str()).collect();
+        let names: Vec<&str> = listed["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e["name"].as_str())
+            .collect();
         assert_eq!(names, vec!["big.bin"], "временных файлов на сервере не осталось");
 
         let _ = std::fs::remove_dir_all(&local);
@@ -231,9 +257,13 @@ fn прерванная_заливка_по_scp_оставляет_прежни�
         let _ = remote_fs::remove(&fs, &h, &dir, true).await;
         remote_fs::mkdir(&fs, &h, &dir).await.expect("каталог");
         let remote = format!("{dir}/run.sh");
-        let (code, _, err) = ssh::exec(&h, &format!("printf 'старое' > '{remote}' && chmod 750 '{remote}'"), None)
-            .await
-            .expect("исходный файл");
+        let (code, _, err) = ssh::exec(
+            &h,
+            &format!("printf 'старое' > '{remote}' && chmod 750 '{remote}'"),
+            None,
+        )
+        .await
+        .expect("исходный файл");
         assert_eq!(code, 0, "{err}");
 
         let local = local_scratch("замена");
@@ -250,7 +280,9 @@ fn прерванная_заливка_по_scp_оставляет_прежни�
         assert_eq!(out.trim(), "старое\n750\nrun.sh", "оригинал цел, временного файла нет");
 
         std::fs::write(&src, "новое").unwrap();
-        scp::put_file(&h, src.to_str().unwrap(), &remote).await.expect("заливка");
+        scp::put_file(&h, src.to_str().unwrap(), &remote)
+            .await
+            .expect("заливка");
         let (_, out, _) = ssh::exec(&h, &state, None).await.expect("состояние");
         assert_eq!(out.trim(), "новое\n750\nrun.sh", "содержимое заменено, права прежние");
 
@@ -258,4 +290,3 @@ fn прерванная_заливка_по_scp_оставляет_прежни�
         remote_fs::remove(&fs, &h, &dir, true).await.expect("уборка");
     });
 }
-

@@ -137,10 +137,7 @@ fn editor_for(chosen: &str, local: &Path) -> Result<(String, Vec<String>), Strin
     {
         match LINUX_EDITORS.iter().find(|e| in_path(e)) {
             Some(e) => Ok(((*e).to_owned(), vec![path])),
-            None => Err(
-                "не нашёл текстовый редактор - укажите его в настройках, в поле «Внешний редактор»"
-                    .to_owned(),
-            ),
+            None => Err("не нашёл текстовый редактор - укажите его в настройках, в поле «Внешний редактор»".to_owned()),
         }
     }
 }
@@ -159,8 +156,7 @@ impl EditManager {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "file".into());
         // Имя пришло с сервера, а из него собирается путь на своей машине.
-        crate::localname::safe_component(&base)
-            .map_err(|why| format!("не могу сохранить для правки: {why}"))?;
+        crate::localname::safe_component(&base).map_err(|why| format!("не могу сохранить для правки: {why}"))?;
         let root = std::env::temp_dir().join("serein-edit");
         let dir = root.join(uuid::Uuid::new_v4().to_string());
         // Каталоги создаём сами и сразу закрываем: скачанный сюда файл может быть
@@ -190,9 +186,7 @@ impl EditManager {
         // Один наблюдатель на документ. Прежняя запись просто затиралась, и старая задача
         // продолжала жить: два наблюдателя за одним файлом заливали его по очереди,
         // каждый по своему представлению о том, что изменилось.
-        if let Some(prev) = crate::sync::lock(&self.watchers)
-            .insert(key(&session_id, &remote), running.clone())
-        {
+        if let Some(prev) = crate::sync::lock(&self.watchers).insert(key(&session_id, &remote), running.clone()) {
             prev.store(false, Ordering::Relaxed);
         }
 
@@ -208,7 +202,12 @@ impl EditManager {
             // человека. Прежний код сбрасывал `pending`, и остановка слежки удаляла её.
             let mut conflict = false;
             loop {
-                tokio::time::sleep(if pending.is_some() { RETRY_AFTER_FAIL } else { WATCH_TICK }).await;
+                tokio::time::sleep(if pending.is_some() {
+                    RETRY_AFTER_FAIL
+                } else {
+                    WATCH_TICK
+                })
+                .await;
                 if !running.load(Ordering::Relaxed) {
                     break;
                 }
@@ -329,9 +328,21 @@ mod tests {
     #[test]
     fn правка_не_заливается_поверх_чужой_и_при_неизвестной_версии() {
         assert_eq!(verdict(Some(1_000), Some(1_500)), Verdict::Upload, "в пределах запаса");
-        assert_eq!(verdict(Some(1_000), Some(9_000)), Verdict::Conflict, "на сервере правили позже");
-        assert_eq!(verdict(Some(1_000), None), Verdict::Unknown, "не узнали - не значит «можно затереть»");
-        assert_eq!(verdict(None, None), Verdict::Upload, "сервер без stat: сравнивать не с чем с самого начала");
+        assert_eq!(
+            verdict(Some(1_000), Some(9_000)),
+            Verdict::Conflict,
+            "на сервере правили позже"
+        );
+        assert_eq!(
+            verdict(Some(1_000), None),
+            Verdict::Unknown,
+            "не узнали - не значит «можно затереть»"
+        );
+        assert_eq!(
+            verdict(None, None),
+            Verdict::Upload,
+            "сервер без stat: сравнивать не с чем с самого начала"
+        );
     }
 
     #[test]
@@ -340,7 +351,10 @@ mod tests {
         // кавычкой превращается в несколько доводов, а то и в команду.
         let file = Path::new("/tmp/папка с пробелом/от\"чёт.txt");
         let (program, args) = editor_for("  /usr/bin/gedit ", file).expect("редактор выбран");
-        assert_eq!(program, "/usr/bin/gedit", "пробелы вокруг пути к программе не значат ничего");
+        assert_eq!(
+            program, "/usr/bin/gedit",
+            "пробелы вокруг пути к программе не значат ничего"
+        );
         assert_eq!(args, vec![file.to_string_lossy().to_string()]);
     }
 

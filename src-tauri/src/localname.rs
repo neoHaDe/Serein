@@ -20,8 +20,8 @@ use std::path::{Component, Path, PathBuf};
 ///
 /// Проверяется часть до первой точки: `NUL.txt` - то же устройство, что и `NUL`.
 const DOS_DEVICES: &[&str] = &[
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2",
+    "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
 /// Проверяет имя как один элемент локального пути.
@@ -138,7 +138,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!("serein-dest-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("а").join("б")).unwrap();
         assert!(no_links_below(&root, &root.join("а").join("б").join("файл.txt")).is_ok());
-        assert!(no_links_below(&root, &root.join("нет").join("ещё").join("файл.txt")).is_ok(), "несуществующие каталоги создаст скачивание");
+        assert!(
+            no_links_below(&root, &root.join("нет").join("ещё").join("файл.txt")).is_ok(),
+            "несуществующие каталоги создаст скачивание"
+        );
         assert!(no_links_below(&root, &root.join("..").join("чужое.txt")).is_err());
         let _ = std::fs::remove_dir_all(root);
     }
@@ -185,7 +188,16 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn ловушки_windows_отклоняются() {
-        for name in ["C:evil", "файл:поток", "NUL", "nul.txt", "отчёт.txt.", "имя ", "a*b", "a?b"] {
+        for name in [
+            "C:evil",
+            "файл:поток",
+            "NUL",
+            "nul.txt",
+            "отчёт.txt.",
+            "имя ",
+            "a*b",
+            "a?b",
+        ] {
             assert!(safe_component(name).is_err(), "имя «{name}» опасно на Windows");
         }
     }
@@ -195,7 +207,10 @@ mod tests {
         let root = Path::new("/home/u/Загрузки");
         assert!(under_root(root, Path::new("/home/u/Загрузки/папка/файл")));
         assert!(!under_root(root, Path::new("/home/u/Загрузки/../тайное")));
-        assert!(!under_root(root, Path::new("/home/u/Загрузки")), "сам корень - не файл в нём");
+        assert!(
+            !under_root(root, Path::new("/home/u/Загрузки")),
+            "сам корень - не файл в нём"
+        );
         assert!(!under_root(root, Path::new("/etc/passwd")));
     }
 }

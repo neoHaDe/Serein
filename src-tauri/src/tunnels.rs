@@ -1,7 +1,7 @@
 //! Туннели: local (-L), dynamic SOCKS5 (-D) и remote (-R) поверх russh.
 //! -L/-D - direct-tcpip; -R - tcpip_forward + маршрутизация forwarded-каналов через ClientHandler.
 
-use crate::ssh::{ClientHandler, RemoteForwards, wait_cancel, CancelRx};
+use crate::ssh::{wait_cancel, CancelRx, ClientHandler, RemoteForwards};
 use russh::client;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -87,7 +87,11 @@ impl TunnelManager {
             let m = guard.entry(session_id.clone()).or_default();
             m.insert(
                 tunnel_id.clone(),
-                TunnelEntry { stop: Some(stop_tx), active: false, error: None },
+                TunnelEntry {
+                    stop: Some(stop_tx),
+                    active: false,
+                    error: None,
+                },
             );
         }
 
@@ -226,7 +230,14 @@ impl TunnelManager {
     fn set_error(&self, session_id: &str, tunnel_id: &str, err: &str) {
         let mut guard = crate::sync::lock(&self.active);
         let m = guard.entry(session_id.to_string()).or_default();
-        m.insert(tunnel_id.to_string(), TunnelEntry { stop: None, active: false, error: Some(err.to_string()) });
+        m.insert(
+            tunnel_id.to_string(),
+            TunnelEntry {
+                stop: None,
+                active: false,
+                error: Some(err.to_string()),
+            },
+        );
     }
 }
 
@@ -265,7 +276,9 @@ async fn handle_socks5(
         0x04 => {
             let mut a = [0u8; 16];
             sock.read_exact(&mut a).await.map_err(|e| e.to_string())?;
-            let segs: Vec<String> = (0..8).map(|i| format!("{:x}", u16::from_be_bytes([a[i * 2], a[i * 2 + 1]]))).collect();
+            let segs: Vec<String> = (0..8)
+                .map(|i| format!("{:x}", u16::from_be_bytes([a[i * 2], a[i * 2 + 1]])))
+                .collect();
             segs.join(":")
         }
         _ => {

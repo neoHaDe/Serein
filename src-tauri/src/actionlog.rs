@@ -89,7 +89,9 @@ fn stamp(secs: i64, millis: u32) -> (String, String) {
 }
 
 fn actor() -> Value {
-    let user = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default();
+    let user = std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_default();
     let machine = std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .ok()
@@ -182,7 +184,10 @@ fn resume() -> Chain {
             seq: v["seq"].as_u64().unwrap_or(0),
             last: v["hash"].as_str().unwrap_or("").to_owned(),
         },
-        None => Chain { seq: 0, last: String::new() },
+        None => Chain {
+            seq: 0,
+            last: String::new(),
+        },
     }
 }
 
@@ -207,13 +212,7 @@ fn note_write_failure(t: &str, reason: &str) {
     }
 }
 
-fn write_entry(
-    server: Option<&str>,
-    session: Option<&str>,
-    action: &str,
-    detail: Value,
-    result: Result<(), String>,
-) {
+fn write_entry(server: Option<&str>, session: Option<&str>, action: &str, detail: Value, result: Result<(), String>) {
     let (secs, millis) = now_parts();
     let (t, file) = stamp(secs, millis);
     let mut guard = lock(&WRITER);
@@ -235,7 +234,10 @@ fn write_entry(
     body["hash"] = json!(hash);
     let line = serde_json::to_string(&body).unwrap_or_default();
     let written = fs::create_dir_all(dir()).and_then(|_| {
-        let mut f = fs::OpenOptions::new().create(true).append(true).open(dir().join(&file))?;
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir().join(&file))?;
         f.write_all(line.as_bytes())?;
         f.write_all(b"\n")?;
         f.flush()
@@ -279,7 +281,9 @@ pub fn outcome<T, E: std::fmt::Display>(r: &Result<T, E>) -> Result<(), String> 
 }
 
 pub fn bind(session: &str, server: &str) {
-    lock(&SESSIONS).get_or_insert_with(HashMap::new).insert(session.to_owned(), server.to_owned());
+    lock(&SESSIONS)
+        .get_or_insert_with(HashMap::new)
+        .insert(session.to_owned(), server.to_owned());
 }
 
 pub fn unbind(session: &str) -> Option<String> {
@@ -353,11 +357,17 @@ fn apply(settings: &Value, announce: bool) {
 /// RFC 5424: local0.info, приложение `Serein`, запись целиком в JSON.
 fn syslog_message(entry: &Value) -> String {
     let t = entry["t"].as_str().unwrap_or("-");
-    let machine = entry["actor"]["machine"].as_str().filter(|s| !s.is_empty()).unwrap_or("-");
+    let machine = entry["actor"]["machine"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("-");
     let action = entry["action"].as_str().unwrap_or("-");
     let host: String = machine.chars().filter(|c| c.is_ascii_graphic()).take(255).collect();
     let msgid: String = action.chars().filter(|c| c.is_ascii_graphic()).take(32).collect();
-    format!("<134>1 {t} {host} Serein - {msgid} - {}", serde_json::to_string(entry).unwrap_or_default())
+    format!(
+        "<134>1 {t} {host} Serein - {msgid} - {}",
+        serde_json::to_string(entry).unwrap_or_default()
+    )
 }
 
 fn spawn_syslog(cfg: SyslogCfg) -> Sender<String> {
@@ -366,7 +376,11 @@ fn spawn_syslog(cfg: SyslogCfg) -> Sender<String> {
         .name("action-log-syslog".into())
         .spawn(move || {
             let addr = format!("{}:{}", cfg.host, cfg.port);
-            let udp = if cfg.tcp { None } else { std::net::UdpSocket::bind("0.0.0.0:0").ok() };
+            let udp = if cfg.tcp {
+                None
+            } else {
+                std::net::UdpSocket::bind("0.0.0.0:0").ok()
+            };
             let mut tcp: Option<std::net::TcpStream> = None;
             for msg in rx {
                 let sent = if cfg.tcp {
@@ -493,11 +507,24 @@ impl LineBuf {
 /// Похоже ли последнее, что вывел сервер, на запрос пароля.
 pub fn asks_secret(tail: &str) -> bool {
     let plain = strip_ansi(tail);
-    let last = plain.trim_end_matches(['\r', '\n', ' ']).rsplit(['\n', '\r']).next().unwrap_or("");
+    let last = plain
+        .trim_end_matches(['\r', '\n', ' '])
+        .rsplit(['\n', '\r'])
+        .next()
+        .unwrap_or("");
     let l = last.to_lowercase();
-    let secret = ["password", "passphrase", "passcode", "пароль", "verification code", "one-time", "otp", "pin:"]
-        .iter()
-        .any(|w| l.contains(w));
+    let secret = [
+        "password",
+        "passphrase",
+        "passcode",
+        "пароль",
+        "verification code",
+        "one-time",
+        "otp",
+        "pin:",
+    ]
+    .iter()
+    .any(|w| l.contains(w));
     secret && (l.trim_end().ends_with(':') || l.trim_end().ends_with('?') || l.trim_end().ends_with('>'))
 }
 
@@ -531,7 +558,10 @@ pub fn terminal_input(session: &str, data: &str) {
     let Some(server) = server_of(session) else { return };
     let lines = {
         let mut map = lock(&LINES);
-        map.get_or_insert_with(HashMap::new).entry(session.to_owned()).or_default().feed(data)
+        map.get_or_insert_with(HashMap::new)
+            .entry(session.to_owned())
+            .or_default()
+            .feed(data)
     };
     for (line, edited) in lines {
         let detail = if asks_secret(&crate::term_out::replay(session)) {
@@ -578,8 +608,11 @@ pub fn verify() -> Value {
             return json!({ "ok": false, "count": seq, "file": name, "line": 0, "reason": "файл не открывается" });
         };
         for (i, line) in BufReader::new(f).lines().enumerate() {
-            let fail = |reason: &str| json!({ "ok": false, "count": seq, "file": name, "line": i + 1, "reason": reason });
-            let Ok(line) = line else { return fail("строка не читается") };
+            let fail =
+                |reason: &str| json!({ "ok": false, "count": seq, "file": name, "line": i + 1, "reason": reason });
+            let Ok(line) = line else {
+                return fail("строка не читается");
+            };
             if line.trim().is_empty() {
                 continue;
             }
@@ -610,8 +643,14 @@ pub fn export(dest: &str) -> Result<usize, String> {
     let mut n = 0;
     for file in log_files() {
         let f = fs::File::open(&file).map_err(|e| e.to_string())?;
-        for line in BufReader::new(f).lines().map_while(Result::ok).filter(|l| !l.trim().is_empty()) {
-            out.write_all(line.as_bytes()).and_then(|_| out.write_all(b"\n")).map_err(|e| e.to_string())?;
+        for line in BufReader::new(f)
+            .lines()
+            .map_while(Result::ok)
+            .filter(|l| !l.trim().is_empty())
+        {
+            out.write_all(line.as_bytes())
+                .and_then(|_| out.write_all(b"\n"))
+                .map_err(|e| e.to_string())?;
             n += 1;
         }
     }
@@ -653,13 +692,32 @@ mod tests {
     fn набранная_строка_собирается_по_enter_с_правкой_и_отменой() {
         let mut b = LineBuf::default();
         assert_eq!(b.feed("ls -la"), vec![]);
-        assert_eq!(b.feed("x\x7f\r"), vec![("ls -la".to_owned(), false)], "Backspace убирает символ");
+        assert_eq!(
+            b.feed("x\x7f\r"),
+            vec![("ls -la".to_owned(), false)],
+            "Backspace убирает символ"
+        );
         assert_eq!(b.feed("rm -rf /tmp/x\x03"), vec![], "Ctrl+C - строка не выполнена");
         assert_eq!(b.feed("\r"), vec![], "пустой Enter не пишется");
-        assert_eq!(b.feed("sudo systemctl rest\trt\r"), vec![("sudo systemctl restrt".to_owned(), true)], "Tab - дописал сервер");
-        assert_eq!(b.feed("\x1b[A\r"), vec![(String::new(), true)], "команда из истории - текст неизвестен, но факт есть");
-        assert_eq!(b.feed("\x1b[200~echo 1\recho 2\x1b[201~\r"), vec![("echo 1".to_owned(), false), ("echo 2".to_owned(), false)]);
-        assert_eq!(b.feed("git commit -m fix wrong\x17\r"), vec![("git commit -m fix ".to_owned(), false)], "Ctrl+W - слово");
+        assert_eq!(
+            b.feed("sudo systemctl rest\trt\r"),
+            vec![("sudo systemctl restrt".to_owned(), true)],
+            "Tab - дописал сервер"
+        );
+        assert_eq!(
+            b.feed("\x1b[A\r"),
+            vec![(String::new(), true)],
+            "команда из истории - текст неизвестен, но факт есть"
+        );
+        assert_eq!(
+            b.feed("\x1b[200~echo 1\recho 2\x1b[201~\r"),
+            vec![("echo 1".to_owned(), false), ("echo 2".to_owned(), false)]
+        );
+        assert_eq!(
+            b.feed("git commit -m fix wrong\x17\r"),
+            vec![("git commit -m fix ".to_owned(), false)],
+            "Ctrl+W - слово"
+        );
     }
 
     #[test]
@@ -668,14 +726,27 @@ mod tests {
         assert!(asks_secret("Enter passphrase for key '/home/u/.ssh/id_ed25519': "));
         assert!(asks_secret("\x1b[1mПароль:\x1b[0m "));
         assert!(!asks_secret("user@host:~$ "));
-        assert!(!asks_secret("echo password\r\npassword\r\nuser@host:~$ "), "слово в выводе - не запрос");
+        assert!(
+            !asks_secret("echo password\r\npassword\r\nuser@host:~$ "),
+            "слово в выводе - не запрос"
+        );
     }
 
     #[test]
     fn время_и_месячный_файл() {
-        assert_eq!(stamp(0, 5), ("1970-01-01T00:00:00.005Z".to_owned(), "actions-1970-01.jsonl".to_owned()));
+        assert_eq!(
+            stamp(0, 5),
+            (
+                "1970-01-01T00:00:00.005Z".to_owned(),
+                "actions-1970-01.jsonl".to_owned()
+            )
+        );
         assert_eq!(stamp(1_757_931_630, 0).0, "2025-09-15T10:20:30.000Z");
-        assert_eq!(stamp(951_782_400, 0).1, "actions-2000-02.jsonl", "29 февраля високосного года");
+        assert_eq!(
+            stamp(951_782_400, 0).1,
+            "actions-2000-02.jsonl",
+            "29 февраля високосного года"
+        );
     }
 
     #[test]
@@ -684,17 +755,41 @@ mod tests {
         let a = digest("", &body);
         assert_eq!(a.len(), 64);
         assert_ne!(a, digest("x", &body), "другая предыдущая - другой хеш");
-        assert_ne!(a, digest("", &json!({ "seq": 1, "action": "ssh.connec" })), "правка записи видна");
+        assert_ne!(
+            a,
+            digest("", &json!({ "seq": 1, "action": "ssh.connec" })),
+            "правка записи видна"
+        );
     }
 
     #[test]
     fn syslog_сообщение_по_rfc_5424() {
-        let m = syslog_message(&json!({ "t": "2026-09-15T10:00:00.000Z", "actor": { "machine": "ПК 1" }, "action": "ssh.connect" }));
-        assert!(m.starts_with("<134>1 2026-09-15T10:00:00.000Z 1 Serein - ssh.connect - {"), "{m}");
-        let cfg = syslog_cfg(&json!({ "actionLogSyslog": { "enabled": true, "host": " siem.local ", "port": 6514, "protocol": "tcp" } }));
-        assert_eq!(cfg, Some(SyslogCfg { host: "siem.local".into(), port: 6514, tcp: true }));
-        assert_eq!(syslog_cfg(&json!({ "actionLogSyslog": { "enabled": true, "host": "" } })), None);
-        assert_eq!(syslog_cfg(&json!({ "actionLogSyslog": { "enabled": false, "host": "a" } })), None);
+        let m = syslog_message(
+            &json!({ "t": "2026-09-15T10:00:00.000Z", "actor": { "machine": "ПК 1" }, "action": "ssh.connect" }),
+        );
+        assert!(
+            m.starts_with("<134>1 2026-09-15T10:00:00.000Z 1 Serein - ssh.connect - {"),
+            "{m}"
+        );
+        let cfg = syslog_cfg(
+            &json!({ "actionLogSyslog": { "enabled": true, "host": " siem.local ", "port": 6514, "protocol": "tcp" } }),
+        );
+        assert_eq!(
+            cfg,
+            Some(SyslogCfg {
+                host: "siem.local".into(),
+                port: 6514,
+                tcp: true
+            })
+        );
+        assert_eq!(
+            syslog_cfg(&json!({ "actionLogSyslog": { "enabled": true, "host": "" } })),
+            None
+        );
+        assert_eq!(
+            syslog_cfg(&json!({ "actionLogSyslog": { "enabled": false, "host": "a" } })),
+            None
+        );
     }
 
     #[test]

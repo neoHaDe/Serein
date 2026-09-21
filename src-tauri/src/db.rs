@@ -120,8 +120,7 @@ enum Live {
 
 /// Клиент SQL Server поверх канала SSH. Переходник нужен потому, что tiberius говорит на
 /// потоках futures, а канал - поток tokio.
-type MssqlClient =
-    tiberius::Client<tokio_util::compat::Compat<russh::ChannelStream<russh::client::Msg>>>;
+type MssqlClient = tiberius::Client<tokio_util::compat::Compat<russh::ChannelStream<russh::client::Msg>>>;
 
 /// Открытое соединение вместе с тем, через какую SSH-сессию оно идёт.
 ///
@@ -176,12 +175,7 @@ async fn channel(
 }
 
 /// Подключается к базе и запоминает соединение под выданным идентификатором.
-pub async fn open(
-    id: String,
-    session_id: &str,
-    handle: &SharedHandle,
-    p: Params,
-) -> Result<Value, String> {
+pub async fn open(id: String, session_id: &str, handle: &SharedHandle, p: Params) -> Result<Value, String> {
     // Канал внутри SSH нужен сетевым базам. SQLite - файл, до него канал не открываем.
     let live = match p.kind {
         Kind::Postgres => {
@@ -236,7 +230,10 @@ pub async fn open(
                 .query(&format!("SET SESSION max_statement_time = {}", SERVER_LIMIT.as_secs()))
                 .await;
             let _ = conn
-                .query(&format!("SET SESSION max_execution_time = {}", SERVER_LIMIT.as_millis()))
+                .query(&format!(
+                    "SET SESSION max_execution_time = {}",
+                    SERVER_LIMIT.as_millis()
+                ))
                 .await;
             Live::Mysql(Arc::new(AsyncMutex::new(conn)))
         }
@@ -380,7 +377,11 @@ struct ResultSet {
 
 impl ResultSet {
     fn new(columns: Vec<String>) -> Self {
-        Self { columns, budget: Budget::new(), affected: 0 }
+        Self {
+            columns,
+            budget: Budget::new(),
+            affected: 0,
+        }
     }
 
     fn json(self) -> Value {
@@ -410,7 +411,11 @@ fn answer(sets: Vec<ResultSet>, quota: &Quota) -> Value {
         .unwrap_or(0);
     // Строки показанного набора лежат только в `sets`: копия в верхних полях удваивала бы
     // самый тяжёлый набор ответа по дороге в окно.
-    let columns = sets.get(shown).and_then(|s| s.get("columns")).cloned().unwrap_or_else(|| json!([]));
+    let columns = sets
+        .get(shown)
+        .and_then(|s| s.get("columns"))
+        .cloned()
+        .unwrap_or_else(|| json!([]));
     json!({
         "columns": columns,
         "rows": [],
@@ -452,7 +457,10 @@ struct Budget {
 
 impl Budget {
     fn new() -> Self {
-        Self { rows: Vec::new(), truncated: false }
+        Self {
+            rows: Vec::new(),
+            truncated: false,
+        }
     }
 
     /// Обрезает слишком длинное значение, сообщая об этом в самом значении.
@@ -612,9 +620,8 @@ async fn pg_query(client: &tokio_postgres::Client, sql: &str) -> Result<Value, S
             tokio_postgres::SimpleQueryMessage::Row(r) => {
                 // Колонки берём из самой строки, если описания не было: обращаться по
                 // индексу, которого в строке нет, нельзя - библиотека на этом паникует.
-                let set = current.get_or_insert_with(|| {
-                    ResultSet::new(unique_names(r.columns().iter().map(|c| c.name())))
-                });
+                let set =
+                    current.get_or_insert_with(|| ResultSet::new(unique_names(r.columns().iter().map(|c| c.name()))));
                 let mut obj = Map::new();
                 let mut size = 0usize;
                 for (i, name) in set.columns.iter().enumerate() {
@@ -703,9 +710,7 @@ async fn mssql_query(conn: &AsyncMutex<MssqlClient>, sql: &str) -> Result<Value,
                 if let Some(done) = current.take() {
                     keep(&mut sets, done, &mut quota);
                 }
-                current = Some(ResultSet::new(unique_names(
-                    meta.columns().iter().map(|c| c.name()),
-                )));
+                current = Some(ResultSet::new(unique_names(meta.columns().iter().map(|c| c.name()))));
             }
             tiberius::QueryItem::Row(row) => {
                 let Some(set) = current.as_mut() else {
@@ -757,9 +762,10 @@ fn mssql_cell(data: &tiberius::ColumnData<'static>) -> Option<String> {
         }),
         D::Numeric(v) => v.map(|n| n.to_string()),
         D::Xml(v) => v.as_ref().map(|x| x.to_string()),
-        D::DateTime(_) | D::SmallDateTime(_) | D::DateTime2(_) => {
-            chrono::NaiveDateTime::from_sql(data).ok().flatten().map(|d| d.to_string())
-        }
+        D::DateTime(_) | D::SmallDateTime(_) | D::DateTime2(_) => chrono::NaiveDateTime::from_sql(data)
+            .ok()
+            .flatten()
+            .map(|d| d.to_string()),
         D::Date(_) => chrono::NaiveDate::from_sql(data).ok().flatten().map(|d| d.to_string()),
         D::Time(_) => chrono::NaiveTime::from_sql(data).ok().flatten().map(|d| d.to_string()),
         D::DateTimeOffset(_) => chrono::DateTime::<chrono::FixedOffset>::from_sql(data)
@@ -797,9 +803,8 @@ async fn sqlite_open(handle: &SharedHandle, p: &Params) -> Result<SqliteTarget, 
         .ok_or_else(|| "Укажите путь к файлу базы на сервере".to_owned())?
         .to_owned();
     let q = crate::scp::shell_quote(&path);
-    let cmd = format!(
-        "command -v sqlite3 >/dev/null 2>&1 && echo tool; test -f {q} && echo file; test -r {q} && echo read"
-    );
+    let cmd =
+        format!("command -v sqlite3 >/dev/null 2>&1 && echo tool; test -f {q} && echo file; test -r {q} && echo read");
     let (_c, out, _e) = crate::ssh::exec(handle, &cmd, None).await?;
     let has = |w: &str| out.lines().any(|l| l.trim() == w);
     if !has("tool") {
@@ -1003,10 +1008,7 @@ fn mongo_set(out: crate::mongo::Outcome, quota: &mut Quota) -> ResultSet {
     set
 }
 
-async fn redis_query(
-    conn: &AsyncMutex<redis::aio::MultiplexedConnection>,
-    line: &str,
-) -> Result<Value, String> {
+async fn redis_query(conn: &AsyncMutex<redis::aio::MultiplexedConnection>, line: &str) -> Result<Value, String> {
     let parts = split_command(line);
     let Some((name, args)) = parts.split_first() else {
         return Err("Пустая команда".into());
@@ -1024,7 +1026,11 @@ async fn redis_query(
     for row in redis_rows(value) {
         let text = row["значение"].as_str().unwrap_or("").to_owned();
         let size = text.len();
-        let cell = if text.is_empty() { row["значение"].clone() } else { set.budget.cell(&text) };
+        let cell = if text.is_empty() {
+            row["значение"].clone()
+        } else {
+            set.budget.cell(&text)
+        };
         if !set.budget.push(&mut quota, json!({ "значение": cell }), size) {
             break;
         }
@@ -1117,11 +1123,7 @@ pub fn close_session(session_id: &str) {
 /// переезд окна переживает. Без этого вопроса отделение панели выглядело бы как обрыв
 /// связи, хотя рвать было нечего.
 pub fn for_session(session_id: &str) -> Option<Value> {
-    with_sessions(|m| {
-        m.values()
-            .find(|o| o.session_id == session_id)
-            .map(|o| o.info.clone())
-    })
+    with_sessions(|m| m.values().find(|o| o.session_id == session_id).map(|o| o.info.clone()))
 }
 
 /// Сколько соединений открыто через эту сессию - для тестов и диагностики.
@@ -1152,7 +1154,10 @@ mod tests {
     #[test]
     fn документы_mongodb_сводятся_в_таблицу() {
         let out = crate::mongo::Outcome {
-            docs: vec![bson::doc! { "b": 1, "a": "x" }, bson::doc! { "c": bson::Bson::Null, "a": "" }],
+            docs: vec![
+                bson::doc! { "b": 1, "a": "x" },
+                bson::doc! { "c": bson::Bson::Null, "a": "" },
+            ],
             cut: false,
             affected: 0,
         };
@@ -1182,7 +1187,11 @@ mod tests {
         let out = "[{\"a\":1},\n{\"a\":2},\n{\"a\":3";
         let v = parse_sqlite_json(out, true).expect("разбор");
         assert_eq!(v["truncated"], true, "об обрезке надо сказать");
-        assert_eq!(v["sets"][0]["rows"].as_array().expect("строки").len(), 2, "две целые строки: {v}");
+        assert_eq!(
+            v["sets"][0]["rows"].as_array().expect("строки").len(),
+            2,
+            "две целые строки: {v}"
+        );
     }
 
     #[test]
@@ -1194,7 +1203,10 @@ mod tests {
     fn одинаковые_имена_колонок_не_съедают_друг_друга() {
         // `SELECT 1 AS a, 2 AS a` - строка в ответе словарь, и второе значение затирало
         // первое: в таблице просто не было одного столбца.
-        assert_eq!(unique_names(["a", "b", "a", "a"].into_iter()), vec!["a", "b", "a#2", "a#3"]);
+        assert_eq!(
+            unique_names(["a", "b", "a", "a"].into_iter()),
+            vec!["a", "b", "a#2", "a#3"]
+        );
         assert_eq!(unique_names([].into_iter()), Vec::<String>::new());
     }
 
@@ -1211,7 +1223,11 @@ mod tests {
         let ответ = answer(vec![пустой, со_строками], &Quota::default());
         assert_eq!(ответ["shown"], 1, "показать надо набор со строками");
         assert_eq!(ответ["columns"][0], "c");
-        assert_eq!(ответ["sets"].as_array().unwrap().len(), 2, "остальные наборы не выбрасываются");
+        assert_eq!(
+            ответ["sets"].as_array().unwrap().len(),
+            2,
+            "остальные наборы не выбрасываются"
+        );
         assert_eq!(ответ["affected"], 4, "изменённые строки складываются по всем наборам");
     }
 
@@ -1243,13 +1259,22 @@ mod tests {
         let mut по_строкам = Budget::new();
         let mut q = Quota::default();
         for i in 0..MAX_ROWS {
-            assert!(по_строкам.push(&mut q, json!({ "i": i }), 1), "строка {i} должна поместиться");
+            assert!(
+                по_строкам.push(&mut q, json!({ "i": i }), 1),
+                "строка {i} должна поместиться"
+            );
         }
-        assert!(!по_строкам.push(&mut q, json!({ "i": "лишняя" }), 1), "предел строк обязан сработать");
+        assert!(
+            !по_строкам.push(&mut q, json!({ "i": "лишняя" }), 1),
+            "предел строк обязан сработать"
+        );
         assert!(по_строкам.truncated, "об обрезке надо сказать");
 
         let mut по_объёму = Budget::new();
-        assert!(!по_объёму.push(&mut Quota::default(), json!({ "a": 1 }), MAX_BYTES + 1), "предел объёма обязан сработать");
+        assert!(
+            !по_объёму.push(&mut Quota::default(), json!({ "a": 1 }), MAX_BYTES + 1),
+            "предел объёма обязан сработать"
+        );
         assert!(по_объёму.truncated);
 
         let mut по_ячейке = Budget::new();
@@ -1312,7 +1337,10 @@ mod tests {
             split_command(r#"SET ключ "два слова""#),
             vec!["SET", "ключ", "два слова"]
         );
-        assert_eq!(split_command("SET k 'одинарные тоже'"), vec!["SET", "k", "одинарные тоже"]);
+        assert_eq!(
+            split_command("SET k 'одинарные тоже'"),
+            vec!["SET", "k", "одинарные тоже"]
+        );
     }
 
     #[test]

@@ -166,7 +166,13 @@ fn walk_local(root: &Path, alive: &AtomicBool) -> Result<Side, String> {
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0);
-                side.files.insert(r, Stamp { size: meta.len(), mtime });
+                side.files.insert(
+                    r,
+                    Stamp {
+                        size: meta.len(),
+                        mtime,
+                    },
+                );
             }
         }
     }
@@ -249,8 +255,7 @@ fn plan(local: &Side, remote: &Side, time_known: bool, local_root: &str, remote_
         refused.push(json!({ "rel": rel, "why": "на сервере с этим именем файл - содержимое папки не залить" }));
         blocked.push(rel.clone());
     }
-    let is_blocked =
-        |rel: &str| blocked.iter().any(|b| rel == b || rel.starts_with(&format!("{b}/")));
+    let is_blocked = |rel: &str| blocked.iter().any(|b| rel == b || rel.starts_with(&format!("{b}/")));
 
     let names: BTreeSet<&String> = local.files.keys().chain(remote.files.keys()).collect();
     let mut rows: Vec<(Kind, &String, Option<Stamp>, Option<Stamp>)> = names
@@ -320,10 +325,26 @@ mod tests {
         let t = 1_000_000;
         assert_eq!(classify(st(5, t), None, true), Kind::New);
         assert_eq!(classify(None, st(5, t), true), Kind::RemoteOnly);
-        assert_eq!(classify(st(5, t), st(5, t + 1500), true), Kind::Same, "в пределах допуска");
-        assert_eq!(classify(st(5, t + 60_000), st(5, t), true), Kind::Changed, "правили локально");
-        assert_eq!(classify(st(6, t), st(5, t), true), Kind::Changed, "размер другой, время то же");
-        assert_eq!(classify(st(6, t), st(5, t + 60_000), true), Kind::RemoteNewer, "правили на сервере");
+        assert_eq!(
+            classify(st(5, t), st(5, t + 1500), true),
+            Kind::Same,
+            "в пределах допуска"
+        );
+        assert_eq!(
+            classify(st(5, t + 60_000), st(5, t), true),
+            Kind::Changed,
+            "правили локально"
+        );
+        assert_eq!(
+            classify(st(6, t), st(5, t), true),
+            Kind::Changed,
+            "размер другой, время то же"
+        );
+        assert_eq!(
+            classify(st(6, t), st(5, t + 60_000), true),
+            Kind::RemoteNewer,
+            "правили на сервере"
+        );
         // Размер тот же, но на сервере правили позже: содержимое могло смениться.
         assert_eq!(classify(st(5, t), st(5, t + 60_000), true), Kind::RemoteNewer);
     }
@@ -332,7 +353,11 @@ mod tests {
     fn без_времени_правки_одинаковый_размер_не_значит_совпадает() {
         let t = 1_000_000;
         assert_eq!(classify(st(5, t + 60_000), st(5, 0), false), Kind::Unsure);
-        assert_eq!(classify(st(5, 0), st(5, t), true), Kind::Unsure, "своё время неизвестно");
+        assert_eq!(
+            classify(st(5, 0), st(5, t), true),
+            Kind::Unsure,
+            "своё время неизвестно"
+        );
         assert_eq!(classify(st(6, t), st(5, 0), false), Kind::Changed);
     }
 
@@ -341,11 +366,17 @@ mod tests {
         let ok: Result<Option<u64>, String> = Ok(Some(5_000));
         assert!(!moved_since_plan(Some(5_000), &ok), "не менялся");
         assert!(moved_since_plan(Some(4_000), &ok), "время другое");
-        assert!(moved_since_plan(Some(5_000), &Err("нет файла".into())), "пропал или не проверить");
+        assert!(
+            moved_since_plan(Some(5_000), &Err("нет файла".into())),
+            "пропал или не проверить"
+        );
         assert!(moved_since_plan(Some(5_000), &Ok(None)), "не проверить");
         assert!(moved_since_plan(None, &ok), "появился, пока ждали");
         assert!(!moved_since_plan(None, &Err("нет файла".into())));
-        assert!(!moved_since_plan(Some(0), &ok), "времени в плане не было - сравнить не с чем");
+        assert!(
+            !moved_since_plan(Some(0), &ok),
+            "времени в плане не было - сравнить не с чем"
+        );
     }
 
     #[test]
@@ -364,9 +395,18 @@ mod tests {
         assert_eq!(items.len(), 1, "a, b и b/x.txt отложены: {v}");
         assert_eq!(items[0]["rel"], "новый.txt");
         assert_eq!(items[0]["kind"], "new");
-        let why: Vec<&str> = v["refused"].as_array().unwrap().iter().map(|r| r["rel"].as_str().unwrap()).collect();
+        let why: Vec<&str> = v["refused"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["rel"].as_str().unwrap())
+            .collect();
         assert!(why.contains(&"a") && why.contains(&"b"), "{why:?}");
-        assert_eq!(v["remoteDirs"], json!(["a", "есть"]), "существующие каталоги сервера - все");
+        assert_eq!(
+            v["remoteDirs"],
+            json!(["a", "есть"]),
+            "существующие каталоги сервера - все"
+        );
     }
 
     #[test]

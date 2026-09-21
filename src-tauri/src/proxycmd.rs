@@ -21,21 +21,13 @@ pub struct ProxyStream {
 }
 
 impl AsyncRead for ProxyStream {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
         Pin::new(&mut self.stdout).poll_read(cx, buf)
     }
 }
 
 impl AsyncWrite for ProxyStream {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
         Pin::new(&mut self.stdin).poll_write(cx, buf)
     }
 
@@ -96,14 +88,9 @@ fn validate_substitutions(host: &str, user: &str) -> Result<(), String> {
     }
     let safe_user = !user.is_empty()
         && user.len() <= 255
-        && user
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || b".-_@".contains(&c));
+        && user.bytes().all(|c| c.is_ascii_alphanumeric() || b".-_@".contains(&c));
     if !safe_user {
-        return Err(
-            "Имя пользователя содержит символы, небезопасные для подстановки %r в ProxyCommand"
-                .into(),
-        );
+        return Err("Имя пользователя содержит символы, небезопасные для подстановки %r в ProxyCommand".into());
     }
     Ok(())
 }
@@ -118,8 +105,7 @@ fn foreign_program_path(line: &str) -> Option<String> {
         let t = tok.trim_matches(['"', '\'']);
         if t.len() > 2 {
             let b = t.as_bytes();
-            let windows_style =
-                b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/');
+            let windows_style = b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/');
             if cfg!(windows) {
                 // На Windows чужим считаем только явный путь к программе, а не любой
                 // аргумент вида `/home/...`: их полно в нормальных командах.
@@ -189,11 +175,7 @@ pub fn spawn(command: &str, host: &str, port: u16, user: &str) -> Result<ProxySt
 
     let stdin = child.stdin.take().ok_or("Прокси-команда не дала stdin")?;
     let stdout = child.stdout.take().ok_or("Прокси-команда не дала stdout")?;
-    Ok(ProxyStream {
-        child,
-        stdin,
-        stdout,
-    })
+    Ok(ProxyStream { child, stdin, stdout })
 }
 
 #[cfg(test)]
@@ -270,25 +252,16 @@ mod tests {
     #[test]
     fn substituted_value_is_not_expanded_again() {
         // Если имя хоста само содержит «%p», второй проход испортил бы команду.
-        assert_eq!(
-            expand_tokens("go %h", "weird%phost", 22, "u"),
-            "go weird%phost"
-        );
+        assert_eq!(expand_tokens("go %h", "weird%phost", 22, "u"), "go weird%phost");
     }
 
     #[test]
     fn shell_metacharacters_are_rejected_in_substitutions() {
         for host in ["srv;calc", "srv && whoami", "$(touch x)", "%PATH%"] {
-            assert!(
-                validate_substitutions(host, "hade").is_err(),
-                "host: {host}"
-            );
+            assert!(validate_substitutions(host, "hade").is_err(), "host: {host}");
         }
         for user in ["hade;id", "$(id)", "name\\with-slash", "%USERNAME%"] {
-            assert!(
-                validate_substitutions("srv.example", user).is_err(),
-                "user: {user}"
-            );
+            assert!(validate_substitutions("srv.example", user).is_err(), "user: {user}");
         }
         assert!(validate_substitutions("[2001:db8::1]", "user@example.com").is_ok());
     }

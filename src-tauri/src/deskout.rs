@@ -75,7 +75,11 @@ pub fn remember(ssh_id: &str, kind: Kind, desk_id: &str) {
     with(|m| {
         m.insert(
             ssh_id.to_owned(),
-            Active { kind, id: desk_id.to_owned(), size: (0, 0) },
+            Active {
+                kind,
+                id: desk_id.to_owned(),
+                size: (0, 0),
+            },
         )
     });
 }

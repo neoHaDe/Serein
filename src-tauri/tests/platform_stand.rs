@@ -16,9 +16,7 @@ async fn probe(s: &Stand, port: u16) -> (Kind, String) {
     let h = ssh::connect_client(vec![s.by_key(port)])
         .await
         .expect("подключение к серверу");
-    let (_, out, _) = ssh::exec(&h, platform::PROBE_CMD, None)
-        .await
-        .expect("зонд платформы");
+    let (_, out, _) = ssh::exec(&h, platform::PROBE_CMD, None).await.expect("зонд платформы");
     platform::detect(&out)
 }
 

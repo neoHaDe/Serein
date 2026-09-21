@@ -85,12 +85,7 @@ pub fn list_ports() -> Vec<Value> {
             json!({ "port": p.port_name, "kind": kind, "label": label })
         })
         .collect();
-    out.sort_by(|a, b| {
-        a["port"]
-            .as_str()
-            .unwrap_or("")
-            .cmp(b["port"].as_str().unwrap_or(""))
-    });
+    out.sort_by(|a, b| a["port"].as_str().unwrap_or("").cmp(b["port"].as_str().unwrap_or("")));
     out
 }
 
@@ -293,10 +288,7 @@ mod tests {
             "Порт COM99 недоступен - устройство отключено или порт занят другой программой"
         );
 
-        let busy = serialport::Error::new(
-            serialport::ErrorKind::Io(ErrorKind::PermissionDenied),
-            "занят",
-        );
+        let busy = serialport::Error::new(serialport::ErrorKind::Io(ErrorKind::PermissionDenied), "занят");
         assert_eq!(open_error("COM3", &busy), "Порт COM3 занят другой программой");
 
         // Незнакомый код не теряем - показываем системный текст целиком.

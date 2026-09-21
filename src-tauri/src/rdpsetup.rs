@@ -201,7 +201,6 @@ pub const DETECT_WINDOWS: &str = concat!(
     "\"admin`t$(if ($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { 'yes' } else { 'no' })\""
 );
 
-
 /// Включает встроенный рабочий стол Windows и проверяет, что вышло.
 ///
 /// Межсетевой экран по умолчанию **не трогаем**, и это главное решение здесь. Serein ходит
@@ -249,8 +248,7 @@ pub fn enable_windows(open_firewall: bool) -> String {
 /// не обязана. Ставить нечего - `canInstall` всегда ложь; включить можно, если ещё не
 /// включено и есть права администратора.
 pub fn parse_detect_windows(stdout: &str) -> Value {
-    let (mut deny, mut svc, mut fw, mut admin) =
-        (String::new(), String::new(), String::new(), String::new());
+    let (mut deny, mut svc, mut fw, mut admin) = (String::new(), String::new(), String::new(), String::new());
     let mut nla = String::new();
     let mut ports: Vec<String> = Vec::new();
     for line in stdout.lines() {
@@ -267,11 +265,7 @@ pub fn parse_detect_windows(stdout: &str) -> Value {
             "port" => {
                 // Адрес `::` - это «слушает везде» в записи IPv6; для человека понятнее
                 // назвать порт, а не пересказывать форму записи.
-                let addr = if val == "::" {
-                    "[::]".to_owned()
-                } else {
-                    val.to_owned()
-                };
+                let addr = if val == "::" { "[::]".to_owned() } else { val.to_owned() };
                 let full = format!("{addr}:3389");
                 if !ports.contains(&full) {
                     ports.push(full);
@@ -319,10 +313,7 @@ pub fn parse_detect_windows(stdout: &str) -> Value {
 /// Разбирает ответ включения: смотрим не на код возврата, а на итоговое состояние.
 pub fn parse_enable_windows(stdout: &str) -> Value {
     let v = parse_detect_windows(stdout);
-    let служба_идёт = v["service"]
-        .as_str()
-        .unwrap_or("")
-        .eq_ignore_ascii_case("Running");
+    let служба_идёт = v["service"].as_str().unwrap_or("").eq_ignore_ascii_case("Running");
     let разрешено = !stdout.lines().any(|l| l.trim() == "deny\t1");
     let слушает = !v["listening"].as_array().map(Vec::is_empty).unwrap_or(true);
     if !(служба_идёт && разрешено) {
@@ -350,22 +341,14 @@ mod tests {
     #[test]
     fn состояние_windows_читается_по_четырём_приметам() {
         // Ровно тот вывод, что даёт настоящая машина: проверено вживую.
-        let v = parse_detect_windows(
-            "deny\t0\nsvc\tRunning\nport\t::\nport\t0.0.0.0\nfw\ton\nadmin\tyes\n",
-        );
-        assert_eq!(
-            v["summary"],
-            "Удалённый рабочий стол включён - можно подключаться"
-        );
+        let v = parse_detect_windows("deny\t0\nsvc\tRunning\nport\t::\nport\t0.0.0.0\nfw\ton\nadmin\tyes\n");
+        assert_eq!(v["summary"], "Удалённый рабочий стол включён - можно подключаться");
         assert_eq!(v["listening"][0], "[::]:3389");
         assert_eq!(v["canInstall"], false, "на Windows ставить нечего");
         assert_eq!(v["canStart"], false, "уже включён");
 
         let выкл = parse_detect_windows("deny\t1\nsvc\tStopped\nfw\toff\nadmin\tyes\n");
-        assert_eq!(
-            выкл["summary"],
-            "Удалённый рабочий стол выключен в настройках системы"
-        );
+        assert_eq!(выкл["summary"], "Удалённый рабочий стол выключен в настройках системы");
         assert_eq!(выкл["canStart"], true);
     }
 
@@ -417,11 +400,9 @@ mod tests {
     fn состояние_nla_видно_в_разведке() {
         // Выключенная NLA значит, что сервер принимает пароль до входа в систему. Мы её не
         // меняем, но показать обязаны.
-        let v =
-            parse_detect_windows("deny\t0\nsvc\tRunning\nport\t::\nfw\ton\nnla\t1\nadmin\tyes\n");
+        let v = parse_detect_windows("deny\t0\nsvc\tRunning\nport\t::\nfw\ton\nnla\t1\nadmin\tyes\n");
         assert_eq!(v["nla"], true);
-        let выкл =
-            parse_detect_windows("deny\t0\nsvc\tRunning\nport\t::\nfw\ton\nnla\t0\nadmin\tyes\n");
+        let выкл = parse_detect_windows("deny\t0\nsvc\tRunning\nport\t::\nfw\ton\nnla\t0\nadmin\tyes\n");
         assert_eq!(выкл["nla"], false);
     }
 
@@ -458,10 +439,7 @@ mod tests {
         assert_eq!(package_for("pacman"), None);
         assert!(install_cmd("pacman").is_none());
         let v = parse_detect("PM:pacman\nSUDO:без пароля\n");
-        assert_eq!(
-            v["canInstall"], false,
-            "предлагать то, чего не сделаем, - обман"
-        );
+        assert_eq!(v["canInstall"], false, "предлагать то, чего не сделаем, - обман");
     }
 
     #[test]
@@ -490,10 +468,7 @@ mod tests {
         assert!(ENABLE_CMD.contains("enable --now"));
         assert!(ENABLE_CMD.contains("is-active"));
         assert!(ENABLE_CMD.contains("sudo -S"));
-        assert!(
-            !ENABLE_CMD.contains('\n'),
-            "перевод строки сломал бы разбор команды"
-        );
+        assert!(!ENABLE_CMD.contains('\n'), "перевод строки сломал бы разбор команды");
     }
 
     #[test]

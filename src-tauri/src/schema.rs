@@ -104,7 +104,10 @@ pub fn migrate(dir: &Path) -> Result<(), String> {
     let mut current = from;
     while current < SCHEMA_VERSION {
         current = step(dir, current).map_err(|e| {
-            format!("Миграция профиля со схемы {current} не удалась: {e}. Копия до миграции: {}", backup.display())
+            format!(
+                "Миграция профиля со схемы {current} не удалась: {e}. Копия до миграции: {}",
+                backup.display()
+            )
         })?;
     }
     write_version(dir, SCHEMA_VERSION)

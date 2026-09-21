@@ -138,10 +138,12 @@ async fn run_one(server_id: String, command: String, opts: RunOptions, cancel: s
         Ok(c) => c,
         Err(e) => return skipped(&server_id, &name, e),
     };
-    if chain.first().and_then(|s| s.get("connection")).and_then(|v| v.as_str())
-        == Some("serial")
-    {
-        return skipped(&server_id, &name, "COM-порт: выполнение команд не поддерживается".into());
+    if chain.first().and_then(|s| s.get("connection")).and_then(|v| v.as_str()) == Some("serial") {
+        return skipped(
+            &server_id,
+            &name,
+            "COM-порт: выполнение команд не поддерживается".into(),
+        );
     }
     if let Some(why) = skip_reason(&chain) {
         return skipped(&server_id, &name, why);
@@ -301,7 +303,10 @@ mod tests {
         assert_eq!(RunOptions::new(Some(0), Some(0)).concurrency, 1);
         assert_eq!(RunOptions::new(Some(0), Some(0)).timeout.as_secs(), 1);
         assert_eq!(RunOptions::new(Some(1000), Some(99_999)).concurrency, MAX_CONCURRENCY);
-        assert_eq!(RunOptions::new(Some(1000), Some(99_999)).timeout.as_secs(), MAX_TIMEOUT_SECS);
+        assert_eq!(
+            RunOptions::new(Some(1000), Some(99_999)).timeout.as_secs(),
+            MAX_TIMEOUT_SECS
+        );
     }
 
     #[test]

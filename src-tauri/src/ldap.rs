@@ -79,7 +79,11 @@ pub async fn search(p: Params) -> Result<Value, String> {
     let base = p.base.as_deref().unwrap_or("").trim().to_string();
     let filter = {
         let f = p.filter.as_deref().unwrap_or("").trim();
-        if f.is_empty() { "(objectClass=*)".to_string() } else { f.to_string() }
+        if f.is_empty() {
+            "(objectClass=*)".to_string()
+        } else {
+            f.to_string()
+        }
     };
 
     let started = std::time::Instant::now();
@@ -89,7 +93,10 @@ pub async fn search(p: Params) -> Result<Value, String> {
     // Соединение - отдельная задача, качающая байты. Без неё запросы не поедут.
     ldap3::drive!(conn);
 
-    match (p.bind_dn.as_deref().filter(|s| !s.trim().is_empty()), p.password.as_deref()) {
+    match (
+        p.bind_dn.as_deref().filter(|s| !s.trim().is_empty()),
+        p.password.as_deref(),
+    ) {
         (Some(dn), pass) => {
             ldap.simple_bind(dn, pass.unwrap_or(""))
                 .await

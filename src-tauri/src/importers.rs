@@ -173,7 +173,11 @@ pub fn parse_mobaxterm_ssh_bookmark(name: &str, val: &str, _group: &str) -> Opti
     let port = parts[2].trim().parse::<u16>().unwrap_or(22);
     let user = parts[3].trim();
     let username = if user.is_empty() { "root" } else { user }.to_string();
-    let display = if name.trim().is_empty() { host.to_string() } else { name.trim().to_string() };
+    let display = if name.trim().is_empty() {
+        host.to_string()
+    } else {
+        name.trim().to_string()
+    };
     Some((display, host.to_string(), port, username))
 }
 
@@ -183,11 +187,7 @@ pub fn import_mobaxterm_text(txt: &str, default_group: &str) -> usize {
     for raw in txt.lines() {
         let line = raw.trim();
         if line.starts_with("SubRep=") {
-            group = line
-                .strip_prefix("SubRep=")
-                .unwrap_or(default_group)
-                .trim()
-                .to_string();
+            group = line.strip_prefix("SubRep=").unwrap_or(default_group).trim().to_string();
             if group.is_empty() {
                 group = default_group.to_string();
             }
@@ -196,8 +196,7 @@ pub fn import_mobaxterm_text(txt: &str, default_group: &str) -> usize {
         let Some((name, val)) = line.split_once('=') else {
             continue;
         };
-        let Some((display, host, port, username)) =
-            parse_mobaxterm_ssh_bookmark(name.trim(), val.trim(), &group)
+        let Some((display, host, port, username)) = parse_mobaxterm_ssh_bookmark(name.trim(), val.trim(), &group)
         else {
             continue;
         };
@@ -255,7 +254,10 @@ fn mobaxterm_config_paths() -> Vec<PathBuf> {
 }
 
 /// XShell `.xsh`: секции `[CONNECTION]` и `[CONNECTION:AUTHENTICATION]`.
-pub fn parse_xshell_session(content: &str, fallback_name: &str) -> Option<(String, String, u16, String, Option<String>)> {
+pub fn parse_xshell_session(
+    content: &str,
+    fallback_name: &str,
+) -> Option<(String, String, u16, String, Option<String>)> {
     let mut section = String::new();
     let mut host = None;
     let mut port = 22u16;
@@ -282,9 +284,7 @@ pub fn parse_xshell_session(content: &str, fallback_name: &str) -> Option<(Strin
             "Port" if section.contains("CONNECTION") => port = val.parse().unwrap_or(22),
             "Protocol" if section.contains("CONNECTION") => protocol = Some(val.to_ascii_uppercase()),
             "Method" if section.contains("AUTHENTICATION") => auth_method = Some(val.to_string()),
-            "UserName" if section.contains("AUTHENTICATION") || username.is_none() => {
-                username = Some(val.to_string())
-            }
+            "UserName" if section.contains("AUTHENTICATION") || username.is_none() => username = Some(val.to_string()),
             "UserKey" | "PublicKeyPath" if user_key.is_none() => user_key = Some(val.to_string()),
             _ => {}
         }
@@ -315,16 +315,7 @@ pub fn import_xshell_file(content: &str, fallback_name: &str, group: &str) -> bo
         return false;
     };
     let auth = if key_path.is_some() { "key" } else { "password" };
-    save_imported_server(
-        &name,
-        &host,
-        port,
-        &username,
-        group,
-        auth,
-        key_path.as_deref(),
-    )
-    .is_ok()
+    save_imported_server(&name, &host, port, &username, group, auth, key_path.as_deref()).is_ok()
 }
 
 #[cfg(windows)]

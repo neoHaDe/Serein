@@ -291,7 +291,10 @@ fn поиск_находит_запись_в_ветке() {
         let dn = entries[0]["dn"].as_str().unwrap_or("");
         assert!(dn.contains("uid=demo_user"), "нашли не то: {dn}");
         // Атрибуты обязаны приехать: без них ответ «запись есть» бесполезен.
-        assert!(!entries[0]["attrs"].as_array().unwrap().is_empty(), "запись без атрибутов");
+        assert!(
+            !entries[0]["attrs"].as_array().unwrap().is_empty(),
+            "запись без атрибутов"
+        );
     });
 }
 
@@ -311,7 +314,10 @@ fn неверный_пароль_каталога_отвергается_с_те
         })
         .await
         .unwrap_err();
-        assert!(err.contains("не пустил") || err.to_lowercase().contains("credentials"), "{err}");
+        assert!(
+            err.contains("не пустил") || err.to_lowercase().contains("credentials"),
+            "{err}"
+        );
     });
 }
 

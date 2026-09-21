@@ -17,14 +17,11 @@ fn agent_err(e: impl std::fmt::Display) -> String {
     format!("{} ({e})", agent_unavailable_hint())
 }
 
-pub async fn connect_agent_stream(
-) -> Result<impl AsyncRead + AsyncWrite + Unpin, String> {
+pub async fn connect_agent_stream() -> Result<impl AsyncRead + AsyncWrite + Unpin, String> {
     #[cfg(unix)]
     {
         let path = std::env::var("SSH_AUTH_SOCK").map_err(|_| agent_unavailable_hint().to_string())?;
-        tokio::net::UnixStream::connect(path)
-            .await
-            .map_err(|e| agent_err(e))
+        tokio::net::UnixStream::connect(path).await.map_err(|e| agent_err(e))
     }
     #[cfg(windows)]
     {
@@ -34,14 +31,11 @@ pub async fn connect_agent_stream(
                 return Ok(stream);
             }
         }
-        ClientOptions::new()
-            .open(WIN_PIPE)
-            .map_err(|e| agent_err(e))
+        ClientOptions::new().open(WIN_PIPE).map_err(|e| agent_err(e))
     }
 }
 
-pub async fn connect_agent(
-) -> Result<AgentClient<impl AsyncRead + AsyncWrite + Unpin>, String> {
+pub async fn connect_agent() -> Result<AgentClient<impl AsyncRead + AsyncWrite + Unpin>, String> {
     Ok(AgentClient::connect(connect_agent_stream().await?))
 }
 
@@ -201,10 +195,7 @@ pub async fn authenticate_with_agent(
         // Агент больше не передаётся по значению туда-обратно: russh берёт его как
         // подписывающего по изменяемой ссылке.
         let public = key.public_key().into_owned();
-        match handle
-            .authenticate_publickey_with(user, public, hash, &mut agent)
-            .await
-        {
+        match handle.authenticate_publickey_with(user, public, hash, &mut agent).await {
             Ok(r) if r.success() => return Ok(true),
             Ok(_) => continue,
             Err(e) => return Err(format!("Ошибка SSH-агента: {e}")),
@@ -258,7 +249,7 @@ mod tests {
     fn refusal_and_garbage_are_rejected() {
         assert!(parse_identities(&[]).is_err());
         assert!(parse_identities(&[5]).is_err()); // SSH_AGENT_FAILURE
-        // Заявлено 2 ключа, тело содержит один - не паникуем, а сообщаем об обрезке.
+                                                  // Заявлено 2 ключа, тело содержит один - не паникуем, а сообщаем об обрезке.
         let mut truncated = answer(&[("ssh-ed25519", "hade@pc")]);
         truncated[1..5].copy_from_slice(&2u32.to_be_bytes());
         assert!(parse_identities(&truncated).is_err());

@@ -140,11 +140,7 @@ fn proxy_commands(servers: &[Value]) -> Vec<ProxyCommandWarning> {
             Some(ProxyCommandWarning {
                 server_index,
                 server_id: s.get("id").and_then(|v| v.as_str()).map(str::to_owned),
-                name: s
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("без имени")
-                    .to_owned(),
+                name: s.get("name").and_then(|v| v.as_str()).unwrap_or("без имени").to_owned(),
                 command: command.to_owned(),
             })
         })
@@ -251,11 +247,7 @@ fn remap_key_path(mut s: Value) -> (Value, bool) {
     let Some(o) = s.as_object_mut() else {
         return (s, false);
     };
-    let Some(raw) = o
-        .get("privateKeyPath")
-        .and_then(|v| v.as_str())
-        .map(|x| x.to_string())
-    else {
+    let Some(raw) = o.get("privateKeyPath").and_then(|v| v.as_str()).map(|x| x.to_string()) else {
         return (s, false);
     };
     if raw.trim().is_empty() {

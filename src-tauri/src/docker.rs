@@ -37,11 +37,7 @@ pub fn parse_list(code: i32, stdout: &str, stderr: &str) -> Value {
             continue;
         }
         if let Ok(p) = serde_json::from_str::<Value>(s) {
-            let status = p
-                .get("Status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let status = p.get("Status").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let id = p.get("ID").and_then(|v| v.as_str()).unwrap_or("");
             let state = p
                 .get("State")
@@ -120,13 +116,25 @@ pub const STATS_ALL_CMD: &str = "docker stats --no-stream --format \"{{json .}}\
 pub fn parse_stats_all(code: i32, stdout: &str, stderr: &str) -> Value {
     if code != 0 {
         let err = stderr.trim();
-        let msg = if err.is_empty() { "docker stats завершился с ошибкой" } else { err };
+        let msg = if err.is_empty() {
+            "docker stats завершился с ошибкой"
+        } else {
+            err
+        };
         return json!({ "ok": false, "error": msg });
     }
     let mut stats = serde_json::Map::new();
     for line in stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        let Ok(p) = serde_json::from_str::<Value>(line) else { continue };
-        let id: String = p.get("ID").and_then(|v| v.as_str()).unwrap_or("").chars().take(12).collect();
+        let Ok(p) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let id: String = p
+            .get("ID")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .chars()
+            .take(12)
+            .collect();
         if id.is_empty() {
             continue;
         }
@@ -143,10 +151,7 @@ pub fn parse_stats_all(code: i32, stdout: &str, stderr: &str) -> Value {
 }
 
 pub fn stats_cmd(id: &str) -> String {
-    format!(
-        "docker stats --no-stream --format \"{{{{json .}}}}\" {}",
-        safe_id(id)
-    )
+    format!("docker stats --no-stream --format \"{{{{json .}}}}\" {}", safe_id(id))
 }
 
 pub fn logs_cmd(id: &str) -> String {
@@ -155,19 +160,12 @@ pub fn logs_cmd(id: &str) -> String {
 
 fn safe_container_path(p: &str) -> Option<String> {
     let p = p.trim();
-    if p.is_empty()
-        || p.contains("..")
-        || p.contains('\n')
-        || p.contains(';')
-        || !p.starts_with('/')
-    {
+    if p.is_empty() || p.contains("..") || p.contains('\n') || p.contains(';') || !p.starts_with('/') {
         return None;
     }
     let clean: String = p
         .chars()
-        .filter(|c| {
-            c.is_alphanumeric() || *c == '/' || *c == '.' || *c == '_' || *c == '-' || *c == ' '
-        })
+        .filter(|c| c.is_alphanumeric() || *c == '/' || *c == '.' || *c == '_' || *c == '-' || *c == ' ')
         .collect();
     if clean.is_empty() {
         None
@@ -222,12 +220,8 @@ pub fn parse_files(code: i32, stdout: &str, stderr: &str, path: &str) -> Value {
     entries.sort_by(|a, b| {
         let ka = a["kind"].as_str().unwrap_or("");
         let kb = b["kind"].as_str().unwrap_or("");
-        ka.cmp(kb).then_with(|| {
-            a["name"]
-                .as_str()
-                .unwrap_or("")
-                .cmp(b["name"].as_str().unwrap_or(""))
-        })
+        ka.cmp(kb)
+            .then_with(|| a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or("")))
     });
     json!({ "ok": true, "path": path, "entries": entries })
 }
@@ -282,9 +276,16 @@ operable program or batch file.",
         let v = parse_stats_all(0, out, "");
         assert_eq!(v["ok"], true);
         assert_eq!(v["stats"]["abc123def456"]["cpuPct"], "13.45%");
-        assert_eq!(v["stats"]["0123456789ab"]["memUsage"], "1.2GiB / 2GiB", "ключ - первые 12 знаков");
+        assert_eq!(
+            v["stats"]["0123456789ab"]["memUsage"], "1.2GiB / 2GiB",
+            "ключ - первые 12 знаков"
+        );
         assert_eq!(v["stats"].as_object().unwrap().len(), 2, "мусорная строка пропущена");
-        assert_eq!(parse_stats_all(0, "", "")["stats"], json!({}), "нет работающих - пусто, не ошибка");
+        assert_eq!(
+            parse_stats_all(0, "", "")["stats"],
+            json!({}),
+            "нет работающих - пусто, не ошибка"
+        );
         assert_eq!(parse_stats_all(1, "", "boom")["error"], "boom");
     }
 

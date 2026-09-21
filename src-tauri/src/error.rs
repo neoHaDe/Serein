@@ -166,6 +166,9 @@ impl From<String> for OpenError {
 
 impl From<&str> for OpenError {
     fn from(message: &str) -> Self {
-        Self { message: message.to_string(), phase: None }
+        Self {
+            message: message.to_string(),
+            phase: None,
+        }
     }
 }

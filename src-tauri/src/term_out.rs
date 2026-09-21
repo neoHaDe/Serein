@@ -347,7 +347,11 @@ pub fn log_start(id: &str, title: &str) -> Result<String, String> {
     let path_str = path.to_string_lossy().to_string();
     logs().lock().map_err(|_| "Реестр логов занят")?.insert(
         id.to_string(),
-        LogSink { file, path: path_str.clone(), esc: Esc::None },
+        LogSink {
+            file,
+            path: path_str.clone(),
+            esc: Esc::None,
+        },
     );
     Ok(path_str)
 }

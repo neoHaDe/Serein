@@ -162,14 +162,24 @@ pub async fn name_conflicts(
     }
 }
 
-pub async fn download_file(fs: &Arc<Mutex<SessionFs>>, handle: &SharedHandle, remote: &str, local: &str) -> Result<(), String> {
+pub async fn download_file(
+    fs: &Arc<Mutex<SessionFs>>,
+    handle: &SharedHandle,
+    remote: &str,
+    local: &str,
+) -> Result<(), String> {
     match backend(fs, handle).await {
         Backend::Sftp => sftp::download_file(handle, remote, local).await,
         Backend::Scp => scp::download_file(handle, remote, local).await,
     }
 }
 
-pub async fn put_file(fs: &Arc<Mutex<SessionFs>>, handle: &SharedHandle, local: &str, remote: &str) -> Result<(), String> {
+pub async fn put_file(
+    fs: &Arc<Mutex<SessionFs>>,
+    handle: &SharedHandle,
+    local: &str,
+    remote: &str,
+) -> Result<(), String> {
     match backend(fs, handle).await {
         Backend::Sftp => sftp::put_file(handle, local, remote).await,
         Backend::Scp => scp::put_file(handle, local, remote).await,
@@ -188,7 +198,9 @@ pub async fn download_file_while(
         Backend::Sftp => sftp::download_file_while(handle, remote, local, Some(alive)).await,
         Backend::Scp => {
             let live = || alive.load(std::sync::atomic::Ordering::Relaxed);
-            scp::download_file_ctl(handle, remote, local, &live, &mut |_: u64, _: u64| {}).await.map(|_| ())
+            scp::download_file_ctl(handle, remote, local, &live, &mut |_: u64, _: u64| {})
+                .await
+                .map(|_| ())
         }
     }
 }
@@ -205,7 +217,9 @@ pub async fn put_file_while(
         Backend::Sftp => sftp::put_file_while(handle, local, remote, Some(alive)).await,
         Backend::Scp => {
             let live = || alive.load(std::sync::atomic::Ordering::Relaxed);
-            scp::put_file_ctl(handle, local, remote, &live, &mut |_: u64, _: u64| {}).await.map(|_| ())
+            scp::put_file_ctl(handle, local, remote, &live, &mut |_: u64, _: u64| {})
+                .await
+                .map(|_| ())
         }
     }
 }

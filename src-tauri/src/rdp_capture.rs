@@ -68,12 +68,19 @@ pub fn decide(vk: u32, scan: u32, flags: u32, ctrl_alt: bool) -> Decision {
         return Decision::Pass;
     }
     let code = scan as u16;
-    Decision::Send(if flags & LLKHF_EXTENDED != 0 { 0xE000 | code } else { code })
+    Decision::Send(if flags & LLKHF_EXTENDED != 0 {
+        0xE000 | code
+    } else {
+        code
+    })
 }
 
 /// Модификатор: его авто-повтор не отправляем, см. `isModifier` в `rdpKeys.ts`.
 fn is_modifier(code: u16) -> bool {
-    matches!(code, 0x1d | 0xE01D | 0x2a | 0x36 | 0x38 | 0xE038 | 0xE05B | 0xE05C | 0x3a | 0x45 | 0x46)
+    matches!(
+        code,
+        0x1d | 0xE01D | 0x2a | 0x36 | 0x38 | 0xE038 | 0xE05B | 0xE05C | 0x3a | 0x45 | 0x46
+    )
 }
 
 /// Что нажато на удалённом столе через хук.
@@ -219,8 +226,16 @@ mod imp {
             .name("rdp-hook".into())
             .spawn(move || run_hook(ready_tx))
             .map_err(|e| e.to_string())?;
-        let thread = ready_rx.recv().map_err(|_| "поток перехвата не запустился".to_owned())??;
-        *lock() = Some(Active { id, hwnd, thread, tx, keys: Keys::default() });
+        let thread = ready_rx
+            .recv()
+            .map_err(|_| "поток перехвата не запустился".to_owned())??;
+        *lock() = Some(Active {
+            id,
+            hwnd,
+            thread,
+            tx,
+            keys: Keys::default(),
+        });
         Ok(())
     }
 
@@ -293,13 +308,33 @@ mod tests {
         assert_eq!(decide(0x41, 0x1e, 0, false), Decision::Send(0x1e), "A");
         assert_eq!(decide(0x5b, 0x5b, LLKHF_EXTENDED, false), Decision::Send(0xE05B), "Win");
         assert_eq!(decide(0x09, 0x0f, 0, false), Decision::Send(0x0f), "Tab");
-        assert_eq!(decide(0xA5, 0x38, LLKHF_EXTENDED, false), Decision::Send(0xE038), "правый Alt");
-        assert_eq!(decide(0x90, 0x45, LLKHF_EXTENDED, false), Decision::Send(0x45), "NumLock");
-        assert_eq!(decide(0xA1, 0x36, LLKHF_EXTENDED, false), Decision::Send(0x36), "правый Shift");
+        assert_eq!(
+            decide(0xA5, 0x38, LLKHF_EXTENDED, false),
+            Decision::Send(0xE038),
+            "правый Alt"
+        );
+        assert_eq!(
+            decide(0x90, 0x45, LLKHF_EXTENDED, false),
+            Decision::Send(0x45),
+            "NumLock"
+        );
+        assert_eq!(
+            decide(0xA1, 0x36, LLKHF_EXTENDED, false),
+            Decision::Send(0x36),
+            "правый Shift"
+        );
         assert_eq!(decide(0xA2, 0x21D, 0, false), Decision::Drop, "фальшивый Ctrl от AltGr");
-        assert_eq!(decide(0x41, 0x1e, LLKHF_INJECTED, false), Decision::Pass, "синтетический ввод");
+        assert_eq!(
+            decide(0x41, 0x1e, LLKHF_INJECTED, false),
+            Decision::Pass,
+            "синтетический ввод"
+        );
         assert_eq!(decide(0x13, 0x45, 0, false), Decision::Pass, "Pause без Ctrl+Alt");
-        assert_eq!(decide(0x24, 0x47, LLKHF_EXTENDED, false), Decision::Send(0xE047), "Home");
+        assert_eq!(
+            decide(0x24, 0x47, LLKHF_EXTENDED, false),
+            Decision::Send(0xE047),
+            "Home"
+        );
         assert_eq!(decide(0x24, 0x47, LLKHF_EXTENDED, true), Decision::Release);
     }
 
@@ -309,10 +344,18 @@ mod tests {
         assert_eq!(k.on_event(0xA4, 0x38, 0), (true, Some(Out::Key(0x38, true))));
         assert_eq!(k.on_event(0xA4, 0x38, 0), (true, None), "повтор Alt не отправляется");
         assert_eq!(k.on_event(0x09, 0x0f, 0), (true, Some(Out::Key(0x0f, true))));
-        assert_eq!(k.on_event(0x09, 0x0f, 0), (true, Some(Out::Key(0x0f, true))), "повтор Tab - да");
+        assert_eq!(
+            k.on_event(0x09, 0x0f, 0),
+            (true, Some(Out::Key(0x0f, true))),
+            "повтор Tab - да"
+        );
         assert_eq!(k.on_event(0x09, 0x0f, LLKHF_UP), (true, Some(Out::Key(0x0f, false))));
         assert_eq!(k.held(), vec![0x38], "Alt ещё нажат - его отпустит снятие перехвата");
-        assert_eq!(k.on_event(0x41, 0x1e, LLKHF_UP), (false, None), "нажатую до перехвата отпускает окно");
+        assert_eq!(
+            k.on_event(0x41, 0x1e, LLKHF_UP),
+            (false, None),
+            "нажатую до перехвата отпускает окно"
+        );
     }
 
     #[test]

@@ -9,10 +9,10 @@
 
 use russh::cipher;
 use russh::compression;
-use russh::mac;
 use russh::kex;
-use russh::Preferred;
 use russh::keys::Algorithm;
+use russh::mac;
+use russh::Preferred;
 use serde_json::Value;
 use std::borrow::Cow;
 
@@ -49,11 +49,7 @@ fn flag(server: &Value, name: &str) -> bool {
 /// Просьба сжимать = поставить zlib вперёд, оставив `none` запасным вариантом: сервер
 /// без zlib так и подключится без сжатия.
 pub fn compression_first() -> Cow<'static, [compression::Name]> {
-    Cow::Owned(vec![
-        compression::ZLIB,
-        compression::ZLIB_LEGACY,
-        compression::NONE,
-    ])
+    Cow::Owned(vec![compression::ZLIB, compression::ZLIB_LEGACY, compression::NONE])
 }
 
 /// Собирает набор алгоритмов под конкретный сервер.
@@ -87,8 +83,7 @@ pub fn preferred_for(server: &Value) -> Preferred {
         let mut v = base.key.to_vec();
         // Без проверки на дубль набор по умолчанию и legacy-список пересекаются,
         // и сервер получил бы `ssh-rsa` дважды.
-        let extra: Vec<Algorithm> =
-            LEGACY_HOST_KEY.iter().filter(|a| !v.contains(a)).cloned().collect();
+        let extra: Vec<Algorithm> = LEGACY_HOST_KEY.iter().filter(|a| !v.contains(a)).cloned().collect();
         v.extend(extra);
         Cow::Owned(v)
     } else {
@@ -103,7 +98,13 @@ pub fn preferred_for(server: &Value) -> Preferred {
 
     let macs = if legacy {
         let mut v = base.mac.to_vec();
-        v.extend(LEGACY_MAC.iter().filter(|m| !v.contains(m)).copied().collect::<Vec<_>>());
+        v.extend(
+            LEGACY_MAC
+                .iter()
+                .filter(|m| !v.contains(m))
+                .copied()
+                .collect::<Vec<_>>(),
+        );
         Cow::Owned(v)
     } else {
         base.mac.clone()
@@ -171,7 +172,10 @@ mod tests {
         let old = kex.iter().position(|k| k == "diffie-hellman-group1-sha1").unwrap();
         assert!(modern < old, "сильный обмен ключами должен идти первым");
 
-        let strong = cipher.iter().position(|c| c == "chacha20-poly1305@openssh.com").unwrap();
+        let strong = cipher
+            .iter()
+            .position(|c| c == "chacha20-poly1305@openssh.com")
+            .unwrap();
         let weak = cipher.iter().position(|c| c == "3des-cbc").unwrap();
         assert!(strong < weak, "сильный шифр должен идти первым");
     }

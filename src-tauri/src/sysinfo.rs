@@ -215,18 +215,12 @@ mod tests {
         let v = parse(out);
         assert_eq!(v["cpu"], "AMD Ryzen 7 9800X3D 8-Core Processor");
         assert_eq!(v["cores"], 8);
-        assert_eq!(
-            v["threads"], 16,
-            "потоков больше ядер - показываем оба числа"
-        );
+        assert_eq!(v["threads"], 16, "потоков больше ядер - показываем оба числа");
         assert_eq!(v["mhz"], 4700);
         assert_eq!(v["gpus"][0]["name"], "NVIDIA GeForce RTX 5080");
         assert_eq!(v["gpus"][0]["driver"], "32.0.16.1088");
         assert_eq!(v["memType"], "DDR5");
-        assert!(
-            v.get("virt").is_none(),
-            "«none» - это железо, писать о нём нечего"
-        );
+        assert!(v.get("virt").is_none(), "«none» - это железо, писать о нём нечего");
     }
 
     #[test]
@@ -269,10 +263,7 @@ mod tests {
         let v = parse("MEM:3200 MT/s|DDR4\nMEMWHY:нужны права root\n");
         assert_eq!(v["memSpeed"], "3200 MT/s");
         assert_eq!(v["memType"], "DDR4");
-        assert!(
-            v.get("memWhy").is_none(),
-            "причина рядом с ответом сбивает с толку"
-        );
+        assert!(v.get("memWhy").is_none(), "причина рядом с ответом сбивает с толку");
     }
 
     #[test]
@@ -308,10 +299,7 @@ mod tests {
     #[test]
     fn готовое_имя_от_lspci_не_трогаем() {
         let v = parse("GPU:Advanced Micro Devices, Inc. [AMD/ATI] Cezanne|amdgpu\n");
-        assert_eq!(
-            v["gpus"][0]["name"],
-            "Advanced Micro Devices, Inc. [AMD/ATI] Cezanne"
-        );
+        assert_eq!(v["gpus"][0]["name"], "Advanced Micro Devices, Inc. [AMD/ATI] Cezanne");
     }
 
     #[test]

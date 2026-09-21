@@ -16,22 +16,14 @@ pub struct Kdf {
 }
 
 /// Набор 2009 года: им зашифровано всё, что создано до 2026-08-30. Читаем, но не пишем.
-pub const KDF_LEGACY: Kdf = Kdf {
-    log_n: 14,
-    r: 8,
-    p: 1,
-};
+pub const KDF_LEGACY: Kdf = Kdf { log_n: 14, r: 8, p: 1 };
 
 /// Текущий набор - рекомендация OWASP для scrypt.
 ///
 /// N=2^17 это 128 МБ памяти на попытку против 16 МБ у прежнего: замер на рабочей машине
 /// дал 154 мс вместо 19 мс. Для разблокировки раз в сессию разница незаметна, а перебор
 /// украденного файла дорожает восьмикратно - а это единственное, ради чего KDF и нужен.
-pub const KDF_CURRENT: Kdf = Kdf {
-    log_n: 17,
-    r: 8,
-    p: 1,
-};
+pub const KDF_CURRENT: Kdf = Kdf { log_n: 17, r: 8, p: 1 };
 
 /// При чтении принимаем только наборы, которые когда-либо записывал Serein.
 ///
@@ -53,10 +45,8 @@ fn validate_kdf(k: Kdf) -> Result<(), String> {
 pub fn derive_key_with(password: &str, salt: &[u8], k: Kdf) -> Result<[u8; 32], String> {
     validate_kdf(k)?;
     let mut out = [0u8; 32];
-    let params = Params::new(k.log_n, k.r, k.p, 32)
-        .map_err(|_| "Недопустимые параметры scrypt".to_string())?;
-    scrypt(password.as_bytes(), salt, &params, &mut out)
-        .map_err(|_| "Не удалось вывести ключ (scrypt)".to_string())?;
+    let params = Params::new(k.log_n, k.r, k.p, 32).map_err(|_| "Недопустимые параметры scrypt".to_string())?;
+    scrypt(password.as_bytes(), salt, &params, &mut out).map_err(|_| "Не удалось вывести ключ (scrypt)".to_string())?;
     Ok(out)
 }
 
@@ -194,9 +184,7 @@ mod tests {
         let key = derive_key_with("pass", &salt, KDF_LEGACY).expect("scrypt в тесте");
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
         let iv = rand_bytes(12);
-        let ct = cipher
-            .encrypt(Nonce::from_slice(&iv), secret.as_bytes())
-            .unwrap();
+        let ct = cipher.encrypt(Nonce::from_slice(&iv), secret.as_bytes()).unwrap();
         let (body, tag) = ct.split_at(ct.len() - 16);
         let mut out = Vec::new();
         out.extend_from_slice(&salt);
@@ -217,10 +205,7 @@ mod tests {
         let buf = STANDARD.decode(&packed).unwrap();
         assert_eq!(&buf[0..4], V2_MAGIC, "нет метки формата");
         assert_eq!(buf[4], KDF_CURRENT.log_n, "записан не текущий log2(N)");
-        assert!(
-            KDF_CURRENT.log_n > KDF_LEGACY.log_n,
-            "новый набор должен быть строже"
-        );
+        assert!(KDF_CURRENT.log_n > KDF_LEGACY.log_n, "новый набор должен быть строже");
     }
 
     #[test]
@@ -279,21 +264,13 @@ mod tests {
         // роняет команду целиком и пользователь видит пустое окно без объяснения.
         let key = key("pw", &[3u8; 16]);
         for bad in ["", "не-base64!!", "AAAA", "***"] {
-            assert!(
-                aes_decrypt(bad, &key).is_err(),
-                "должно быть Err на {:?}",
-                bad
-            );
+            assert!(aes_decrypt(bad, &key).is_err(), "должно быть Err на {:?}", bad);
         }
     }
 
     #[test]
     fn untrusted_kdf_is_rejected_before_scrypt() {
-        let hostile = Kdf {
-            log_n: 22,
-            r: 8,
-            p: 1,
-        };
+        let hostile = Kdf { log_n: 22, r: 8, p: 1 };
         let err = derive_key_with("pw", &[0u8; 16], hostile).unwrap_err();
         assert!(err.contains("Неподдерживаемые параметры"));
 
@@ -315,9 +292,6 @@ mod tests {
     #[test]
     fn empty_plaintext_survives_round_trip() {
         let packed = encrypt_with_password("", "master").expect("шифрование");
-        assert_eq!(
-            decrypt_with_password(&packed, "master").expect("расшифровка"),
-            ""
-        );
+        assert_eq!(decrypt_with_password(&packed, "master").expect("расшифровка"), "");
     }
 }

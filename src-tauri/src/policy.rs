@@ -75,7 +75,9 @@ fn validate_pattern(p: &str) -> Result<(), String> {
         return Err("пустой адрес в «allowedHosts»".into());
     }
     if let Some((net, bits)) = t.split_once('/') {
-        let net: IpAddr = net.parse().map_err(|_| format!("«{t}»: подсеть должна начинаться с IP-адреса"))?;
+        let net: IpAddr = net
+            .parse()
+            .map_err(|_| format!("«{t}»: подсеть должна начинаться с IP-адреса"))?;
         let max = if net.is_ipv4() { 32 } else { 128 };
         match bits.parse::<u8>() {
             Ok(b) if b <= max => return Ok(()),
@@ -110,11 +112,15 @@ fn parse(text: &str) -> Result<Parsed, String> {
                 out.allowed_hosts = Some(hosts);
             }
             k if FLAGS.contains(&k) => {
-                let b = val.as_bool().ok_or_else(|| format!("«{k}» должен быть true или false"))?;
+                let b = val
+                    .as_bool()
+                    .ok_or_else(|| format!("«{k}» должен быть true или false"))?;
                 out.flags.push((k.to_owned(), b));
             }
             other => {
-                return Err(format!("неизвестный ключ «{other}» - опечатка в политике не должна молча ничего не запрещать"));
+                return Err(format!(
+                    "неизвестный ключ «{other}» - опечатка в политике не должна молча ничего не запрещать"
+                ));
             }
         }
     }
@@ -158,17 +164,29 @@ pub fn build(sources: &[Source]) -> Policy {
     }
     if !errors.is_empty() {
         // Наполовину применённая политика хуже неприменённой: неясно, что именно действует.
-        return Policy { error: Some(errors.join("; ")), ..Policy::default() };
+        return Policy {
+            error: Some(errors.join("; ")),
+            ..Policy::default()
+        };
     }
     p
 }
 
 /// Значения реестра, которые пишет шаблон ADMX, - в ту же форму JSON, что и файл.
-pub fn from_registry_values(dwords: &[(&str, u32)], strings: &[(&str, String)], multi: &[(&str, Vec<String>)]) -> Option<String> {
+pub fn from_registry_values(
+    dwords: &[(&str, u32)],
+    strings: &[(&str, String)],
+    multi: &[(&str, Vec<String>)],
+) -> Option<String> {
     let mut obj = Map::new();
     let mut settings = Map::new();
     let dword = |name: &str| dwords.iter().find(|(n, _)| *n == name).map(|(_, v)| *v);
-    let string = |name: &str| strings.iter().find(|(n, _)| *n == name).map(|(_, v)| v.trim().to_owned());
+    let string = |name: &str| {
+        strings
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, v)| v.trim().to_owned())
+    };
     if let Some(v) = dword("ActionLog") {
         settings.insert("actionLog".into(), json!(v != 0));
     }
@@ -176,7 +194,11 @@ pub fn from_registry_values(dwords: &[(&str, u32)], strings: &[(&str, String)], 
         settings.insert("offline".into(), json!(v != 0));
     }
     if let Some(host) = string("SyslogHost").filter(|h| !h.is_empty()) {
-        let protocol = if string("SyslogProtocol").as_deref() == Some("tcp") { "tcp" } else { "udp" };
+        let protocol = if string("SyslogProtocol").as_deref() == Some("tcp") {
+            "tcp"
+        } else {
+            "udp"
+        };
         settings.insert(
             "actionLogSyslog".into(),
             json!({ "enabled": true, "host": host, "port": dword("SyslogPort").unwrap_or(514), "protocol": protocol }),
@@ -214,7 +236,7 @@ fn file_path() -> Result<std::path::PathBuf, String> {
     {
         use windows::Win32::Foundation::HANDLE;
         use windows::Win32::System::Com::CoTaskMemFree;
-        use windows::Win32::UI::Shell::{SHGetKnownFolderPath, FOLDERID_ProgramData, KF_FLAG_DEFAULT};
+        use windows::Win32::UI::Shell::{FOLDERID_ProgramData, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
 
         // SAFETY: GUID и флаг - константы самой системы, токен нулевой (текущий
         // пользователь). Строку система выделяет своим аллокатором, поэтому её
@@ -275,7 +297,11 @@ fn grants_change(mask: u32, is_dir: bool) -> bool {
     const FILE_APPEND_DATA: u32 = 0x0004;
     const FILE_DELETE_CHILD: u32 = 0x0040;
     let common = DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_ALL;
-    let specific = if is_dir { FILE_DELETE_CHILD } else { FILE_WRITE_DATA | FILE_APPEND_DATA | GENERIC_WRITE };
+    let specific = if is_dir {
+        FILE_DELETE_CHILD
+    } else {
+        FILE_WRITE_DATA | FILE_APPEND_DATA | GENERIC_WRITE
+    };
     mask & (common | specific) != 0
 }
 
@@ -293,7 +319,9 @@ fn check_object(path: &Path, is_dir: bool) -> Result<(), String> {
     use windows::core::{HSTRING, PWSTR};
     use windows::Win32::Foundation::{LocalFree, ERROR_SUCCESS, HLOCAL};
     use windows::Win32::Security::Authorization::{ConvertSidToStringSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT};
-    use windows::Win32::Security::{GetAce, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID};
+    use windows::Win32::Security::{
+        GetAce, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+    };
 
     unsafe fn sid_string(sid: PSID) -> Result<String, String> {
         let mut s = PWSTR::null();
@@ -361,14 +389,21 @@ fn check_object(path: &Path, _is_dir: bool) -> Result<(), String> {
         return Err(format!("{}: владелец uid {}, а не root", path.display(), m.uid()));
     }
     if m.mode() & 0o022 != 0 {
-        return Err(format!("{}: права {:o} - писать может не только root", path.display(), m.mode() & 0o777));
+        return Err(format!(
+            "{}: права {:o} - писать может не только root",
+            path.display(),
+            m.mode() & 0o777
+        ));
     }
     Ok(())
 }
 
 #[cfg(not(any(windows, unix)))]
 fn check_object(path: &Path, _is_dir: bool) -> Result<(), String> {
-    Err(format!("{}: проверка прав на этой системе не поддерживается", path.display()))
+    Err(format!(
+        "{}: проверка прав на этой системе не поддерживается",
+        path.display()
+    ))
 }
 
 #[cfg(windows)]
@@ -392,7 +427,15 @@ fn reg_raw(name: &str, flags: windows::Win32::System::Registry::REG_ROUTINE_FLAG
             return Err(format!("{name}: не прочитано (код {})", r.0));
         }
         let mut buf = vec![0u16; (size as usize).div_ceil(2)];
-        let r = RegGetValueW(HKEY_LOCAL_MACHINE, &key, &value, flags, None, Some(buf.as_mut_ptr().cast()), Some(&mut size));
+        let r = RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            &key,
+            &value,
+            flags,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut size),
+        );
         if r != ERROR_SUCCESS {
             return Err(format!("{name}: не прочитано (код {})", r.0));
         }
@@ -413,14 +456,18 @@ fn reg_string(name: &str) -> Result<Option<String>, String> {
 #[cfg(windows)]
 fn reg_dword(name: &str) -> Result<Option<u32>, String> {
     use windows::Win32::System::Registry::RRF_RT_REG_DWORD;
-    Ok(reg_raw(name, RRF_RT_REG_DWORD)?.map(|buf| u32::from(buf.first().copied().unwrap_or(0)) | (u32::from(buf.get(1).copied().unwrap_or(0)) << 16)))
+    Ok(reg_raw(name, RRF_RT_REG_DWORD)?
+        .map(|buf| u32::from(buf.first().copied().unwrap_or(0)) | (u32::from(buf.get(1).copied().unwrap_or(0)) << 16)))
 }
 
 #[cfg(windows)]
 fn reg_multi(name: &str) -> Result<Option<Vec<String>>, String> {
     use windows::Win32::System::Registry::RRF_RT_REG_MULTI_SZ;
     Ok(reg_raw(name, RRF_RT_REG_MULTI_SZ)?.map(|buf| {
-        buf.split(|&c| c == 0).filter(|s| !s.is_empty()).map(String::from_utf16_lossy).collect()
+        buf.split(|&c| c == 0)
+            .filter(|s| !s.is_empty())
+            .map(String::from_utf16_lossy)
+            .collect()
     }))
 }
 
@@ -434,7 +481,16 @@ fn registry_json() -> Result<Option<String>, String> {
 #[cfg(windows)]
 fn registry_values() -> Result<Option<String>, String> {
     let mut dwords = Vec::new();
-    for name in ["ActionLog", "Offline", "SyslogPort", "ForbidLegacySshAlgorithms", "ForbidSavedPasswords", "RequireMasterPassword", "ForbidLocalTerminal", "ForbidSessionRecording"] {
+    for name in [
+        "ActionLog",
+        "Offline",
+        "SyslogPort",
+        "ForbidLegacySshAlgorithms",
+        "ForbidSavedPasswords",
+        "RequireMasterPassword",
+        "ForbidLocalTerminal",
+        "ForbidSessionRecording",
+    ] {
         if let Some(v) = reg_dword(name)? {
             dwords.push((name, v));
         }
@@ -472,7 +528,10 @@ fn load() -> Policy {
     build(&[
         (name, text),
         ("HKLM\\SOFTWARE\\Policies\\Serein\\Policy".to_owned(), registry_json()),
-        ("HKLM\\SOFTWARE\\Policies\\Serein (групповые политики)".to_owned(), registry_values()),
+        (
+            "HKLM\\SOFTWARE\\Policies\\Serein (групповые политики)".to_owned(),
+            registry_values(),
+        ),
     ])
 }
 
@@ -520,7 +579,12 @@ fn in_subnet(net: IpAddr, bits: u8, addr: IpAddr) -> bool {
 
 fn pattern_matches(pattern: &str, host: &str) -> bool {
     let p = pattern.trim().to_ascii_lowercase();
-    let h = host.trim().trim_start_matches('[').trim_end_matches(']').trim_end_matches('.').to_ascii_lowercase();
+    let h = host
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
     if p == "*" {
         return true;
     }
@@ -549,7 +613,11 @@ pub fn check_host_with(p: &Policy, host: &str) -> Result<(), String> {
     match &p.allowed_hosts {
         Some(list) if !host_allowed(list, host) => Err(format!(
             "подключение к «{host}» запрещено политикой администратора: разрешены только {}",
-            if list.is_empty() { "никакие адреса".to_owned() } else { list.join(", ") }
+            if list.is_empty() {
+                "никакие адреса".to_owned()
+            } else {
+                list.join(", ")
+            }
         )),
         _ => Ok(()),
     }
@@ -631,7 +699,10 @@ mod tests {
         assert!(check_host_with(&p, "db.corp.local").is_ok());
         let err = check_host_with(&p, "8.8.8.8").unwrap_err();
         assert!(err.contains("запрещено политикой"), "{err}");
-        assert!(check_host_with(&p, "corp.local.evil.com").is_err(), "подстрока домена - не домен");
+        assert!(
+            check_host_with(&p, "corp.local.evil.com").is_err(),
+            "подстрока домена - не домен"
+        );
     }
 
     #[test]
@@ -657,14 +728,23 @@ mod tests {
     #[test]
     fn политика_из_файла_и_реестра_реестр_перекрывает() {
         let p = build(&[
-            src("file", r#"{ "settings": { "actionLog": true, "offline": false }, "forbidLegacySshAlgorithms": true, "allowedHosts": ["a.local"] }"#),
-            src("reg", r#"{ "settings": { "offline": true }, "forbidLocalTerminal": true }"#),
+            src(
+                "file",
+                r#"{ "settings": { "actionLog": true, "offline": false }, "forbidLegacySshAlgorithms": true, "allowedHosts": ["a.local"] }"#,
+            ),
+            src(
+                "reg",
+                r#"{ "settings": { "offline": true }, "forbidLocalTerminal": true }"#,
+            ),
             ("absent".to_owned(), Ok(None)),
         ]);
         assert_eq!(p.error, None);
         assert_eq!(p.settings.get("offline"), Some(&json!(true)), "реестр перекрыл файл");
         assert_eq!(p.settings.get("actionLog"), Some(&json!(true)));
-        assert!(p.forbid_legacy_algorithms, "реестр не трогал этот ключ - остаётся из файла");
+        assert!(
+            p.forbid_legacy_algorithms,
+            "реестр не трогал этот ключ - остаётся из файла"
+        );
         assert!(p.forbid_local_terminal);
         assert_eq!(p.allowed_hosts, Some(vec!["a.local".to_owned()]));
         assert_eq!(p.sources, vec!["file", "reg"]);
@@ -672,16 +752,41 @@ mod tests {
 
     #[test]
     fn непонятная_или_недоверенная_политика_не_применяется_наполовину() {
-        let p = build(&[src("file", r#"{ "settings": { "offline": true } }"#), src("reg", "{ oops")]);
+        let p = build(&[
+            src("file", r#"{ "settings": { "offline": true } }"#),
+            src("reg", "{ oops"),
+        ]);
         assert!(p.settings.is_empty() && !p.forbid_legacy_algorithms);
-        assert!(p.error.as_deref().is_some_and(|e| e.starts_with("reg: не JSON")), "{:?}", p.error);
+        assert!(
+            p.error.as_deref().is_some_and(|e| e.starts_with("reg: не JSON")),
+            "{:?}",
+            p.error
+        );
         let typo = build(&[src("file", r#"{ "forbidLegacySshAlgoritms": true }"#)]);
-        assert!(typo.error.unwrap().contains("неизвестный ключ"), "опечатка не проходит молча");
-        assert!(build(&[src("f", r#"{ "forbidSavedPasswords": "yes" }"#)]).error.is_some());
-        assert!(build(&[src("f", r#"{ "allowedHosts": ["10.0.0.0/33"] }"#)]).error.is_some(), "маска больше 32");
-        assert!(build(&[src("f", r#"{ "allowedHosts": ["db*.local"] }"#)]).error.is_some(), "звёздочка посередине");
+        assert!(
+            typo.error.unwrap().contains("неизвестный ключ"),
+            "опечатка не проходит молча"
+        );
+        assert!(build(&[src("f", r#"{ "forbidSavedPasswords": "yes" }"#)])
+            .error
+            .is_some());
+        assert!(
+            build(&[src("f", r#"{ "allowedHosts": ["10.0.0.0/33"] }"#)])
+                .error
+                .is_some(),
+            "маска больше 32"
+        );
+        assert!(
+            build(&[src("f", r#"{ "allowedHosts": ["db*.local"] }"#)])
+                .error
+                .is_some(),
+            "звёздочка посередине"
+        );
         let unsafe_file = build(&[("f".to_owned(), Err("не применён - владелец не администратор".into()))]);
-        assert_eq!(unsafe_file.error.as_deref(), Some("f: не применён - владелец не администратор"));
+        assert_eq!(
+            unsafe_file.error.as_deref(),
+            Some("f: не применён - владелец не администратор")
+        );
     }
 
     #[test]
@@ -697,8 +802,19 @@ mod tests {
 
     #[test]
     fn разрешённые_адреса_имя_поддомены_подсети() {
-        let list: Vec<String> = ["prod.corp.local", "*.lab.local", "10.0.0.0/8", "fd00::/8", "192.168.1.5"].map(String::from).to_vec();
-        assert!(host_allowed(&list, "PROD.corp.local."), "регистр и точка на конце не важны");
+        let list: Vec<String> = [
+            "prod.corp.local",
+            "*.lab.local",
+            "10.0.0.0/8",
+            "fd00::/8",
+            "192.168.1.5",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert!(
+            host_allowed(&list, "PROD.corp.local."),
+            "регистр и точка на конце не важны"
+        );
         assert!(host_allowed(&list, "db1.lab.local"));
         assert!(!host_allowed(&list, "lab.local"), "*.домен - только поддомены");
         assert!(!host_allowed(&list, "evil-lab.local"));
@@ -711,8 +827,13 @@ mod tests {
 
         let p = build(&[src("f", r#"{ "allowedHosts": ["*.lab.local"] }"#)]);
         assert!(check_host_with(&p, "a.lab.local").is_ok());
-        assert!(check_host_with(&p, "8.8.8.8").unwrap_err().contains("запрещено политикой"));
-        assert!(check_host_with(&Policy::default(), "8.8.8.8").is_ok(), "без списка - без ограничения");
+        assert!(check_host_with(&p, "8.8.8.8")
+            .unwrap_err()
+            .contains("запрещено политикой"));
+        assert!(
+            check_host_with(&Policy::default(), "8.8.8.8").is_ok(),
+            "без списка - без ограничения"
+        );
         let none = build(&[src("f", r#"{ "allowedHosts": [] }"#)]);
         assert!(check_host_with(&none, "a").is_err(), "пустой список - никуда нельзя");
     }
@@ -720,7 +841,12 @@ mod tests {
     #[test]
     fn значения_групповых_политик_переводятся_в_политику() {
         let json = from_registry_values(
-            &[("ActionLog", 1), ("Offline", 0), ("SyslogPort", 6514), ("ForbidSavedPasswords", 1)],
+            &[
+                ("ActionLog", 1),
+                ("Offline", 0),
+                ("SyslogPort", 6514),
+                ("ForbidSavedPasswords", 1),
+            ],
             &[("SyslogHost", " siem.corp ".into()), ("SyslogProtocol", "tcp".into())],
             &[("AllowedHosts", vec!["*.corp".into(), "".into()])],
         )
@@ -729,10 +855,17 @@ mod tests {
         assert_eq!(p.error, None);
         assert_eq!(p.settings.get("actionLog"), Some(&json!(true)));
         assert_eq!(p.settings.get("offline"), Some(&json!(false)));
-        assert_eq!(p.settings.get("actionLogSyslog"), Some(&json!({ "enabled": true, "host": "siem.corp", "port": 6514, "protocol": "tcp" })));
+        assert_eq!(
+            p.settings.get("actionLogSyslog"),
+            Some(&json!({ "enabled": true, "host": "siem.corp", "port": 6514, "protocol": "tcp" }))
+        );
         assert!(p.forbid_saved_passwords && !p.require_master_password);
         assert_eq!(p.allowed_hosts, Some(vec!["*.corp".to_owned()]));
-        assert_eq!(from_registry_values(&[], &[], &[]), None, "нет значений - нет источника");
+        assert_eq!(
+            from_registry_values(&[], &[], &[]),
+            None,
+            "нет значений - нет источника"
+        );
     }
 
     #[test]
@@ -741,7 +874,10 @@ mod tests {
         assert!(grants_change(0x0001_0000, false), "удаление файла");
         assert!(grants_change(0x0004_0000, true), "смена прав папки");
         assert!(grants_change(0x0040, true), "удаление файлов в папке");
-        assert!(!grants_change(0x0002 | 0x0004, true), "создать новый файл в папке - не подмена существующего");
+        assert!(
+            !grants_change(0x0002 | 0x0004, true),
+            "создать новый файл в папке - не подмена существующего"
+        );
         assert!(!grants_change(0x0012_0089, false), "чтение и исполнение");
         assert!(trusted_sid("S-1-5-32-544") && trusted_sid("S-1-5-18"));
         assert!(!trusted_sid("S-1-5-32-545"), "пользователи не доверены");

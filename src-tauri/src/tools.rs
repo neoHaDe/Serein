@@ -9,7 +9,10 @@
 //! набор утилит на живых машинах разный, и это не мелочь. На голом Debian нет `nc`, зато
 //! есть `bash` с его `/dev/tcp`; на Alpine ровно наоборот.
 
-use base64::{engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}, Engine};
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    Engine,
+};
 use native_tls::{TlsConnector, TlsStream};
 use serde_json::{json, Value};
 use sha1::Sha1;
@@ -110,12 +113,7 @@ pub fn parse_range(from: u16, to: u16) -> Result<(u16, u16), String> {
 /// Порты проверяются пачками, а не по очереди: тысяча последовательных попыток с таймаутом
 /// в секунду - это шестнадцать минут, и никто столько не ждёт. Ширина пачки выбрана так,
 /// чтобы не упереться в предел открытых сокетов на слабой машине.
-pub async fn port_scan(
-    host: String,
-    from: u16,
-    to: u16,
-    timeout_ms: Option<u64>,
-) -> Result<Value, String> {
+pub async fn port_scan(host: String, from: u16, to: u16, timeout_ms: Option<u64>) -> Result<Value, String> {
     let (host, _) = parse_host_port(&host, from)?;
     let (from, to) = parse_range(from, to)?;
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(1000).clamp(100, 10_000));
@@ -166,9 +164,31 @@ pub async fn trace(host: String, hops: Option<u8>) -> Result<Value, String> {
     let hops = hops.unwrap_or(15).clamp(1, 30);
 
     let (prog, args) = if cfg!(windows) {
-        ("tracert", vec!["-d".into(), "-h".into(), hops.to_string(), "-w".into(), "1000".into(), host.clone()])
+        (
+            "tracert",
+            vec![
+                "-d".into(),
+                "-h".into(),
+                hops.to_string(),
+                "-w".into(),
+                "1000".into(),
+                host.clone(),
+            ],
+        )
     } else {
-        ("traceroute", vec!["-n".into(), "-m".into(), hops.to_string(), "-w".into(), "1".into(), "-q".into(), "1".into(), host.clone()])
+        (
+            "traceroute",
+            vec![
+                "-n".into(),
+                "-m".into(),
+                hops.to_string(),
+                "-w".into(),
+                "1".into(),
+                "-q".into(),
+                "1".into(),
+                host.clone(),
+            ],
+        )
     };
 
     let out = tokio::process::Command::new(prog)
@@ -304,7 +324,12 @@ pub fn parse_url(input: &str) -> Result<Url, String> {
     }
     let (host, port) = parse_host_port(hostport, if secure { 443 } else { 80 })?;
     remote::check_host(&host)?;
-    Ok(Url { secure, host, port, path })
+    Ok(Url {
+        secure,
+        host,
+        port,
+        path,
+    })
 }
 
 /// Строка запроса HTTP/1.1.
@@ -369,11 +394,15 @@ pub fn dechunk(body: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut rest = body;
     loop {
-        let Some(eol) = rest.windows(2).position(|w| w == b"\r\n") else { break };
+        let Some(eol) = rest.windows(2).position(|w| w == b"\r\n") else {
+            break;
+        };
         let size_line = String::from_utf8_lossy(&rest[..eol]);
         // После размера может идти «;расширение» - оно нас не касается.
         let size_hex = size_line.split(';').next().unwrap_or("").trim();
-        let Ok(size) = usize::from_str_radix(size_hex, 16) else { break };
+        let Ok(size) = usize::from_str_radix(size_hex, 16) else {
+            break;
+        };
         rest = &rest[eol + 2..];
         if size == 0 || rest.len() < size {
             out.extend_from_slice(&rest[..size.min(rest.len())]);
@@ -463,10 +492,7 @@ async fn http_once(u: &Url, method: &str, timeout: Duration) -> Result<(Value, O
     };
 
     let preview: String = String::from_utf8_lossy(&body[..body.len().min(BODY_PREVIEW)]).to_string();
-    let head_json: Vec<Value> = headers
-        .iter()
-        .map(|(k, v)| json!({ "name": k, "value": v }))
-        .collect();
+    let head_json: Vec<Value> = headers.iter().map(|(k, v)| json!({ "name": k, "value": v })).collect();
 
     Ok((
         json!({
@@ -556,11 +582,7 @@ fn https_exchange(addr: &str, host: &str, req: &str) -> Result<Vec<u8>, String> 
 ///
 /// Переходы показываются цепочкой, а не прячутся: половина вопросов к службе - это
 /// «куда меня в итоге увело» и «на каком шаге сломалось».
-pub async fn http_probe(
-    url: String,
-    method: Option<String>,
-    max_redirects: Option<u8>,
-) -> Result<Value, String> {
+pub async fn http_probe(url: String, method: Option<String>, max_redirects: Option<u8>) -> Result<Value, String> {
     let method = method.unwrap_or_else(|| "GET".into()).to_uppercase();
     if !matches!(method.as_str(), "GET" | "HEAD") {
         return Err("Пока умеем только GET и HEAD".into());
@@ -602,7 +624,12 @@ pub fn resolve_redirect(from: &Url, location: &str) -> Result<Url, String> {
         let base = from.path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
         format!("{base}/{loc}")
     };
-    Ok(Url { secure: from.secure, host: from.host.clone(), port: from.port, path })
+    Ok(Url {
+        secure: from.secure,
+        host: from.host.clone(),
+        port: from.port,
+        path,
+    })
 }
 
 pub async fn tls_cert(host: String, port: Option<u16>) -> Result<Value, String> {
@@ -614,9 +641,7 @@ pub async fn tls_cert(host: String, port: Option<u16>) -> Result<Value, String> 
 }
 
 fn parse_ipv4(s: &str) -> Result<Ipv4Addr, String> {
-    s.trim()
-        .parse()
-        .map_err(|_| format!("Неверный IPv4: «{s}»"))
+    s.trim().parse().map_err(|_| format!("Неверный IPv4: «{s}»"))
 }
 
 fn mask_from_prefix(prefix: u8) -> Result<Ipv4Addr, String> {
@@ -661,16 +686,8 @@ fn subnet_from(ip: u32, prefix: u8) -> Result<Value, String> {
     } else {
         2u32.pow(32 - u32::from(prefix)) - 2
     };
-    let first = if prefix >= 31 {
-        network
-    } else {
-        network + 1
-    };
-    let last = if prefix >= 31 {
-        broadcast
-    } else {
-        broadcast - 1
-    };
+    let first = if prefix >= 31 { network } else { network + 1 };
+    let last = if prefix >= 31 { broadcast } else { broadcast - 1 };
     Ok(json!({
         "input": format!("{}/{}", Ipv4Addr::from(ip), prefix),
         "network": Ipv4Addr::from(network).to_string(),
@@ -1067,12 +1084,11 @@ pub mod remote {
                 .find(|l| !l.is_empty() && !l.starts_with("TOOL="))
                 .unwrap_or("программа ничего не ответила");
             let низкий = сказано.to_lowercase();
-            let подсказка =
-                if низкий.contains("not permitted") || низкий.contains("permission denied") {
-                    " - нужны права root либо установленный tracepath, он умеет без них"
-                } else {
-                    ""
-                };
+            let подсказка = if низкий.contains("not permitted") || низкий.contains("permission denied") {
+                " - нужны права root либо установленный tracepath, он умеет без них"
+            } else {
+                ""
+            };
             return json!({
                 "host": host,
                 "from_server": true,
@@ -1156,16 +1172,24 @@ mod remote_tests {
 
     #[test]
     fn открытый_и_закрытый_порт_различаются() {
-        let v = parse_port("db", 3306, "TOOL=nc
+        let v = parse_port(
+            "db",
+            3306,
+            "TOOL=nc
 R=open
-");
+",
+        );
         assert_eq!(v["ok"], true);
         assert_eq!(v["tool"], "nc");
         assert_eq!(v["from"], "server");
 
-        let v = parse_port("db", 3306, "TOOL=bash
+        let v = parse_port(
+            "db",
+            3306,
+            "TOOL=bash
 R=closed
-");
+",
+        );
         assert_eq!(v["ok"], false);
         assert!(v["error"].as_str().unwrap().contains("закрыт"));
     }
@@ -1173,8 +1197,12 @@ R=closed
     #[test]
     fn несостоявшаяся_проверка_не_выдаётся_за_закрытый_порт() {
         // Это разные новости: «порт закрыт» и «мы не смогли проверить».
-        let v = parse_port("db", 3306, "TOOL=none
-");
+        let v = parse_port(
+            "db",
+            3306,
+            "TOOL=none
+",
+        );
         assert_eq!(v["ok"], false);
         assert!(v["error"].as_str().unwrap().contains("нечем"));
 
@@ -1199,8 +1227,11 @@ A=2606:2800:220::1
 
     #[test]
     fn отсутствие_утилит_разрешения_имени_объясняется() {
-        let v = parse_dns("example.com", "TOOL=none
-");
+        let v = parse_dns(
+            "example.com",
+            "TOOL=none
+",
+        );
         assert!(v["error"].as_str().unwrap().contains("нечем"));
         assert!(v.get("addresses").is_none());
     }
@@ -1275,7 +1306,10 @@ A=2606:2800:220::1
         // Служба, которая отдаёт тело без конца (поток событий, большой файл), раньше
         // читалась до конца - то есть до конца памяти приложения.
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let port = l.local_addr().unwrap().port();
@@ -1415,8 +1449,7 @@ A=2606:2800:220::1
     #[test]
     fn ответ_разбирается_на_состояние_заголовки_и_тело() {
         use super::{header, parse_response};
-        let raw = "HTTP/1.1 301 Moved Permanently\r\nLocation: /new\r\nContent-Type: text/html\r\n\r\nтело"
-            .as_bytes();
+        let raw = "HTTP/1.1 301 Moved Permanently\r\nLocation: /new\r\nContent-Type: text/html\r\n\r\nтело".as_bytes();
         let (code, reason, headers, at) = parse_response(raw).unwrap();
         assert_eq!(code, 301);
         assert_eq!(reason, "Moved Permanently");
@@ -1470,7 +1503,10 @@ A=2606:2800:220::1
             .map(|h| h["name"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"Content-Type"), "{v}");
-        assert!(!names.contains(&"Location"), "заголовки прошлого шага не должны остаться");
+        assert!(
+            !names.contains(&"Location"),
+            "заголовки прошлого шага не должны остаться"
+        );
     }
 
     #[test]
@@ -1566,7 +1602,8 @@ A=2606:2800:220::1
     fn заголовок_traceroute_не_считается_узлом() {
         // Первая строка вывода - «traceroute to 1.1.1.1 (1.1.1.1), 3 hops max…». Номера
         // узла в начале у неё нет, и попасть в список она не должна.
-        let out = "TOOL=traceroute\ntraceroute to 1.1.1.1 (1.1.1.1), 3 hops max, 46 byte packets\n 1  10.0.0.1  0.5 ms\n";
+        let out =
+            "TOOL=traceroute\ntraceroute to 1.1.1.1 (1.1.1.1), 3 hops max, 46 byte packets\n 1  10.0.0.1  0.5 ms\n";
         let v = parse_trace("1.1.1.1", out);
         assert_eq!(v["hops"].as_array().unwrap().len(), 1);
     }
@@ -1580,7 +1617,10 @@ A=2606:2800:220::1
         let v = parse_trace("1.1.1.1", out);
         assert!(v.get("hops").is_none(), "взялся маршрут: {v}");
         let err = v["error"].as_str().unwrap();
-        assert!(err.contains("Operation not permitted"), "потеряли слова программы: {err}");
+        assert!(
+            err.contains("Operation not permitted"),
+            "потеряли слова программы: {err}"
+        );
         assert!(err.contains("tracepath"), "нет подсказки, чем это лечится: {err}");
     }
 
@@ -1655,7 +1695,12 @@ P=22
 P=443
 ";
         let v = parse_scan("srv", 1, 1024, out);
-        let open: Vec<u64> = v["open"].as_array().unwrap().iter().map(|p| p.as_u64().unwrap()).collect();
+        let open: Vec<u64> = v["open"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_u64().unwrap())
+            .collect();
         // По возрастанию и без повторов: список читают глазами.
         assert_eq!(open, vec![22, 80, 443]);
         assert_eq!(v["scanned"], 1024);
@@ -1665,10 +1710,15 @@ P=443
     fn порт_вне_запрошенного_диапазона_отбрасывается() {
         // Если в ответе оказалось что-то за пределами запроса, значит мы читаем не то,
         // и молча подмешивать это в список нельзя.
-        let v = parse_scan("srv", 20, 25, "TOOL=nc
+        let v = parse_scan(
+            "srv",
+            20,
+            25,
+            "TOOL=nc
 P=22
 P=8080
-");
+",
+        );
         let open = v["open"].as_array().unwrap();
         assert_eq!(open.len(), 1);
         assert_eq!(open[0], 22);
@@ -1677,8 +1727,13 @@ P=8080
     #[test]
     fn скан_без_утилит_объясняется_а_не_выдаёт_пустой_список() {
         // Пустой список означал бы «всё закрыто» - это другое утверждение.
-        let v = parse_scan("srv", 1, 10, "TOOL=none
-");
+        let v = parse_scan(
+            "srv",
+            1,
+            10,
+            "TOOL=none
+",
+        );
         assert!(v.get("open").is_none());
         assert!(v["error"].as_str().unwrap().contains("нечем"));
     }
@@ -1700,7 +1755,10 @@ mod tests {
 
     #[test]
     fn host_port_parsing() {
-        assert_eq!(parse_host_port("example.com", 443).unwrap(), ("example.com".into(), 443));
+        assert_eq!(
+            parse_host_port("example.com", 443).unwrap(),
+            ("example.com".into(), 443)
+        );
         assert_eq!(parse_host_port("h:8080", 443).unwrap(), ("h".into(), 8080));
         assert_eq!(parse_host_port("[::1]:8443", 443).unwrap(), ("::1".into(), 8443));
     }

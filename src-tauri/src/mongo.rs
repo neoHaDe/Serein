@@ -57,22 +57,25 @@ pub struct Outcome {
 }
 
 fn single(d: Document, affected: u64) -> Result<Outcome, String> {
-    Ok(Outcome { docs: vec![d], cut: false, affected })
+    Ok(Outcome {
+        docs: vec![d],
+        cut: false,
+        affected,
+    })
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
     /// Приветствие и вход. Пустой пользователь - сервер без проверки доступа.
-    pub async fn connect(
-        stream: S,
-        user: &str,
-        password: &str,
-        database: &str,
-    ) -> Result<Self, String> {
+    pub async fn connect(stream: S, user: &str, password: &str, database: &str) -> Result<Self, String> {
         let db = match database.trim() {
             "" => "test".to_owned(),
             d => db_name(d)?,
         };
-        let mut c = Conn { stream, request_id: 0, db };
+        let mut c = Conn {
+            stream,
+            request_id: 0,
+            db,
+        };
         let user = user.trim();
         let (hello, reply) = c.handshake(user).await?;
         if user.is_empty() {
@@ -179,7 +182,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
         // обслуживал бы ни другие подключения, ни окно. Одновременных расчётов немного, а
         // запрос дороже предела `client_final` отвергает раньше, чем расчёт начнётся.
         let (last, server_signature) = {
-            let _slot = SCRAM_SLOTS.acquire().await.map_err(|_| "MongoDB: вход прерван".to_owned())?;
+            let _slot = SCRAM_SLOTS
+                .acquire()
+                .await
+                .map_err(|_| "MongoDB: вход прерван".to_owned())?;
             tokio::task::spawn_blocking(move || client_final(mech, &secret, &first_bare, &server_first, &nonce))
                 .await
                 .map_err(|e| format!("MongoDB: расчёт входа прерван: {e}"))??
@@ -227,7 +233,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
         cmd.to_writer(&mut body)
             .map_err(|e| format!("MongoDB: команда не упаковалась: {e}"))?;
         self.request_id = self.request_id.wrapping_add(1);
-        self.stream.write_all(&frame(self.request_id, &body)).await.map_err(io_err)?;
+        self.stream
+            .write_all(&frame(self.request_id, &body))
+            .await
+            .map_err(io_err)?;
         self.stream.flush().await.map_err(io_err)?;
 
         let mut head = [0u8; 16];
@@ -290,7 +299,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
             let over = docs.len() > max_rows;
             docs.truncate(max_rows);
             if id == 0 {
-                return Ok(Outcome { docs, cut: over, affected: 0 });
+                return Ok(Outcome {
+                    docs,
+                    cut: over,
+                    affected: 0,
+                });
             }
             // Имя коллекции для getMore - всё после первой точки: `база.коллекция`.
             let coll = ns.split_once('.').map(|(_, c)| c.to_owned()).unwrap_or_default();
@@ -298,7 +311,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
                 let _ = self
                     .command(db, doc! { "killCursors": coll.as_str(), "cursors": [Bson::Int64(id)] })
                     .await;
-                return Ok(Outcome { docs, cut: true, affected: 0 });
+                return Ok(Outcome {
+                    docs,
+                    cut: true,
+                    affected: 0,
+                });
             }
             let (r, size) = self
                 .roundtrip(
@@ -372,13 +389,22 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
                 single(doc! { "количество": number(&r, "n").unwrap_or(0) }, 0)
             }
             Op::Distinct { coll, key, filter } => {
-                let r = self.command(&db, doc! { "distinct": coll, "key": key, "query": filter, "maxTimeMS": ms }).await?;
+                let r = self
+                    .command(
+                        &db,
+                        doc! { "distinct": coll, "key": key, "query": filter, "maxTimeMS": ms },
+                    )
+                    .await?;
                 let values = match r.get("values") {
                     Some(Bson::Array(v)) => v.clone(),
                     _ => Vec::new(),
                 };
                 let cut = values.len() > max_rows;
-                let docs = values.into_iter().take(max_rows).map(|v| doc! { "значение": v }).collect();
+                let docs = values
+                    .into_iter()
+                    .take(max_rows)
+                    .map(|v| doc! { "значение": v })
+                    .collect();
                 Ok(Outcome { docs, cut, affected: 0 })
             }
             Op::Insert { coll, docs, many } => {
@@ -394,7 +420,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
                 }
                 single(d, n.max(0) as u64)
             }
-            Op::Update { coll, filter, update, multi, upsert } => {
+            Op::Update {
+                coll,
+                filter,
+                update,
+                multi,
+                upsert,
+            } => {
                 let cmd = doc! {
                     "update": coll,
                     "updates": [ { "q": filter, "u": update, "multi": multi, "upsert": upsert } ],
@@ -427,7 +459,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
                 for (k, v) in options {
                     index.insert(k, v);
                 }
-                let r = self.command(&db, doc! { "createIndexes": coll, "indexes": [index] }).await?;
+                let r = self
+                    .command(&db, doc! { "createIndexes": coll, "indexes": [index] })
+                    .await?;
                 single(clean(r), 0)
             }
             Op::Indexes { coll } => {
@@ -445,13 +479,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
             Op::ShowDbs => {
                 let r = self.command("admin", doc! { "listDatabases": 1 }).await?;
                 let docs = match r.get("databases") {
-                    Some(Bson::Array(list)) => list
-                        .iter()
-                        .filter_map(|d| d.as_document().cloned())
-                        .collect(),
+                    Some(Bson::Array(list)) => list.iter().filter_map(|d| d.as_document().cloned()).collect(),
                     _ => Vec::new(),
                 };
-                Ok(Outcome { docs, cut: false, affected: 0 })
+                Ok(Outcome {
+                    docs,
+                    cut: false,
+                    affected: 0,
+                })
             }
             Op::ShowCollections => {
                 let cmd = doc! {
@@ -535,7 +570,11 @@ fn parse_msg(rest: &[u8]) -> Result<Document, String> {
     }
     let flags = u32::from_le_bytes([rest[0], rest[1], rest[2], rest[3]]);
     // Нулевой бит - в хвосте контрольная сумма. Сами мы её не просим, но сервер вправе.
-    let end = if flags & 1 != 0 { rest.len().checked_sub(4).ok_or_else(broken)? } else { rest.len() };
+    let end = if flags & 1 != 0 {
+        rest.len().checked_sub(4).ok_or_else(broken)?
+    } else {
+        rest.len()
+    };
     let mut pos = 4;
     let mut body = None;
     while pos < end {
@@ -637,7 +676,10 @@ fn mechanisms(reply: &Document) -> Vec<String> {
 }
 
 fn generic(bytes: Vec<u8>) -> Binary {
-    Binary { subtype: BinarySubtype::Generic, bytes }
+    Binary {
+        subtype: BinarySubtype::Generic,
+        bytes,
+    }
 }
 
 fn payload(r: &Document) -> Result<String, String> {
@@ -799,8 +841,7 @@ fn verify_server_final(payload: &str, expected: &[u8]) -> Result<(), String> {
         .and_then(|v| B64.decode(v).ok())
         .ok_or("MongoDB: сервер не подтвердил вход подписью")?;
     // Без раннего выхода: время сравнения не должно выдавать, сколько байт совпало.
-    let same = got.len() == expected.len()
-        && got.iter().zip(expected).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0;
+    let same = got.len() == expected.len() && got.iter().zip(expected).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0;
     if same {
         Ok(())
     } else {
@@ -825,19 +866,60 @@ pub struct FindSpec {
 #[derive(Debug, PartialEq)]
 pub enum Op {
     /// Команда как есть: `db.runCommand({...})`, `db.adminCommand({...})` или документ.
-    Command { admin: bool, cmd: Document },
-    Find { coll: String, spec: FindSpec, one: bool },
+    Command {
+        admin: bool,
+        cmd: Document,
+    },
+    Find {
+        coll: String,
+        spec: FindSpec,
+        one: bool,
+    },
     /// Без коллекции - конвейер уровня базы (`$currentOp`, `$listLocalSessions`).
-    Aggregate { coll: Option<String>, pipeline: Vec<Bson> },
-    Count { coll: String, filter: Document },
-    Estimated { coll: String },
-    Distinct { coll: String, key: String, filter: Document },
-    Insert { coll: String, docs: Vec<Document>, many: bool },
-    Update { coll: String, filter: Document, update: Bson, multi: bool, upsert: bool },
-    Delete { coll: String, filter: Document, multi: bool },
-    CreateIndex { coll: String, keys: Document, options: Document },
-    Indexes { coll: String },
-    Drop { coll: String },
+    Aggregate {
+        coll: Option<String>,
+        pipeline: Vec<Bson>,
+    },
+    Count {
+        coll: String,
+        filter: Document,
+    },
+    Estimated {
+        coll: String,
+    },
+    Distinct {
+        coll: String,
+        key: String,
+        filter: Document,
+    },
+    Insert {
+        coll: String,
+        docs: Vec<Document>,
+        many: bool,
+    },
+    Update {
+        coll: String,
+        filter: Document,
+        update: Bson,
+        multi: bool,
+        upsert: bool,
+    },
+    Delete {
+        coll: String,
+        filter: Document,
+        multi: bool,
+    },
+    CreateIndex {
+        coll: String,
+        keys: Document,
+        options: Document,
+    },
+    Indexes {
+        coll: String,
+    },
+    Drop {
+        coll: String,
+    },
     DropDatabase,
     ShowDbs,
     ShowCollections,
@@ -861,7 +943,10 @@ pub fn parse(text: &str) -> Result<Op, String> {
     }
     let mut p = Parser { s: t, pos: 0, depth: 0 };
     let op = if t.starts_with('{') {
-        Op::Command { admin: false, cmd: p.document()? }
+        Op::Command {
+            admin: false,
+            cmd: p.document()?,
+        }
     } else {
         p.shell()?
     };
@@ -875,7 +960,9 @@ pub fn parse(text: &str) -> Result<Op, String> {
 fn db_name(name: &str) -> Result<String, String> {
     let bad = name.is_empty()
         || name.len() > 63
-        || name.chars().any(|c| matches!(c, '/' | '\\' | '.' | ' ' | '"' | '$' | '\0'));
+        || name
+            .chars()
+            .any(|c| matches!(c, '/' | '\\' | '.' | ' ' | '"' | '$' | '\0'));
     if bad {
         Err(format!("Недопустимое имя базы: «{name}»"))
     } else {
@@ -969,9 +1056,9 @@ impl Parser<'_> {
     fn shell(&mut self) -> Result<Op, String> {
         if self.ident().as_deref() != Some("db") {
             self.pos = 0;
-            return Err(self.error(
-                "запрос начинается с db., show или use - либо это документ команды в фигурных скобках",
-            ));
+            return Err(
+                self.error("запрос начинается с db., show или use - либо это документ команды в фигурных скобках")
+            );
         }
         // Имя коллекции может содержать точки: `db.system.users.find()` - это коллекция
         // `system.users`. Метод - последнее имя перед скобкой.
@@ -1364,16 +1451,25 @@ impl Parser<'_> {
                 timestamp(number(d, "t"), number(d, "i")).ok_or_else(|| bad("ожидалось {{ t: ..., i: ... }}"))
             }
             ("BinData", [sub, Bson::String(b64)]) => {
-                let sub = num_of(sub).and_then(|n| u8::try_from(n).ok()).ok_or_else(|| bad("подтип - число от 0 до 255"))?;
+                let sub = num_of(sub)
+                    .and_then(|n| u8::try_from(n).ok())
+                    .ok_or_else(|| bad("подтип - число от 0 до 255"))?;
                 let bytes = B64.decode(b64).map_err(|_| bad("данные - строка base64"))?;
-                Ok(Bson::Binary(Binary { subtype: BinarySubtype::from(sub), bytes }))
+                Ok(Bson::Binary(Binary {
+                    subtype: BinarySubtype::from(sub),
+                    bytes,
+                }))
             }
             ("MinKey", []) => Ok(Bson::MinKey),
             ("MaxKey", []) => Ok(Bson::MaxKey),
-            ("ObjectId" | "ISODate" | "Date" | "NumberDecimal" | "Decimal128" | "UUID" | "Timestamp" | "BinData" | "MinKey" | "MaxKey", _) => {
-                Err(bad("неверные аргументы"))
-            }
-            _ => Err(format!("{word}() в запросе не поддерживается - JavaScript здесь не выполняется")),
+            (
+                "ObjectId" | "ISODate" | "Date" | "NumberDecimal" | "Decimal128" | "UUID" | "Timestamp" | "BinData"
+                | "MinKey" | "MaxKey",
+                _,
+            ) => Err(bad("неверные аргументы")),
+            _ => Err(format!(
+                "{word}() в запросе не поддерживается - JavaScript здесь не выполняется"
+            )),
         }
     }
 }
@@ -1445,7 +1541,9 @@ fn arg_array(method: &str, a: &[Bson], i: usize) -> Result<Vec<Bson>, String> {
 }
 
 fn arg_num(method: &str, a: &[Bson], i: usize) -> Result<i64, String> {
-    a.get(i).and_then(num_of).ok_or_else(|| format!("{method}: ожидалось целое число"))
+    a.get(i)
+        .and_then(num_of)
+        .ok_or_else(|| format!("{method}: ожидалось целое число"))
 }
 
 fn arg_str(method: &str, a: &[Bson], i: usize) -> Result<String, String> {
@@ -1569,7 +1667,15 @@ fn shell(v: &Bson, out: &mut String) {
         }
         Bson::Binary(b) if b.subtype == BinarySubtype::Uuid && b.bytes.len() == 16 => {
             let h = hex::encode(&b.bytes);
-            let _ = write!(out, "UUID('{}-{}-{}-{}-{}')", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..]);
+            let _ = write!(
+                out,
+                "UUID('{}-{}-{}-{}-{}')",
+                &h[0..8],
+                &h[8..12],
+                &h[12..16],
+                &h[16..20],
+                &h[20..]
+            );
         }
         Bson::Binary(b) => {
             let _ = write!(out, "BinData({}, '{}')", u8::from(b.subtype), B64.encode(&b.bytes));
@@ -1593,14 +1699,19 @@ fn double_text(f: f64) -> String {
     if f.is_nan() {
         "NaN".into()
     } else if f.is_infinite() {
-        if f > 0.0 { "Infinity".into() } else { "-Infinity".into() }
+        if f > 0.0 {
+            "Infinity".into()
+        } else {
+            "-Infinity".into()
+        }
     } else {
         format!("{f}")
     }
 }
 
 fn date_text(d: DateTime) -> String {
-    d.try_to_rfc3339_string().unwrap_or_else(|_| format!("Date({})", d.timestamp_millis()))
+    d.try_to_rfc3339_string()
+        .unwrap_or_else(|_| format!("Date({})", d.timestamp_millis()))
 }
 
 fn is_ident(k: &str) -> bool {
@@ -1630,14 +1741,31 @@ mod tests {
 
     #[test]
     fn литералы_mongosh_разбираются_с_порядком_полей() {
-        let Op::Command { cmd, .. } = parse("{ find: 'users', filter: { \"age\": { $gt: 30 } }, sort: { b: 1, a: -1, }, }").expect("разбор") else {
+        let Op::Command { cmd, .. } =
+            parse("{ find: 'users', filter: { \"age\": { $gt: 30 } }, sort: { b: 1, a: -1, }, }").expect("разбор")
+        else {
             panic!("ожидалась команда");
         };
-        assert_eq!(cmd.keys().collect::<Vec<_>>(), vec!["find", "filter", "sort"], "имя команды обязано идти первым");
+        assert_eq!(
+            cmd.keys().collect::<Vec<_>>(),
+            vec!["find", "filter", "sort"],
+            "имя команды обязано идти первым"
+        );
         let sort = cmd.get_document("sort").expect("sort");
-        assert_eq!(sort.keys().collect::<Vec<_>>(), vec!["b", "a"], "порядок сортировки - порядок полей");
+        assert_eq!(
+            sort.keys().collect::<Vec<_>>(),
+            vec!["b", "a"],
+            "порядок сортировки - порядок полей"
+        );
         assert_eq!(sort.get("a"), Some(&Bson::Int32(-1)));
-        assert_eq!(cmd.get_document("filter").unwrap().get_document("age").unwrap().get("$gt"), Some(&Bson::Int32(30)));
+        assert_eq!(
+            cmd.get_document("filter")
+                .unwrap()
+                .get_document("age")
+                .unwrap()
+                .get("$gt"),
+            Some(&Bson::Int32(30))
+        );
     }
 
     #[test]
@@ -1653,20 +1781,34 @@ mod tests {
         assert!(matches!(cmd.get("a"), Some(Bson::ObjectId(_))));
         assert!(matches!(cmd.get("b"), Some(Bson::DateTime(_))));
         assert_eq!(cmd.get("c"), Some(&Bson::Int64(9_000_000_000)));
-        assert_eq!(cmd.get("d"), Some(&Bson::Int64(3_000_000_000)), "за пределами 32 бит - 64");
+        assert_eq!(
+            cmd.get("d"),
+            Some(&Bson::Int64(3_000_000_000)),
+            "за пределами 32 бит - 64"
+        );
         assert_eq!(cmd.get("e"), Some(&Bson::Double(1.5)));
         assert_eq!(cell(cmd.get("f").unwrap()).unwrap(), "/ab\\/c/im");
         assert_eq!(cell(cmd.get("g").unwrap()).unwrap(), "12.50");
-        assert_eq!(cell(cmd.get("h").unwrap()).unwrap(), "2026-09-13T00:00:00Z", "день без времени - полночь UTC");
+        assert_eq!(
+            cell(cmd.get("h").unwrap()).unwrap(),
+            "2026-09-13T00:00:00Z",
+            "день без времени - полночь UTC"
+        );
         assert_eq!(cmd.get_str("i").unwrap(), "стро'ка");
         assert_eq!(cmd.get("j"), Some(&Bson::Null));
-        assert_eq!(cell(cmd.get("l").unwrap()).unwrap(), "UUID('01234567-89ab-cdef-0123-456789abcdef')");
+        assert_eq!(
+            cell(cmd.get("l").unwrap()).unwrap(),
+            "UUID('01234567-89ab-cdef-0123-456789abcdef')"
+        );
     }
 
     #[test]
     fn вызовы_коллекций_и_цепочки() {
-        let op = parse("db.system.users.find({ user: 'probe' }, { _id: 0 }).sort({ user: 1 }).skip(5).limit(20);").expect("разбор");
-        let Op::Find { coll, spec, one } = op else { panic!("ожидался find") };
+        let op = parse("db.system.users.find({ user: 'probe' }, { _id: 0 }).sort({ user: 1 }).skip(5).limit(20);")
+            .expect("разбор");
+        let Op::Find { coll, spec, one } = op else {
+            panic!("ожидался find")
+        };
         assert_eq!(coll, "system.users", "точки в имени коллекции - часть имени");
         assert!(!one);
         assert_eq!(spec.filter, doc! { "user": "probe" });
@@ -1676,20 +1818,44 @@ mod tests {
 
         assert_eq!(
             parse("db.getCollection('с пробелом').find({ a: 1 }).count()").unwrap(),
-            Op::Count { coll: "с пробелом".into(), filter: doc! { "a": 1 } }
+            Op::Count {
+                coll: "с пробелом".into(),
+                filter: doc! { "a": 1 }
+            }
         );
-        assert_eq!(parse("db['x-y'].getIndexes()").unwrap(), Op::Indexes { coll: "x-y".into() });
-        assert_eq!(parse("db.заказы.drop()").unwrap(), Op::Drop { coll: "заказы".into() });
+        assert_eq!(
+            parse("db['x-y'].getIndexes()").unwrap(),
+            Op::Indexes { coll: "x-y".into() }
+        );
+        assert_eq!(
+            parse("db.заказы.drop()").unwrap(),
+            Op::Drop {
+                coll: "заказы".into()
+            }
+        );
         assert_eq!(parse("show dbs").unwrap(), Op::ShowDbs);
         assert_eq!(parse("use app;").unwrap(), Op::Use("app".into()));
-        assert_eq!(parse("db.runCommand('ping')").unwrap(), Op::Command { admin: false, cmd: doc! { "ping": 1 } });
+        assert_eq!(
+            parse("db.runCommand('ping')").unwrap(),
+            Op::Command {
+                admin: false,
+                cmd: doc! { "ping": 1 }
+            }
+        );
     }
 
     #[test]
     fn опасные_и_неполные_запросы_отвергаются_словами() {
-        assert!(parse("db.t.deleteMany()").unwrap_err().contains("обязателен"), "удаление без фильтра не угадываем");
-        assert!(parse("db.t.updateOne({ a: 1 }, { b: 2 })").unwrap_err().contains("replaceOne"));
-        assert!(parse("db.t.replaceOne({ a: 1 }, { $set: { b: 2 } })").unwrap_err().contains("updateOne"));
+        assert!(
+            parse("db.t.deleteMany()").unwrap_err().contains("обязателен"),
+            "удаление без фильтра не угадываем"
+        );
+        assert!(parse("db.t.updateOne({ a: 1 }, { b: 2 })")
+            .unwrap_err()
+            .contains("replaceOne"));
+        assert!(parse("db.t.replaceOne({ a: 1 }, { $set: { b: 2 } })")
+            .unwrap_err()
+            .contains("updateOne"));
         assert!(parse("db.t.find({ a: somevar })").unwrap_err().contains("кавычках"));
         assert!(parse("db.t.find({}); db.t.drop()").unwrap_err().contains("один запрос"));
         assert!(parse("db.t.mapReduce()").unwrap_err().contains("не поддерживается"));
@@ -1710,18 +1876,33 @@ mod tests {
             "{ id: ObjectId('650000000000000000000001'), теги: [ 'a', 1, 2.5 ], 'с пробелом': { x: null }, пусто: [] }"
         );
         assert_eq!(cell(&Bson::Null), None, "null - это null, а не текст");
-        assert_eq!(cell(&Bson::String(String::new())).unwrap(), "", "пустая строка - не null");
+        assert_eq!(
+            cell(&Bson::String(String::new())).unwrap(),
+            "",
+            "пустая строка - не null"
+        );
         assert_eq!(index_name(&doc! { "a": 1, "b": -1, "t": "text" }), "a_1_b_-1_t_text");
     }
 
     #[test]
     fn чтение_несёт_серверу_предел_времени() {
-        let spec = FindSpec { limit: Some(-5), ..FindSpec::default() };
+        let spec = FindSpec {
+            limit: Some(-5),
+            ..FindSpec::default()
+        };
         let cmd = find_command("t".into(), spec, false, 28_000);
-        assert_eq!(cmd.keys().next().map(String::as_str), Some("find"), "имя команды - первым");
+        assert_eq!(
+            cmd.keys().next().map(String::as_str),
+            Some("find"),
+            "имя команды - первым"
+        );
         assert_eq!(cmd.get("maxTimeMS"), Some(&Bson::Int64(28_000)));
         assert_eq!(cmd.get("limit"), Some(&Bson::Int64(5)));
-        assert_eq!(cmd.get("singleBatch"), Some(&Bson::Boolean(true)), "отрицательный предел - одна пачка");
+        assert_eq!(
+            cmd.get("singleBatch"),
+            Some(&Bson::Boolean(true)),
+            "отрицательный предел - одна пачка"
+        );
     }
 
     #[test]
@@ -1745,7 +1926,10 @@ mod tests {
         let bare = client_first_bare("user", nonce);
         let server_first = "r=fyko+d2lbbFgONRv9qkxdawL3rfcNHYJY1ZVvWVs7j,s=QSXCR+Q6sek8bf92,i=4096";
         let (last, sig) = client_final(Mech::Sha1, b"pencil", &bare, server_first, nonce).expect("шаг");
-        assert_eq!(last, "c=biws,r=fyko+d2lbbFgONRv9qkxdawL3rfcNHYJY1ZVvWVs7j,p=v0X8v3Bz2T0CJGbJQyF0X+HI4Ts=");
+        assert_eq!(
+            last,
+            "c=biws,r=fyko+d2lbbFgONRv9qkxdawL3rfcNHYJY1ZVvWVs7j,p=v0X8v3Bz2T0CJGbJQyF0X+HI4Ts="
+        );
         verify_server_final("v=rmF9pqV8S7suAoZWja4dJRkFsKQ=", &sig).expect("подпись сервера");
     }
 
@@ -1764,13 +1948,25 @@ mod tests {
         let started = std::time::Instant::now();
         let huge = client_final(Mech::Sha256, b"p", &bare, "r=abc123,s=AAAA,i=4294967295", "abc").unwrap_err();
         assert!(huge.contains("предела"), "{huge}");
-        assert!(started.elapsed() < std::time::Duration::from_secs(1), "расчёт не запускался");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "расчёт не запускался"
+        );
         let salt = B64.encode([7u8; 65]);
         let fat = format!("r=abc123,s={salt},i=4096");
-        assert!(client_final(Mech::Sha256, b"p", &bare, &fat, "abc").is_err(), "соль больше предела");
-        assert!(client_final(Mech::Sha256, b"p", &bare, "r=abc123,s=,i=4096", "abc").is_err(), "пустая соль");
+        assert!(
+            client_final(Mech::Sha256, b"p", &bare, &fat, "abc").is_err(),
+            "соль больше предела"
+        );
+        assert!(
+            client_final(Mech::Sha256, b"p", &bare, "r=abc123,s=,i=4096", "abc").is_err(),
+            "пустая соль"
+        );
         let long = format!("r=abc{},s=AAAA,i=4096", "x".repeat(2000));
-        assert!(client_final(Mech::Sha256, b"p", &bare, &long, "abc").is_err(), "ответ больше предела");
+        assert!(
+            client_final(Mech::Sha256, b"p", &bare, &long, "abc").is_err(),
+            "ответ больше предела"
+        );
     }
 
     #[test]
@@ -1782,10 +1978,19 @@ mod tests {
         let (len, _, opcode) = header(msg[..16].try_into().unwrap());
         assert_eq!((len, opcode), (msg.len(), OP_MSG));
         let parsed = parse_msg(&msg[16..]).expect("разбор");
-        assert_eq!(check(parsed).unwrap_err(), "MongoDB 59 (CommandNotFound): no such command: 'нет'");
+        assert_eq!(
+            check(parsed).unwrap_err(),
+            "MongoDB 59 (CommandNotFound): no such command: 'нет'"
+        );
 
         let partial = doc! { "ok": 1, "n": 1, "writeErrors": [ { "index": 1, "code": 11000, "errmsg": "E11000 duplicate key" } ] };
-        assert_eq!(check(partial).unwrap_err(), "MongoDB 11000: E11000 duplicate key (выполнено до ошибки: 1)");
-        assert!(parse_msg(&[0, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0x7F]).is_err(), "длина раздела за пределами ответа");
+        assert_eq!(
+            check(partial).unwrap_err(),
+            "MongoDB 11000: E11000 duplicate key (выполнено до ошибки: 1)"
+        );
+        assert!(
+            parse_msg(&[0, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0x7F]).is_err(),
+            "длина раздела за пределами ответа"
+        );
     }
 }

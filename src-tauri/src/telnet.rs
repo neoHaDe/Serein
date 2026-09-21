@@ -95,11 +95,7 @@ impl TcpSession {
     pub fn write(&self, data: &str) {
         let payload = match self.mode {
             Mode::Raw => data.as_bytes().to_vec(),
-            Mode::Telnet => encode_out(
-                data.as_bytes(),
-                self.eol,
-                self.binary_out.load(Ordering::Relaxed),
-            ),
+            Mode::Telnet => encode_out(data.as_bytes(), self.eol, self.binary_out.load(Ordering::Relaxed)),
         };
         self.send_raw(&payload);
     }
@@ -433,8 +429,7 @@ pub fn open_tcp(
         .next()
         .ok_or_else(|| format!("Имя {host} не разрешается в адрес"))?;
 
-    let sock = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
-        .map_err(|e| connect_error(host, port, &e))?;
+    let sock = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).map_err(|e| connect_error(host, port, &e))?;
     // Без этого каждое нажатие клавиши ждёт подтверждения предыдущего - на медленном
     // канале ввод начинает заметно отставать.
     let _ = sock.set_nodelay(true);
@@ -540,12 +535,7 @@ fn spawn_reader(
 
 /// Адрес и порт из профиля либо из разовых параметров окна подключения.
 pub fn endpoint(p: &Value, default_port: u16) -> (String, u16) {
-    let host = p
-        .get("host")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let host = p.get("host").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     let port = p
         .get("port")
         .and_then(|v| v.as_u64())
@@ -584,10 +574,7 @@ mod tests {
     fn we_answer_the_options_we_support() {
         let mut n = Negotiator::new(100, 40);
         // Сервер просит нас слать тип терминала и размер окна и предлагает своё эхо.
-        let (out, reply) = feed(
-            &mut n,
-            &[IAC, DO, OPT_TTYPE, IAC, DO, OPT_NAWS, IAC, WILL, OPT_ECHO],
-        );
+        let (out, reply) = feed(&mut n, &[IAC, DO, OPT_TTYPE, IAC, DO, OPT_NAWS, IAC, WILL, OPT_ECHO]);
         assert!(out.is_empty(), "согласование не должно попадать на экран");
 
         let mut want = vec![IAC, WILL, OPT_TTYPE, IAC, WILL, OPT_NAWS];
@@ -671,10 +658,7 @@ mod tests {
             ("sw1".into(), 2001)
         );
         // Мусорный порт не должен уехать в соединение.
-        assert_eq!(
-            endpoint(&json!({ "host": "sw1", "port": 0 }), 23),
-            ("sw1".into(), 23)
-        );
+        assert_eq!(endpoint(&json!({ "host": "sw1", "port": 0 }), 23), ("sw1".into(), 23));
     }
 
     #[test]
@@ -713,13 +697,7 @@ mod tests {
         let mut neg = Negotiator::new(120, 40);
         let mut screen: Vec<u8> = Vec::new();
         // Тот же цикл, что и в потоке-читателе: данные - на экран, ответы - в сокет.
-        fn pump(
-            sock: &mut TcpStream,
-            back: &mut TcpStream,
-            neg: &mut Negotiator,
-            screen: &mut Vec<u8>,
-            rounds: usize,
-        ) {
+        fn pump(sock: &mut TcpStream, back: &mut TcpStream, neg: &mut Negotiator, screen: &mut Vec<u8>, rounds: usize) {
             let mut buf = [0u8; 4096];
             for _ in 0..rounds {
                 match sock.read(&mut buf) {

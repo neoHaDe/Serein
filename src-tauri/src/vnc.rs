@@ -115,13 +115,20 @@ impl From<&VncError> for OpenError {
 
 impl From<String> for OpenError {
     fn from(message: String) -> Self {
-        Self { message, needs_password: false, blacklisted: false }
+        Self {
+            message,
+            needs_password: false,
+            blacklisted: false,
+        }
     }
 }
 
 /// Куда подключаться: напрямую или каналом внутри уже живой SSH-сессии.
 pub enum Target {
-    Tcp { host: String, port: u16 },
+    Tcp {
+        host: String,
+        port: u16,
+    },
     /// Через SSH: канал `direct-tcpip` до `host:port` со стороны сервера.
     ///
     /// `link` - своё соединение рабочего стола, если его удалось поднять; `handle` тогда
@@ -173,8 +180,16 @@ pub async fn open(
                     return Err(OpenError::from(e));
                 }
             };
-            spawn_loop(id.clone(), ch.into_stream(), password, rx, alive.clone(), out.clone(), link)
-                .await?;
+            spawn_loop(
+                id.clone(),
+                ch.into_stream(),
+                password,
+                rx,
+                alive.clone(),
+                out.clone(),
+                link,
+            )
+            .await?;
         }
     }
 
@@ -405,12 +420,10 @@ fn vnc_err(e: &VncError) -> String {
         // Блокировку проверяем раньше пароля: её текст тоже про неудачный вход, и без
         // этого порядка она читалась бы как «неверный пароль», то есть как приглашение
         // попробовать ещё раз - ровно то, что блокировку и продлевает.
-        VncError::General(_) if is_blacklisted(e) => {
-            "Сервер временно закрыл доступ после неудачных попыток входа. \
+        VncError::General(_) if is_blacklisted(e) => "Сервер временно закрыл доступ после неудачных попыток входа. \
              Правильный пароль сейчас тоже не примут: снимается перезапуском службы \
              VNC на сервере либо ожиданием."
-                .into()
-        }
+            .into(),
         VncError::General(m)
             if {
                 let m = m.to_lowercase();
@@ -466,7 +479,9 @@ pub fn attach(id: &str, ch: Channel<InvokeResponseBody>) -> Result<(), String> {
         m.get(id).map(|s| {
             s.out.set(ch);
             if let Some((w, h)) = size {
-                let _ = s.out.send(InvokeResponseBody::Raw(packet(kind::RESIZE, 0, 0, w, h, &[])));
+                let _ = s
+                    .out
+                    .send(InvokeResponseBody::Raw(packet(kind::RESIZE, 0, 0, w, h, &[])));
             }
             // Именно полный, а не обычный: сервер присылает только изменения, и новое
             // окно осталось бы с пустым холстом до первого движения на сервере.

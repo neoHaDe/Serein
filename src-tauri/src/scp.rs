@@ -32,7 +32,10 @@ impl ScpIo {
     async fn open(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, cmd: &str) -> Result<Self, String> {
         let channel = crate::ssh::open_session_channel(handle).await?;
         channel.exec(true, cmd).await.map_err(|e| e.to_string())?;
-        Ok(Self { channel, buf: Vec::new() })
+        Ok(Self {
+            channel,
+            buf: Vec::new(),
+        })
     }
 
     /// Дочитывает в буфер следующий пакет канала.
@@ -160,7 +163,10 @@ pub fn parse_ls_line(line: &str) -> Option<(char, u64, u32, u64, String, Option<
     Some((kind, size, mode, mtime, name, target))
 }
 
-async fn canonical_dir(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, path: &str) -> Result<String, String> {
+async fn canonical_dir(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    path: &str,
+) -> Result<String, String> {
     let p = if path.is_empty() || path == "." {
         "/".to_string()
     } else {
@@ -217,10 +223,7 @@ pub async fn list(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, pa
             _ => continue,
         };
         let (link_type, target_val) = if entry_type == "link" {
-            (
-                target.as_ref().map(|_| "file"),
-                target,
-            )
+            (target.as_ref().map(|_| "file"), target)
         } else {
             (None, None)
         };
@@ -237,9 +240,8 @@ pub async fn list(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, pa
     entries.sort_by(|a, b| {
         let ad = a["type"] == json!("dir");
         let bd = b["type"] == json!("dir");
-        bd.cmp(&ad).then_with(|| {
-            a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
-        })
+        bd.cmp(&ad)
+            .then_with(|| a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or("")))
     });
     Ok(json!({ "path": abs, "entries": entries, "backend": "scp" }))
 }
@@ -541,7 +543,11 @@ pub async fn mkdir(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, p
     run_sh(handle, &format!("mkdir -p -- {}", shell_quote(path))).await
 }
 
-pub async fn remove(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, path: &str, is_dir: bool) -> Result<(), String> {
+pub async fn remove(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    path: &str,
+    is_dir: bool,
+) -> Result<(), String> {
     check_remote_path(path)?;
     if is_dir {
         run_sh(handle, &format!("rm -rf -- {}", shell_quote(path))).await
@@ -557,23 +563,22 @@ pub async fn rename(
 ) -> Result<(), String> {
     check_remote_path(from)?;
     check_remote_path(to)?;
-    run_sh(
-        handle,
-        &format!("mv -- {} {}", shell_quote(from), shell_quote(to)),
-    )
-    .await
+    run_sh(handle, &format!("mv -- {} {}", shell_quote(from), shell_quote(to))).await
 }
 
-pub async fn chmod(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, path: &str, mode: u32) -> Result<(), String> {
+pub async fn chmod(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    path: &str,
+    mode: u32,
+) -> Result<(), String> {
     check_remote_path(path)?;
-    run_sh(
-        handle,
-        &format!("chmod {:o} -- {}", mode & 0o777, shell_quote(path)),
-    )
-    .await
+    run_sh(handle, &format!("chmod {:o} -- {}", mode & 0o777, shell_quote(path))).await
 }
 
-pub async fn preview(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str) -> Result<Value, String> {
+pub async fn preview(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    remote: &str,
+) -> Result<Value, String> {
     check_remote_path(remote)?;
     let cmd = format!("wc -c < {}", shell_quote(remote));
     let (code, out, err) = crate::ssh::exec(handle, &cmd, None).await?;
@@ -594,7 +599,10 @@ pub async fn preview(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
     }))
 }
 
-pub async fn read_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str) -> Result<Value, String> {
+pub async fn read_file(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    remote: &str,
+) -> Result<Value, String> {
     check_remote_path(remote)?;
     let cmd = format!("wc -c < {}", shell_quote(remote));
     let (code, out, _err) = crate::ssh::exec(handle, &cmd, None).await?;
@@ -612,7 +620,11 @@ pub async fn read_file(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>
     }
     let text = String::from_utf8_lossy(&buf).to_string();
     let eol = if text.contains("\r\n") { "crlf" } else { "lf" };
-    let content = if eol == "crlf" { text.replace("\r\n", "\n") } else { text };
+    let content = if eol == "crlf" {
+        text.replace("\r\n", "\n")
+    } else {
+        text
+    };
     Ok(json!({ "content": content, "eol": eol, "mode": mode, "mtime": mtime }))
 }
 
@@ -634,7 +646,17 @@ pub async fn write_file(
     // Через временный файл и одну замену: оборванная запись не оставит полфайла, а права
     // правленого файла сохраняются.
     let mut src = data.as_bytes();
-    put_via_temp(handle, remote, &mut src, data.len() as u64, mode, None, &|| true, &mut |_: u64, _: u64| {}).await?;
+    put_via_temp(
+        handle,
+        remote,
+        &mut src,
+        data.len() as u64,
+        mode,
+        None,
+        &|| true,
+        &mut |_: u64, _: u64| {},
+    )
+    .await?;
     Ok(json!({ "ok": true, "mtime": base_mtime }))
 }
 
@@ -682,8 +704,14 @@ pub async fn upload_path(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "file".into());
     let mut files: Vec<(String, String, String, u64)> = Vec::new();
-    crate::sftp::collect_local(&local, &join_remote(remote_dir, &root_name), &root_name, &mut files, Some(alive.as_ref()))
-        .await?;
+    crate::sftp::collect_local(
+        &local,
+        &join_remote(remote_dir, &root_name),
+        &root_name,
+        &mut files,
+        Some(alive.as_ref()),
+    )
+    .await?;
     for (lp, rp, rel, size) in files {
         if !alive.load(Ordering::Relaxed) {
             return Err(CANCELLED.into());
@@ -700,24 +728,44 @@ pub async fn upload_path(
             let mut progress = |done: u64, total: u64| {
                 if done - last >= PROGRESS_STEP {
                     last = done;
-                    emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, total, done, "active", None);
+                    emit_transfer(
+                        &app, &id, session_id, "upload", &lp, &rp, &rel, total, done, "active", None,
+                    );
                 }
             };
             put_file_ctl(handle.as_ref(), &lp, &rp, &live, &mut progress).await
         };
         hub.finish(&id);
         if !ctrl.is_live() {
-            emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "canceled", None);
+            emit_transfer(
+                &app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "canceled", None,
+            );
             return Err(CANCELLED.into());
         }
         match result {
-            Ok(_) => emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, size, "done", None),
+            Ok(_) => emit_transfer(
+                &app, &id, session_id, "upload", &lp, &rp, &rel, size, size, "done", None,
+            ),
             Err(e) if e == CANCELLED => {
-                emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "canceled", None);
+                emit_transfer(
+                    &app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "canceled", None,
+                );
                 return Err(e);
             }
             Err(e) => {
-                emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "error", Some(&e));
+                emit_transfer(
+                    &app,
+                    &id,
+                    session_id,
+                    "upload",
+                    &lp,
+                    &rp,
+                    &rel,
+                    size,
+                    0,
+                    "error",
+                    Some(&e),
+                );
                 return Err(e);
             }
         }
@@ -781,9 +829,7 @@ fn collect_remote_list<'a>(
             let rp = join_remote(&abs, &name);
             let lp = format!("{local}/{name}");
             match entry["type"].as_str() {
-                Some("dir") => {
-                    collect_remote_list(handle, &rp, &lp, &r, out, refused, alive, depth + 1).await?
-                }
+                Some("dir") => collect_remote_list(handle, &rp, &lp, &r, out, refused, alive, depth + 1).await?,
                 Some("file") => out.push((lp, rp, r, entry["size"].as_u64().unwrap_or(0))),
                 // `ls` не говорит, куда ведёт ссылка - на файл или на каталог, а заходить в
                 // каталог по ссылке нельзя: так обход уходит в `/proc` и по кругу.
@@ -815,7 +861,10 @@ pub async fn remote_mtime(
     Ok(out.trim().parse::<u64>().ok().map(|s| s * 1000))
 }
 
-async fn remote_is_dir(handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>, remote: &str) -> Result<bool, String> {
+async fn remote_is_dir(
+    handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
+    remote: &str,
+) -> Result<bool, String> {
     let cmd = format!(
         "if [ -d {} ]; then echo dir; elif [ -f {} ]; then echo file; else echo no; fi",
         shell_quote(remote),
@@ -883,7 +932,16 @@ pub async fn download_path(
     for (rel, why) in refused {
         let id = uuid::Uuid::new_v4().to_string();
         emit_transfer(
-            &app, &id, session_id, "download", "", remote, &rel, 0, 0, "error",
+            &app,
+            &id,
+            session_id,
+            "download",
+            "",
+            remote,
+            &rel,
+            0,
+            0,
+            "error",
             Some(&format!("не сохранено: {why}")),
         );
     }
@@ -894,7 +952,19 @@ pub async fn download_path(
         // Перед записью - ещё раз: ссылку могли подложить уже после плана.
         if let Err(e) = crate::localname::no_links_below(Path::new(&local_dir), Path::new(&lp)) {
             let id = uuid::Uuid::new_v4().to_string();
-            emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "error", Some(&e));
+            emit_transfer(
+                &app,
+                &id,
+                session_id,
+                "download",
+                &lp,
+                &rp,
+                &rel,
+                size,
+                0,
+                "error",
+                Some(&e),
+            );
             return Err(e);
         }
         if let Some(parent) = Path::new(&lp).parent() {
@@ -905,21 +975,27 @@ pub async fn download_path(
         let Some(ctrl) = hub.start(&id, session_id, key) else {
             continue;
         };
-        emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "active", None);
+        emit_transfer(
+            &app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "active", None,
+        );
         let result = {
             let live = || ctrl.is_live() && alive.load(Ordering::Relaxed);
             let mut last = 0u64;
             let mut progress = |done: u64, total: u64| {
                 if done - last >= PROGRESS_STEP {
                     last = done;
-                    emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, total, done, "active", None);
+                    emit_transfer(
+                        &app, &id, session_id, "download", &lp, &rp, &rel, total, done, "active", None,
+                    );
                 }
             };
             download_file_ctl(handle.as_ref(), &rp, &lp, &live, &mut progress).await
         };
         hub.finish(&id);
         if !ctrl.is_live() {
-            emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "canceled", None);
+            emit_transfer(
+                &app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "canceled", None,
+            );
             return Err(CANCELLED.into());
         }
         match result {
@@ -937,11 +1013,25 @@ pub async fn download_path(
                 None,
             ),
             Err(e) if e == CANCELLED => {
-                emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "canceled", None);
+                emit_transfer(
+                    &app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "canceled", None,
+                );
                 return Err(e);
             }
             Err(e) => {
-                emit_transfer(&app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "error", Some(&e));
+                emit_transfer(
+                    &app,
+                    &id,
+                    session_id,
+                    "download",
+                    &lp,
+                    &rp,
+                    &rel,
+                    size,
+                    0,
+                    "error",
+                    Some(&e),
+                );
                 return Err(e);
             }
         }
@@ -977,7 +1067,10 @@ mod tests {
         assert_eq!(parse_file_header("C0644 12 a.txt", None).unwrap(), (0o644, 12));
         let big = parse_file_header("C0644 18446744073709551615 a", Some(MAX_PREVIEW)).unwrap_err();
         assert!(big.contains("больше предела"), "{big}");
-        assert!(parse_file_header("C0644 18446744073709551616 a", None).is_err(), "за пределами u64");
+        assert!(
+            parse_file_header("C0644 18446744073709551616 a", None).is_err(),
+            "за пределами u64"
+        );
         assert!(parse_file_header("C0644 -1 a", None).is_err());
         assert!(parse_file_header("D0755 0 dir", None).is_err());
         assert_eq!(parse_file_header("\x04", None).unwrap_err(), "SCP: файл не передан");
@@ -998,7 +1091,10 @@ mod tests {
         assert!(s.starts_with(&format!("r={};", shell_quote("/srv/a'b"))), "{s}");
         assert!(s.contains("if [ -d \"$r\" ]"), "{s}");
         assert!(s.contains("touch -m -d @1700000000"), "{s}");
-        assert!(s.ends_with(&format!("mv -f -- {} \"$r\"", shell_quote("/srv/.a'b.serein-1.part"))), "{s}");
+        assert!(
+            s.ends_with(&format!("mv -f -- {} \"$r\"", shell_quote("/srv/.a'b.serein-1.part"))),
+            "{s}"
+        );
         assert!(!finish_upload_script("/t", "/r", None).contains("touch"));
     }
 }

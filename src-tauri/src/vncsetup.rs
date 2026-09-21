@@ -54,7 +54,9 @@ pub fn parse_detect(stdout: &str) -> Value {
     let mut sudo = String::new();
 
     for line in stdout.lines() {
-        let Some((tag, val)) = line.trim().split_once(':') else { continue };
+        let Some((tag, val)) = line.trim().split_once(':') else {
+            continue;
+        };
         let val = val.trim();
         match tag {
             "BIN" => {
@@ -180,10 +182,7 @@ pub fn check_vnc_password(p: &str) -> Result<(), String> {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || "!#%*+,.:=?@_-".contains(c))
     {
-        return Err(
-            "Остальное сервер не примет: в пароле VNC можно латиницу, цифры и знаки !#%*+,.:=?@_-"
-                .into(),
-        );
+        return Err("Остальное сервер не примет: в пароле VNC можно латиницу, цифры и знаки !#%*+,.:=?@_-".into());
     }
     Ok(())
 }

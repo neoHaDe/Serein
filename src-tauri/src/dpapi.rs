@@ -11,16 +11,7 @@ pub fn protect(data: &[u8]) -> Result<Vec<u8>, String> {
             pbData: data.as_ptr() as *mut u8,
         };
         let mut output = CRYPT_INTEGER_BLOB::default();
-        CryptProtectData(
-            &input,
-            PCWSTR::null(),
-            None,
-            None,
-            None,
-            0,
-            &mut output,
-        )
-        .map_err(|e| e.to_string())?;
+        CryptProtectData(&input, PCWSTR::null(), None, None, None, 0, &mut output).map_err(|e| e.to_string())?;
         let out = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
         let _ = LocalFree(HLOCAL(output.pbData as *mut _));
         Ok(out)
@@ -39,16 +30,7 @@ pub fn unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
         };
         let mut output = CRYPT_INTEGER_BLOB::default();
         let mut descr = PWSTR::null();
-        CryptUnprotectData(
-            &input,
-            Some(&mut descr),
-            None,
-            None,
-            None,
-            0,
-            &mut output,
-        )
-        .map_err(|e| e.to_string())?;
+        CryptUnprotectData(&input, Some(&mut descr), None, None, None, 0, &mut output).map_err(|e| e.to_string())?;
         let out = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
         let _ = LocalFree(HLOCAL(output.pbData as *mut _));
         if !descr.is_null() {

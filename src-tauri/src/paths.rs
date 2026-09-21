@@ -42,10 +42,7 @@ pub fn expand(raw: &str) -> String {
         home
     } else if let Some(rest) = s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")) {
         format!("{home}/{rest}")
-    } else if let Some(rest) = s
-        .strip_prefix("$HOME/")
-        .or_else(|| s.strip_prefix("${HOME}/"))
-    {
+    } else if let Some(rest) = s.strip_prefix("$HOME/").or_else(|| s.strip_prefix("${HOME}/")) {
         format!("{home}/{rest}")
     } else if let Some(rest) = s
         .strip_prefix("%USERPROFILE%\\")

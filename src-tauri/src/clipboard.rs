@@ -5,9 +5,7 @@ const CF_UNICODETEXT: u32 = 13;
 #[cfg(windows)]
 pub fn write_text(text: &str) -> Result<(), String> {
     use windows::Win32::Foundation::{HANDLE, HWND};
-    use windows::Win32::System::DataExchange::{
-        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
-    };
+    use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
     use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 
     let mut wide: Vec<u16> = text.encode_utf16().collect();

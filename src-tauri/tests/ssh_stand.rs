@@ -187,7 +187,7 @@ fn changed_host_key_is_refused_when_there_is_nobody_to_ask() {
     // превращается в «подключились к незнакомому хосту». Своим замком это не лечится:
     // замок приложения о тестовом ничего не знает.
     {
-            let file = serein_lib::store::config_dir().join("known_hosts.json");
+        let file = serein_lib::store::config_dir().join("known_hosts.json");
         let mut data: serde_json::Map<String, Value> = std::fs::read_to_string(&file)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
@@ -196,8 +196,7 @@ fn changed_host_key_is_refused_when_there_is_nobody_to_ask() {
             host_id.clone(),
             json!("SHA256:0000000000000000000000000000000000000000000"),
         );
-        std::fs::write(&file, serde_json::to_string_pretty(&data).unwrap())
-            .expect("подмена отпечатка");
+        std::fs::write(&file, serde_json::to_string_pretty(&data).unwrap()).expect("подмена отпечатка");
     }
 
     let res = rt().block_on(serein_lib::ssh::connect_client(vec![s.by_key(s.hostkey_port)]));

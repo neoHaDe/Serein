@@ -105,7 +105,9 @@ pub fn parse(stdout: &str) -> Value {
     // Файловые системы: путь монтирования, всего и занято в килобайтах, тип.
     let mut volumes: Vec<Value> = Vec::new();
     for line in stdout.lines() {
-        let Some(rest) = line.trim().strip_prefix("FS:") else { continue };
+        let Some(rest) = line.trim().strip_prefix("FS:") else {
+            continue;
+        };
         let p: Vec<&str> = rest.split('|').collect();
         if p.len() < 4 {
             continue;

@@ -112,8 +112,7 @@ pub fn to_json(kind: Kind, version: &str) -> Value {
 /// Зонд стоит одного лишнего `exec`, а спрашивать его перед каждым обновлением панели -
 /// это лишний круг по сети раз в пару секунд. Поэтому ответ запоминается на сессию:
 /// система под ней не меняется, пока сессия жива.
-static CACHE: std::sync::Mutex<Option<std::collections::HashMap<String, (Kind, String)>>> =
-    std::sync::Mutex::new(None);
+static CACHE: std::sync::Mutex<Option<std::collections::HashMap<String, (Kind, String)>>> = std::sync::Mutex::new(None);
 
 /// Пишет строку о разборе системы в журнал приложения.
 ///
@@ -178,9 +177,7 @@ pub async fn of_session(session_id: &str, handle: &crate::ssh::SharedHandle) -> 
     // Пишем одну строку на сессию. Подробности первого зонда - только когда систему
     // опознать не удалось: тогда они и нужны, а в остальное время это шум.
     if found.0 == Kind::Unknown {
-        след(&format!(
-            "систему опознать не удалось; зонд POSIX: {posix_ответ}"
-        ));
+        след(&format!("систему опознать не удалось; зонд POSIX: {posix_ответ}"));
     } else {
         след(&format!("система: {} ({})", found.0.as_str(), found.1));
     }
@@ -410,10 +407,7 @@ pub mod win {
                 continue;
             }
             // Собираем в тот же вид, что и journalctl: панель логов уже умеет его читать.
-            lines.push(format!(
-                "{} {} {}: {}",
-                parts[0], parts[1], parts[2], parts[3]
-            ));
+            lines.push(format!("{} {} {}: {}", parts[0], parts[1], parts[2], parts[3]));
         }
         json!({ "ok": true, "text": lines.join("\n"), "platform": "windows" })
     }
@@ -448,9 +442,7 @@ pub mod win {
                 Some("kernel") => kernel = at(1).to_string(),
                 Some("procs") => procs = Some(num(at(1)).max(0.0) as u64),
                 Some("sysdrive") => sysdrive = at(1).to_string(),
-                Some("disk") if p.len() >= 4 => {
-                    disks.push((at(1).to_string(), num(at(2)), num(at(3))))
-                }
+                Some("disk") if p.len() >= 4 => disks.push((at(1).to_string(), num(at(2)), num(at(3)))),
                 Some("net") if p.len() >= 4 => {
                     iface = at(1).to_string();
                     rx = Some(num(at(2)) as u64);
@@ -628,10 +620,7 @@ mod tests {
     /// обратно не соберётся.
     fn расшифровать(cmd: &str) -> String {
         use base64::Engine as _;
-        let payload = cmd
-            .rsplit(' ')
-            .next()
-            .expect("в команде нет полезной части");
+        let payload = cmd.rsplit(' ').next().expect("в команде нет полезной части");
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(payload)
             .expect("не base64");
@@ -649,10 +638,7 @@ mod tests {
         // сценария выполнялась им самим. В кодированной строке разбирать нечего.
         let cmd = ps("Get-Process | Select-Object -First 1");
         assert!(cmd.starts_with("powershell -NoProfile -NonInteractive -EncodedCommand "));
-        assert!(
-            !cmd.contains('"'),
-            "кавычек в команде быть не должно: {cmd}"
-        );
+        assert!(!cmd.contains('"'), "кавычек в команде быть не должно: {cmd}");
         assert!(!cmd.contains('|'), "вертикальной черты тоже: {cmd}");
         assert!(
             расшифровать(&cmd).ends_with("Get-Process | Select-Object -First 1"),
@@ -666,18 +652,9 @@ mod tests {
         // разделяет команды только в POSIX, а в `cmd.exe` это обычный символ довода, и
         // весь зонд читался как одна команда `uname` с мусором. Отсюда «непонятная»
         // система и команды Linux, уходившие на Windows.
-        assert!(
-            !PROBE_CMD.contains("ver"),
-            "виндовому вопросу не место в POSIX-зонде"
-        );
-        assert!(
-            !PROBE_CMD.contains("%OS%"),
-            "cmd не раскроет переменную в POSIX-строке"
-        );
-        assert!(
-            !PROBE_WINDOWS_CMD.contains(';'),
-            "точка с запятой ломает разбор в cmd"
-        );
+        assert!(!PROBE_CMD.contains("ver"), "виндовому вопросу не место в POSIX-зонде");
+        assert!(!PROBE_CMD.contains("%OS%"), "cmd не раскроет переменную в POSIX-строке");
+        assert!(!PROBE_WINDOWS_CMD.contains(';'), "точка с запятой ломает разбор в cmd");
 
         // А ответ второго зонда должен опознаваться как Windows - и в cmd, и в PowerShell
         // он одинаков.
@@ -784,10 +761,7 @@ WSearch\tStopped\tПоиск Windows
         let v = win::parse_logs(out);
         let text = v["text"].as_str().unwrap();
         assert!(text.contains("2026-09-05T10:00:00"), "нет времени: {text}");
-        assert!(
-            text.contains("Служба не запустилась"),
-            "нет сообщения: {text}"
-        );
+        assert!(text.contains("Служба не запустилась"), "нет сообщения: {text}");
     }
 
     #[test]
@@ -862,15 +836,10 @@ net\tEthernet\t1234567890\t987654321
     fn busybox_отдаёт_прочерк_вместо_выдуманной_загрузки() {
         // У BusyBox в `ps` нет колонки процессора вовсе. Ноль на этом месте читался бы
         // как «процесс простаивает» - это неправда, поэтому там null.
-        let out =
-            "MT\t8000000\nPID   USER     RSS  STAT COMMAND\n    1 root      4664 S    sshd -D\n";
+        let out = "MT\t8000000\nPID   USER     RSS  STAT COMMAND\n    1 root      4664 S    sshd -D\n";
         let v = busybox::parse_ps(out);
         let rows = v["rows"].as_array().unwrap();
-        assert_eq!(
-            rows.len(),
-            1,
-            "заголовок таблицы не должен попасть в строки"
-        );
+        assert_eq!(rows.len(), 1, "заголовок таблицы не должен попасть в строки");
         assert!(rows[0]["cpu"].is_null());
         assert_eq!(rows[0]["pid"], 1);
         assert_eq!(rows[0]["user"], "root");
@@ -915,10 +884,8 @@ net\tEthernet\t1234567890\t987654321
             service_cmd(Kind::BusyBox, "sshd", "start").unwrap(),
             "rc-service sshd start"
         );
-        assert!(
-            расшифровать(&service_cmd(Kind::Windows, "Spooler", "stop").unwrap())
-                .ends_with("Stop-Service -Name 'Spooler'")
-        );
+        assert!(расшифровать(&service_cmd(Kind::Windows, "Spooler", "stop").unwrap())
+            .ends_with("Stop-Service -Name 'Spooler'"));
     }
 
     #[test]
@@ -932,8 +899,7 @@ net\tEthernet\t1234567890\t987654321
     #[test]
     fn завершение_процесса_зависит_от_системы() {
         assert_eq!(kill_cmd(Kind::Linux, 42).unwrap(), "kill 42");
-        assert!(расшифровать(&kill_cmd(Kind::Windows, 42).unwrap())
-            .ends_with("Stop-Process -Id 42 -Force"));
+        assert!(расшифровать(&kill_cmd(Kind::Windows, 42).unwrap()).ends_with("Stop-Process -Id 42 -Force"));
         // Первый процесс - это init: снимать его нельзя ни на одной системе.
         assert!(kill_cmd(Kind::Windows, 1).is_err());
     }

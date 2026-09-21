@@ -70,9 +70,7 @@ pub fn copy_into(paths: &[String], dest_dir: &str) -> Result<u32, String> {
     let mut n = 0u32;
     for p in paths {
         let src = Path::new(p);
-        let name = src
-            .file_name()
-            .ok_or_else(|| format!("Некорректный путь: {p}"))?;
+        let name = src.file_name().ok_or_else(|| format!("Некорректный путь: {p}"))?;
         copy_item(src, &dest.join(name))?;
         n += 1;
     }

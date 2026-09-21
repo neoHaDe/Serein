@@ -179,11 +179,7 @@ pub fn forget(id: &str) {
 }
 
 /// Один замер: команда своя у юниксов и у Windows, разбор - в `monitor` и `platform`.
-pub async fn sample(
-    id: &str,
-    handle: &SharedHandle,
-    cancel: Option<CancelRx>,
-) -> Result<Value, String> {
+pub async fn sample(id: &str, handle: &SharedHandle, cancel: Option<CancelRx>) -> Result<Value, String> {
     let (kind, _) = crate::platform::of_session(id, handle).await;
     if kind == crate::platform::Kind::Windows {
         let (_c, out, err) = crate::ssh::exec(
