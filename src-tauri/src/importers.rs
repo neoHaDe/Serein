@@ -32,7 +32,7 @@ pub fn import_ssh_config() -> Result<usize, String> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let (key, val) = match line.split_once(|c: char| c == ' ' || c == '\t' || c == '=') {
+        let (key, val) = match line.split_once([' ', '\t', '=']) {
             Some((k, v)) => (k.trim().to_lowercase(), v.trim().to_string()),
             None => continue,
         };

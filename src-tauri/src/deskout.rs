@@ -28,9 +28,9 @@ impl Out {
         *crate::sync::lock(&self.0) = ch;
     }
 
-    /// Отправляет кадр текущему приёмнику. Ошибка значит «окно больше не слушает».
-    pub fn send(&self, body: InvokeResponseBody) -> Result<(), ()> {
-        crate::sync::lock(&self.0).send(body).map_err(|_| ())
+    /// Отправляет кадр текущему приёмнику. `false` значит «окно больше не слушает».
+    pub fn send(&self, body: InvokeResponseBody) -> bool {
+        crate::sync::lock(&self.0).send(body).is_ok()
     }
 }
 

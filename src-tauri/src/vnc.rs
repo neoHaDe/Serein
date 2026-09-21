@@ -393,7 +393,7 @@ async fn event_loop(
             VncEvent::SetPixelFormat(_) => continue,
             _ => continue,
         };
-        if out.send(InvokeResponseBody::Raw(msg)).is_err() {
+        if !out.send(InvokeResponseBody::Raw(msg)) {
             // Окно закрыли - дальше рисовать некому.
             return None;
         }

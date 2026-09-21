@@ -416,7 +416,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
   const uploadToRemote = async (paths: string[]): Promise<void> => {
     if (!paths.length) return
     const names = [...new Set(paths.map(localBaseName).filter(Boolean))]
-    let clash: string[] = []
+    let clash: string[]
     try {
       clash = await window.api.sftp.nameConflicts(sessionIdRef.current, pathRef.current, names)
     } catch {

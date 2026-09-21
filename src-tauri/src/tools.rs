@@ -350,8 +350,11 @@ pub fn request_line(method: &str, u: &Url) -> String {
     )
 }
 
+/// Разобранный ответ: код, строка состояния, заголовки и смещение тела.
+pub type ParsedResponse = (u16, String, Vec<(String, String)>, usize);
+
 /// Разбор ответа: строка состояния, заголовки и где начинается тело.
-pub fn parse_response(raw: &[u8]) -> Result<(u16, String, Vec<(String, String)>, usize), String> {
+pub fn parse_response(raw: &[u8]) -> Result<ParsedResponse, String> {
     let split = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -393,10 +396,7 @@ pub fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str
 pub fn dechunk(body: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut rest = body;
-    loop {
-        let Some(eol) = rest.windows(2).position(|w| w == b"\r\n") else {
-            break;
-        };
+    while let Some(eol) = rest.windows(2).position(|w| w == b"\r\n") {
         let size_line = String::from_utf8_lossy(&rest[..eol]);
         // После размера может идти «;расширение» - оно нас не касается.
         let size_hex = size_line.split(';').next().unwrap_or("").trim();

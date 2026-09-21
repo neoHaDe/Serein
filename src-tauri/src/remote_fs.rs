@@ -27,6 +27,12 @@ pub struct SessionFs {
     backend: Option<Backend>,
 }
 
+impl Default for SessionFs {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionFs {
     pub fn new() -> Self {
         Self { backend: None }

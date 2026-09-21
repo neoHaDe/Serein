@@ -418,7 +418,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
           <input
             type="text"
             value={settings.externalEditor ?? ''}
-            placeholder={platform === 'linux' ? 'например /usr/bin/gedit' : 'например C:\Program Files\Notepad++\notepad++.exe'}
+            placeholder={platform === 'linux' ? 'например /usr/bin/gedit' : 'например C:\\Program Files\\Notepad++\\notepad++.exe'}
             onChange={(e) => update({ externalEditor: e.target.value })}
           />
         </label>

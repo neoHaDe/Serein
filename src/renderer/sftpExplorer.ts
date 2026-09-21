@@ -123,7 +123,7 @@ export function sortEntries<T extends SortableEntry>(list: T[], sort: SftpSort):
     const ad = isDirLike(a)
     const bd = isDirLike(b)
     if (ad !== bd) return ad ? -1 : 1
-    let c = 0
+    let c: number
     switch (sort.col) {
       case 'ext':
         c = fileExt(a.name, ad).localeCompare(fileExt(b.name, bd), 'ru', { numeric: true })

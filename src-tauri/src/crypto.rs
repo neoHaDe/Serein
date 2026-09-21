@@ -18,6 +18,9 @@ pub struct Kdf {
 /// Набор 2009 года: им зашифровано всё, что создано до 2026-08-30. Читаем, но не пишем.
 pub const KDF_LEGACY: Kdf = Kdf { log_n: 14, r: 8, p: 1 };
 
+/// Новый набор обязан быть строже прежнего - это проверяется при сборке, а не в тесте.
+const _: () = assert!(KDF_CURRENT.log_n > KDF_LEGACY.log_n);
+
 /// Текущий набор - рекомендация OWASP для scrypt.
 ///
 /// N=2^17 это 128 МБ памяти на попытку против 16 МБ у прежнего: замер на рабочей машине
@@ -205,7 +208,6 @@ mod tests {
         let buf = STANDARD.decode(&packed).unwrap();
         assert_eq!(&buf[0..4], V2_MAGIC, "нет метки формата");
         assert_eq!(buf[4], KDF_CURRENT.log_n, "записан не текущий log2(N)");
-        assert!(KDF_CURRENT.log_n > KDF_LEGACY.log_n, "новый набор должен быть строже");
     }
 
     #[test]

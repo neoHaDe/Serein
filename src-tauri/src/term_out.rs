@@ -243,7 +243,7 @@ enum Esc {
     Start,
     Csi,
     Osc,
-    OscEsc,
+    OscEscape,
 }
 
 fn logs() -> &'static Mutex<HashMap<String, LogSink>> {
@@ -275,10 +275,10 @@ fn strip_ansi_into(state: &mut Esc, s: &str, out: &mut String) {
             }
             Esc::Osc => match ch {
                 '\x07' => *state = Esc::None,
-                '\x1b' => *state = Esc::OscEsc,
+                '\x1b' => *state = Esc::OscEscape,
                 _ => {}
             },
-            Esc::OscEsc => *state = Esc::None,
+            Esc::OscEscape => *state = Esc::None,
         }
     }
 }

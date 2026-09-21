@@ -31,7 +31,7 @@ pub async fn connect_agent_stream() -> Result<impl AsyncRead + AsyncWrite + Unpi
                 return Ok(stream);
             }
         }
-        ClientOptions::new().open(WIN_PIPE).map_err(|e| agent_err(e))
+        ClientOptions::new().open(WIN_PIPE).map_err(agent_err)
     }
 }
 
@@ -44,8 +44,8 @@ pub async fn agent_roundtrip(payload: &[u8]) -> Result<Vec<u8>, String> {
         return Err("Некорректное сообщение SSH-агента".into());
     }
     let mut stream = connect_agent_stream().await?;
-    stream.write_all(payload).await.map_err(|e| agent_err(e))?;
-    stream.flush().await.map_err(|e| agent_err(e))?;
+    stream.write_all(payload).await.map_err(agent_err)?;
+    stream.flush().await.map_err(agent_err)?;
 
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await.map_err(|e| match e.kind() {
@@ -57,7 +57,7 @@ pub async fn agent_roundtrip(payload: &[u8]) -> Result<Vec<u8>, String> {
         return Err("Слишком большой ответ SSH-агента".into());
     }
     let mut body = vec![0u8; len];
-    stream.read_exact(&mut body).await.map_err(|e| agent_err(e))?;
+    stream.read_exact(&mut body).await.map_err(agent_err)?;
     let mut out = Vec::with_capacity(4 + len);
     out.extend_from_slice(&len_buf);
     out.extend(body);
@@ -157,7 +157,7 @@ pub async fn authenticate_with_agent(
     preferred: Option<&str>,
 ) -> Result<bool, String> {
     let mut agent = connect_agent().await?;
-    let keys = agent.request_identities().await.map_err(|e| agent_err(e))?;
+    let keys = agent.request_identities().await.map_err(agent_err)?;
     if keys.is_empty() {
         return Err("В SSH-агенте нет ключей. Добавьте ключ: ssh-add.".into());
     }

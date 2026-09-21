@@ -9,6 +9,8 @@ import { AuxReattachButton } from './AuxReattachButton'
 
 type LogKind = 'err' | 'warn' | 'info' | 'debug' | ''
 
+// Управляющий символ здесь по делу: ANSI-последовательность начинается именно с него.
+// eslint-disable-next-line no-control-regex
 const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g
 
 export function stripAnsi(text: string): string {
@@ -30,7 +32,7 @@ function kindOfWord(w: string): LogKind {
 
 function lineKind(line: string): LogKind {
   const m = line.match(
-    /(?:^|[=\s/\[(])((?:ERROR|ERR|FATAL|CRITICAL|CRIT|PANIC|WARN(?:ING)?|INFO|NOTICE|DEBUG|TRACE))(?:\b|[\]\s)])/i
+    /(?:^|[=\s/[(])((?:ERROR|ERR|FATAL|CRITICAL|CRIT|PANIC|WARN(?:ING)?|INFO|NOTICE|DEBUG|TRACE))(?:\b|[\]\s)])/i
   )
   if (m) return kindOfWord(m[1])
   const low = line.toLowerCase()

@@ -542,19 +542,20 @@ pub(crate) fn ssh_client_config(server: &Value) -> Arc<client::Config> {
 }
 
 fn base_client_config(server: &Value) -> client::Config {
-    let mut cfg = client::Config::default();
-    // Наборы алгоритмов зависят от профиля: сжатие и режим совместимости со старым железом.
-    cfg.preferred = crate::ssh_algos::preferred_for(server);
-    cfg.window_size = 32 * 1024 * 1024;
-    cfg.maximum_packet_size = 32 * 1024;
-    cfg.keepalive_interval = Some(std::time::Duration::from_secs(15));
-    cfg.keepalive_max = 8;
-    // По умолчанию russh оставляет сокету алгоритм Нейгла, и ядро придерживает мелкие
-    // пакеты, пока не подтверждён предыдущий. Мелкие пакеты у нас - это нажатия в
-    // терминале, движения мыши на рабочем столе и подтверждения окна канала: ровно то,
-    // что должно уходить сразу. OpenSSH для интерактивных сессий делает то же самое.
-    cfg.nodelay = true;
-    cfg
+    client::Config {
+        // Наборы алгоритмов зависят от профиля: сжатие и режим совместимости со старым железом.
+        preferred: crate::ssh_algos::preferred_for(server),
+        window_size: 32 * 1024 * 1024,
+        maximum_packet_size: 32 * 1024,
+        keepalive_interval: Some(std::time::Duration::from_secs(15)),
+        keepalive_max: 8,
+        // По умолчанию russh оставляет сокету алгоритм Нейгла, и ядро придерживает мелкие
+        // пакеты, пока не подтверждён предыдущий. Мелкие пакеты у нас - это нажатия в
+        // терминале, движения мыши на рабочем столе и подтверждения окна канала: ровно то,
+        // что должно уходить сразу. OpenSSH для интерактивных сессий делает то же самое.
+        nodelay: true,
+        ..client::Config::default()
+    }
 }
 
 /// Настройки соединения под рабочий стол.

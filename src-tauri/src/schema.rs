@@ -119,9 +119,7 @@ pub fn migrate(dir: &Path) -> Result<(), String> {
 /// поменяется, здесь появится ветка, а вся обвязка (копия, порядок, отказ при откате)
 /// уже будет проверена тестами.
 fn step(_dir: &Path, from: u32) -> Result<u32, String> {
-    match from {
-        other => Err(format!("нет шага миграции со схемы {other}")),
-    }
+    Err(format!("нет шага миграции со схемы {from}"))
 }
 
 #[cfg(test)]

@@ -93,20 +93,14 @@ pub async fn search(p: Params) -> Result<Value, String> {
     // Соединение - отдельная задача, качающая байты. Без неё запросы не поедут.
     ldap3::drive!(conn);
 
-    match (
-        p.bind_dn.as_deref().filter(|s| !s.trim().is_empty()),
-        p.password.as_deref(),
-    ) {
-        (Some(dn), pass) => {
-            ldap.simple_bind(dn, pass.unwrap_or(""))
-                .await
-                .map_err(|e| format!("Каталог не ответил на попытку входа: {e}"))?
-                .success()
-                .map_err(|e| format!("Каталог не пустил: {e}"))?;
-        }
-        // Анонимный вход - законный сценарий: часть каталогов отдаёт публичную ветку без
-        // учётных данных, и проверять доступность удобнее именно так.
-        (None, _) => {}
+    // Пустой `bindDn` - это анонимный вход, законный сценарий: часть каталогов отдаёт
+    // публичную ветку без учётных данных, и проверять доступность удобнее именно так.
+    if let Some(dn) = p.bind_dn.as_deref().filter(|s| !s.trim().is_empty()) {
+        ldap.simple_bind(dn, p.password.as_deref().unwrap_or(""))
+            .await
+            .map_err(|e| format!("Каталог не ответил на попытку входа: {e}"))?
+            .success()
+            .map_err(|e| format!("Каталог не пустил: {e}"))?;
     }
 
     let (rs, _res) = ldap

@@ -581,7 +581,7 @@ fn spawn_pipes(
                     ));
                 }
             }
-            if out.send(InvokeResponseBody::Raw(body)).is_err() {
+            if !out.send(InvokeResponseBody::Raw(body)) {
                 break "интерфейс больше не слушает".to_owned();
             }
             frames += 1;

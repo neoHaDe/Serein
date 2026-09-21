@@ -54,6 +54,11 @@ jobs:
       - name: tsc
         run: npm run typecheck
 
+      # Линтер держит узкий набор правил: типы уже проверил `tsc`, а здесь ловятся промахи
+      # с хуками React и ловушки регулярных выражений - то, чего компилятор не видит.
+      - name: eslint
+        run: npm run lint
+
       - name: тесты фронтенда
         run: npm test
 
@@ -115,6 +120,16 @@ jobs:
       - name: Помощник RDP
         shell: bash
         run: bash scripts/build-rdp-helper.sh debug
+
+      # Формат и clippy проверяем один раз, на Linux: они не зависят от платформы, а
+      # гонять их дважды - минута впустую на каждый пуш.
+      - name: cargo fmt
+        if: runner.os == 'Linux'
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: clippy
+        if: runner.os == 'Linux'
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
 
       - name: cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked

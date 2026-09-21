@@ -184,80 +184,6 @@ pub(crate) fn read_json(name: &str) -> Result<Option<Value>, String> {
     read_checked(name)
 }
 
-#[cfg(test)]
-mod store_tests {
-    use super::*;
-
-    /// Своё имя файла на каждый тест: профиль здесь настоящий, соседей трогать нельзя.
-    fn имя(tag: &str) -> String {
-        format!("тест-{tag}-{}.json", Uuid::new_v4().simple())
-    }
-
-    #[test]
-    fn повреждённый_файл_не_перезаписывается() {
-        // Раньше нечитаемый файл выглядел как пустой список, и первое же сохранение
-        // записывало этот пустой список на его место. Потерять профиль можно было одной
-        // прерванной записью.
-        let name = имя("битый");
-        let path = dir().join(&name);
-        fs::write(&path, "{ это не json").unwrap();
-
-        let err = list_items_strict(&name).expect_err("битый файл обязан быть отказом");
-        assert!(err.contains("повреждён"), "объяснение должно называть причину: {err}");
-        assert!(
-            upsert_item(&name, json!({ "id": "1" })).is_err(),
-            "поверх нечитаемого файла не пишем"
-        );
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            "{ это не json",
-            "файл обязан остаться как был"
-        );
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn запись_не_оставляет_после_себя_временных_файлов() {
-        let name = имя("целый");
-        write_value(&name, &json!({ "a": 1 })).unwrap();
-        assert_eq!(read_checked(&name).unwrap().unwrap()["a"], 1);
-
-        let хвосты: Vec<String> = fs::read_dir(dir())
-            .unwrap()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|n| n.starts_with(&format!(".{name}.tmp-")))
-            .collect();
-        assert!(хвосты.is_empty(), "остались временные файлы: {хвосты:?}");
-        let _ = fs::remove_file(dir().join(&name));
-    }
-
-    #[test]
-    fn повреждённые_настройки_не_выключают_закрытый_контур() {
-        // Приложение, которому велели не ходить в интернет, не должно начать ходить из-за
-        // одного испорченного байта в файле настроек.
-        let битые = settings_from(Err("файл settings.json повреждён".into()));
-        assert_eq!(битые["offline"], true, "при нечитаемом файле контур закрыт");
-        assert_eq!(битые["theme"], default_settings()["theme"], "остальное - по умолчанию");
-
-        // Файла нет вовсе - это первый запуск, а не беда: берём умолчания как есть, и
-        // закрытый контур сам собой не включается.
-        assert_ne!(settings_from(Ok(None))["offline"], true);
-
-        // Обычный случай: сохранённое перекрывает умолчания.
-        let свои = settings_from(Ok(Some(json!({ "offline": true, "fontSize": 18 }))));
-        assert_eq!(свои["offline"], true);
-        assert_eq!(свои["fontSize"], 18);
-    }
-
-    #[test]
-    fn нет_файла_и_нечитаемый_файл_различаются() {
-        // На этом различии держится вся защита: «нет» - это начать с чистого листа,
-        // «не прочитать» - это остановиться и не трогать.
-        assert!(read_checked(&имя("отсутствует")).unwrap().is_none());
-    }
-}
-
 // ---------- Настройки ----------
 
 fn default_settings() -> Value {
@@ -743,3 +669,77 @@ pub fn task_runs_add(run: Value, keep: usize) -> Result<(), String> {
 // Заглушка, чтобы избежать предупреждения о неиспользуемом импорте Map в некоторых конфигурациях.
 #[allow(dead_code)]
 fn _unused(_m: Map<String, Value>) {}
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+
+    /// Своё имя файла на каждый тест: профиль здесь настоящий, соседей трогать нельзя.
+    fn имя(tag: &str) -> String {
+        format!("тест-{tag}-{}.json", Uuid::new_v4().simple())
+    }
+
+    #[test]
+    fn повреждённый_файл_не_перезаписывается() {
+        // Раньше нечитаемый файл выглядел как пустой список, и первое же сохранение
+        // записывало этот пустой список на его место. Потерять профиль можно было одной
+        // прерванной записью.
+        let name = имя("битый");
+        let path = dir().join(&name);
+        fs::write(&path, "{ это не json").unwrap();
+
+        let err = list_items_strict(&name).expect_err("битый файл обязан быть отказом");
+        assert!(err.contains("повреждён"), "объяснение должно называть причину: {err}");
+        assert!(
+            upsert_item(&name, json!({ "id": "1" })).is_err(),
+            "поверх нечитаемого файла не пишем"
+        );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "{ это не json",
+            "файл обязан остаться как был"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn запись_не_оставляет_после_себя_временных_файлов() {
+        let name = имя("целый");
+        write_value(&name, &json!({ "a": 1 })).unwrap();
+        assert_eq!(read_checked(&name).unwrap().unwrap()["a"], 1);
+
+        let хвосты: Vec<String> = fs::read_dir(dir())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with(&format!(".{name}.tmp-")))
+            .collect();
+        assert!(хвосты.is_empty(), "остались временные файлы: {хвосты:?}");
+        let _ = fs::remove_file(dir().join(&name));
+    }
+
+    #[test]
+    fn повреждённые_настройки_не_выключают_закрытый_контур() {
+        // Приложение, которому велели не ходить в интернет, не должно начать ходить из-за
+        // одного испорченного байта в файле настроек.
+        let битые = settings_from(Err("файл settings.json повреждён".into()));
+        assert_eq!(битые["offline"], true, "при нечитаемом файле контур закрыт");
+        assert_eq!(битые["theme"], default_settings()["theme"], "остальное - по умолчанию");
+
+        // Файла нет вовсе - это первый запуск, а не беда: берём умолчания как есть, и
+        // закрытый контур сам собой не включается.
+        assert_ne!(settings_from(Ok(None))["offline"], true);
+
+        // Обычный случай: сохранённое перекрывает умолчания.
+        let свои = settings_from(Ok(Some(json!({ "offline": true, "fontSize": 18 }))));
+        assert_eq!(свои["offline"], true);
+        assert_eq!(свои["fontSize"], 18);
+    }
+
+    #[test]
+    fn нет_файла_и_нечитаемый_файл_различаются() {
+        // На этом различии держится вся защита: «нет» - это начать с чистого листа,
+        // «не прочитать» - это остановиться и не трогать.
+        assert!(read_checked(&имя("отсутствует")).unwrap().is_none());
+    }
+}

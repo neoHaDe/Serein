@@ -790,11 +790,17 @@ export function DockerPanel({
       setFilesEntries([])
       setFilesError(null)
     }
+    // Следим за сменой контейнера, а не за объектом: список обновляется каждые
+    // несколько секунд и создаёт новый объект, от которого логи перезапускались бы.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id])
 
   useEffect(() => {
     if (!docked || !selected || detailPane !== 'files') return
     void reloadFiles(selected, filesPath)
+    // Следим за сменой контейнера, а не за объектом: список обновляется каждые
+    // несколько секунд и создаёт новый объект, от которого логи перезапускались бы.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docked, selected?.id, detailPane, filesPath, reloadFiles])
 
   useEffect(() => {
@@ -815,6 +821,9 @@ export function DockerPanel({
       setFollowing(false)
       setLogsText('')
     }
+    // Следим за сменой контейнера, а не за объектом: список обновляется каждые
+    // несколько секунд и создаёт новый объект, от которого логи перезапускались бы.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docked, selected?.id, detailPane, sessionId, beginLogs])
 
   useEffect(() => {

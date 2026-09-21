@@ -366,11 +366,9 @@ impl Negotiator {
                     reply.extend_from_slice(&[IAC, WONT, opt]);
                 }
             }
-            DONT => {
-                if self.us.get(&opt) != Some(&false) {
-                    self.us.insert(opt, false);
-                    reply.extend_from_slice(&[IAC, WONT, opt]);
-                }
+            DONT if self.us.get(&opt) != Some(&false) => {
+                self.us.insert(opt, false);
+                reply.extend_from_slice(&[IAC, WONT, opt]);
             }
             _ => {}
         }

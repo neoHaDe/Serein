@@ -193,7 +193,7 @@ pub fn disable(password: &str) -> Value {
     if crypto::aes_decrypt(verifier, &key).ok().as_deref() != Some(VERIFY_TOKEN) {
         return json!({ "ok": false, "error": "Неверный пароль" });
     }
-    vaultkey::set(Some(key.clone()));
+    vaultkey::set(Some(key));
     let plain = match crate::store::export_all_secrets() {
         Ok(p) => p,
         Err(e) => return json!({ "ok": false, "error": e }),
