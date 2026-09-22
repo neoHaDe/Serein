@@ -46,29 +46,11 @@ pub async fn workspace_kill(state: State<'_, AppState>, session_id: String, pid:
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     // `kill` в Windows нет: там процесс снимает PowerShell.
     let (kind, _) = platform::of_session(&session_id, &s.handle).await;
-    let cmd = platform::kill_cmd(kind, pid)?;
-    let (code, _out, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
-    if code != 0 {
-        let error = if err.trim().is_empty() {
-            format!("kill завершился с кодом {code}")
-        } else {
-            err.trim().to_string()
-        };
-        actionlog::record_session(
-            &session_id,
-            "process.kill",
-            json!({ "pid": pid }),
-            &Err::<(), _>(&error),
-        );
-        return Ok(json!({ "ok": false, "error": error }));
-    }
-    actionlog::record_session(
-        &session_id,
-        "process.kill",
-        json!({ "pid": pid }),
-        &Ok::<(), String>(()),
-    );
-    Ok(json!({ "ok": true }))
+    let cmd = platform::kill_cmd(kind, pid);
+    run_action(&s, &session_id, "process.kill", json!({ "pid": pid }), cmd, |code| {
+        format!("kill завершился с кодом {code}")
+    })
+    .await
 }
 
 #[tauri::command]
@@ -98,29 +80,39 @@ pub async fn workspace_service_action(
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     // Управлять службой каждая система умеет по-своему: systemctl, rc-service, PowerShell.
     let (kind, _) = platform::of_session(&session_id, &s.handle).await;
-    let cmd = platform::service_cmd(kind, &name, &action)?;
-    let (code, _out, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
-    if code != 0 {
-        let error = if err.trim().is_empty() {
-            format!("Служба {name}: действие {action} вернуло код {code}")
-        } else {
-            err.trim().to_string()
-        };
-        actionlog::record_session(
-            &session_id,
-            "service.action",
-            json!({ "name": name, "action": action }),
-            &Err::<(), _>(&error),
-        );
-        return Ok(json!({ "ok": false, "error": error }));
-    }
-    actionlog::record_session(
-        &session_id,
-        "service.action",
-        json!({ "name": name, "action": action }),
-        &Ok::<(), String>(()),
-    );
-    Ok(json!({ "ok": true }))
+    let cmd = platform::service_cmd(kind, &name, &action);
+    let detail = json!({ "name": name, "action": action });
+    run_action(&s, &session_id, "service.action", detail, cmd, |code| {
+        format!("Служба {name}: действие {action} вернуло код {code}")
+    })
+    .await
+}
+
+/// Действие над хостом с записью в журнал.
+///
+/// Отказ до сервера (pid 1, недопустимое имя службы) и неудача на сервере приходят в панель
+/// одинаково - `{ok: false, error}` - и оба пишутся в журнал. Ошибку вызова панель не
+/// показывает: строка осталась бы «занятой», а человек - без объяснения.
+async fn run_action(
+    s: &ssh::SshSession,
+    session_id: &str,
+    action: &str,
+    detail: Value,
+    cmd: Result<String, String>,
+    fallback: impl FnOnce(i32) -> String,
+) -> Result<Value, String> {
+    let result = match cmd {
+        Ok(cmd) => {
+            let (code, _out, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
+            ssh::exit_result(code, &err, || fallback(code))
+        }
+        Err(e) => Err(e),
+    };
+    actionlog::record_session(session_id, action, detail, &result);
+    Ok(match result {
+        Ok(()) => json!({ "ok": true }),
+        Err(e) => json!({ "ok": false, "error": e }),
+    })
 }
 
 #[tauri::command]

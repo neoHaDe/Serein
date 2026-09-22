@@ -220,13 +220,7 @@ pub async fn keygen_install(
 ) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let (code, _o, err) = ssh::exec(&s.handle, &keygen::install_cmd(&public_key), Some(s.cancel.subscribe())).await?;
-    if code != 0 {
-        return Err(if err.trim().is_empty() {
-            format!("Код {code}")
-        } else {
-            err.trim().to_string()
-        });
-    }
+    ssh::exit_result(code, &err, || format!("Код {code}"))?;
     Ok(json!({ "installed": true }))
 }
 
