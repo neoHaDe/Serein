@@ -493,7 +493,7 @@ export const api = {
     ): Promise<string> => {
       const channel = new Channel<ArrayBuffer>()
       channel.onmessage = onFrame
-      return invoke('rdp_open', { sessionId, onFrame: channel, ...opts })
+      return invoke('rdp_open', { sessionId, onFrame: channel, opts })
     },
     pointer: (id: string, x: number, y: number, buttons: number): Promise<void> =>
       invoke('rdp_pointer', { id, x, y, buttons }),

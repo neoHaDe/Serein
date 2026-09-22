@@ -392,68 +392,42 @@ async fn run_setup_step(
 /// Протокол разбирает отдельный процесс, а не этот модуль: зависимости IronRDP не
 /// сходятся с SSH-ядром в одном дереве, подробности в `rdp.rs`. Приложение здесь держит
 /// канал внутри SSH-сессии и подставляет его помощнику локальным сокетом.
-// Параметры приходят из интерфейса по именам. В одну структуру с тестами на разбор они
-// уйдут следующим шагом - вместе с остальными командами стола.
-#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn rdp_open(
     state: State<'_, AppState>,
     session_id: String,
-    host: Option<String>,
-    port: Option<u16>,
-    user: String,
-    password: String,
-    domain: Option<String>,
-    width: Option<u16>,
-    height: Option<u16>,
-    color_depth: Option<u16>,
-    economy: Option<bool>,
-    autologon: Option<bool>,
-    network_profile: Option<String>,
+    opts: rdp::OpenRequest,
     on_frame: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
 ) -> Result<String, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     // Прежний стол этой сессии закрываем сами, а не надеемся на панель.
     close_desktop_of(&session_id);
+    let req = opts.resolve()?;
+    // Политику - до отдельного SSH-соединения стола: поднимать его ради отказа незачем.
+    policy::check_target(&req.host, "рабочий стол RDP")?;
     let id = format!("rdp-{}", uuid::Uuid::new_v4());
-    let network_profile = match network_profile.as_deref().unwrap_or("vpn") {
-        "vpn" => rdp::NetworkProfile::Vpn,
-        "lan" => rdp::NetworkProfile::Lan,
-        other => return Err(format!("неизвестный профиль сети RDP: {other}")),
-    };
     // Для медленного канала окно меньше и поток сжимается на уровне SSH: сжатие внутри
     // RDP (MPPC) ломает пересогласование после смены размера, подробности в помощнике.
-    let link = match network_profile {
+    let link = match req.options.network_profile {
         rdp::NetworkProfile::Vpn => desktop_link(&s.server_id, DESKTOP_WINDOW_VPN, true).await,
         rdp::NetworkProfile::Lan => desktop_link(&s.server_id, DESKTOP_WINDOW_LAN, false).await,
     };
-    policy::check_target(host.as_deref().unwrap_or("127.0.0.1"), "рабочий стол RDP")?;
-    let journal = json!({
-        "host": host.as_deref().unwrap_or("127.0.0.1"),
-        "port": port.unwrap_or(3389),
-        "user": &user,
-        "domain": &domain,
-    });
+    let journal = req.journal();
     let target = rdp::Target::Ssh {
         handle: link.as_ref().map_or_else(|| s.handle.clone(), |l| l.handle.clone()),
-        host: host.unwrap_or_else(|| "127.0.0.1".to_owned()),
-        port: port.unwrap_or(3389),
+        host: req.host,
+        port: req.port,
         link,
     };
     let r = rdp::open(
         id.clone(),
         session_id.clone(),
         target,
-        user,
-        password,
-        domain,
-        (width.unwrap_or(1280), height.unwrap_or(800)),
-        rdp::Options {
-            color_depth: color_depth.unwrap_or(16),
-            economy: economy.unwrap_or(true),
-            autologon: autologon.unwrap_or(true),
-            network_profile,
-        },
+        req.user,
+        req.password,
+        req.domain,
+        req.size,
+        req.options,
         on_frame,
     )
     .await;

@@ -180,6 +180,76 @@ impl Default for Options {
     }
 }
 
+/// Запрос на сеанс так, как его присылает форма подключения.
+///
+/// Всё необязательное получает умолчание в [`OpenRequest::resolve`] - в одном месте, а не по
+/// месту использования. `Debug` нет намеренно: в запросе пароль.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRequest {
+    /// Адрес RDP со стороны SSH-сервера. Умолчание - петля самого сервера.
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub user: String,
+    pub password: String,
+    pub domain: Option<String>,
+    pub width: Option<u16>,
+    pub height: Option<u16>,
+    pub color_depth: Option<u16>,
+    pub economy: Option<bool>,
+    pub autologon: Option<bool>,
+    /// `vpn` или `lan`; умолчание - `vpn`, экономичный.
+    pub network_profile: Option<String>,
+}
+
+/// Разобранный запрос: умолчания подставлены, профиль сети проверен.
+pub struct Resolved {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub password: String,
+    pub domain: Option<String>,
+    pub size: (u16, u16),
+    pub options: Options,
+}
+
+impl OpenRequest {
+    pub fn resolve(self) -> Result<Resolved, String> {
+        let network_profile = match self.network_profile.as_deref().unwrap_or("vpn") {
+            "vpn" => NetworkProfile::Vpn,
+            "lan" => NetworkProfile::Lan,
+            other => return Err(format!("неизвестный профиль сети RDP: {other}")),
+        };
+        let d = Options::default();
+        Ok(Resolved {
+            host: self.host.unwrap_or_else(|| "127.0.0.1".to_owned()),
+            port: self.port.unwrap_or(3389),
+            user: self.user,
+            password: self.password,
+            domain: self.domain,
+            size: (self.width.unwrap_or(1280), self.height.unwrap_or(800)),
+            options: Options {
+                color_depth: self.color_depth.unwrap_or(d.color_depth),
+                economy: self.economy.unwrap_or(d.economy),
+                autologon: self.autologon.unwrap_or(d.autologon),
+                network_profile,
+            },
+        })
+    }
+}
+
+impl Resolved {
+    /// Что пишется в журнал действий: куда и под кем. Пароля здесь нет и быть не должно.
+    pub fn journal(&self) -> serde_json::Value {
+        serde_json::json!({
+            "host": self.host,
+            "port": self.port,
+            "user": self.user,
+            "domain": self.domain,
+        })
+    }
+}
+
 /// Куда подключаться: напрямую или каналом внутри уже живой SSH-сессии.
 pub enum Target {
     Tcp {
@@ -704,6 +774,55 @@ pub fn close_all() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn request(json: serde_json::Value) -> OpenRequest {
+        serde_json::from_value(json).expect("запрос разбирается")
+    }
+
+    #[test]
+    fn умолчания_rdp_подставляются_из_одного_места() {
+        let r = request(serde_json::json!({ "user": "u", "password": "p" }))
+            .resolve()
+            .unwrap();
+        let d = Options::default();
+        assert_eq!((r.host.as_str(), r.port), ("127.0.0.1", 3389));
+        assert_eq!(r.size, (1280, 800));
+        assert_eq!(r.options.color_depth, d.color_depth);
+        assert_eq!((r.options.economy, r.options.autologon), (d.economy, d.autologon));
+        assert_eq!(r.options.network_profile.as_str(), "vpn");
+    }
+
+    #[test]
+    fn поля_формы_rdp_приходят_в_camel_case() {
+        let r = request(serde_json::json!({
+            "host": "10.0.0.5", "port": 3390, "user": "u", "password": "p", "domain": "CORP",
+            "width": 1920, "height": 1080, "colorDepth": 32, "economy": false, "autologon": false,
+            "networkProfile": "lan",
+        }))
+        .resolve()
+        .unwrap();
+        assert_eq!((r.host.as_str(), r.port, r.size), ("10.0.0.5", 3390, (1920, 1080)));
+        assert_eq!(r.domain.as_deref(), Some("CORP"));
+        assert_eq!(r.options.color_depth, 32);
+        assert!(!r.options.economy && !r.options.autologon);
+        assert_eq!(r.options.network_profile.as_str(), "lan");
+    }
+
+    #[test]
+    fn неизвестный_профиль_сети_rdp_отклоняется() {
+        let r = request(serde_json::json!({ "user": "u", "password": "p", "networkProfile": "wifi" })).resolve();
+        assert_eq!(r.err().as_deref(), Some("неизвестный профиль сети RDP: wifi"));
+    }
+
+    #[test]
+    fn пароль_rdp_не_попадает_в_журнал() {
+        let r = request(serde_json::json!({ "user": "u", "password": "секрет-42" }))
+            .resolve()
+            .unwrap();
+        let j = r.journal();
+        assert!(!j.to_string().contains("секрет-42"));
+        assert_eq!(j["user"], "u");
+    }
 
     #[test]
     fn команды_собираются_в_строки_которые_понимает_помощник() {
