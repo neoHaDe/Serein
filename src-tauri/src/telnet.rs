@@ -405,7 +405,9 @@ fn connect_error(host: &str, port: u16, e: &std::io::Error) -> String {
     }
 }
 
+// Параметры открытия пока не собраны в одну структуру - снято только здесь.
 /// Открывает TCP-сессию (telnet или сырую) и запускает поток-читатель.
+#[allow(clippy::too_many_arguments)]
 pub fn open_tcp(
     app: AppHandle,
     id: String,

@@ -863,7 +863,10 @@ pub async fn write_file(
     Ok(json!({ "ok": true, "mtime": new_mtime }))
 }
 
+// Много параметров - долг слоя передач: они соберутся в структуру контекста передачи
+// отдельной правкой. Пока запрет снят только здесь, а не на весь крейт.
 /// Скачивает один файл с прогрессом (эмит `sftp-transfer`).
+#[allow(clippy::too_many_arguments)]
 async fn copy_remote_to_local(
     app: Option<&AppHandle>,
     ssh: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
@@ -883,6 +886,8 @@ async fn copy_remote_to_local(
     .await
 }
 
+// Тот же долг слоя передач, что и выше.
+#[allow(clippy::too_many_arguments)]
 async fn copy_remote_to_local_inner(
     ssh: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
     sftp: &SftpSession,
@@ -951,7 +956,9 @@ pub(crate) async fn create_part(part: &str) -> Result<tokio::fs::File, String> {
         .map_err(|e| format!("не создать временный файл {part}: {e}"))
 }
 
+// Тот же долг слоя передач, что и выше.
 /// `local` - будущее имя файла: оно идёт в отчёты о ходе передачи. `part` - куда пишем.
+#[allow(clippy::too_many_arguments)]
 async fn sequential_download(
     sftp: &SftpSession,
     app: Option<&AppHandle>,
@@ -1023,7 +1030,9 @@ async fn sequential_download(
     Ok(transferred)
 }
 
+// Тот же долг слоя передач, что и выше.
 /// Несколько SSH_FXP_READ в полёте - иначе download упирается в RTT и на 1 ГБ «замирает».
+#[allow(clippy::too_many_arguments)]
 async fn pipelined_download(
     ssh: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
     app: Option<&AppHandle>,
@@ -1161,6 +1170,8 @@ async fn pipelined_download(
     Ok(transferred)
 }
 
+// Тот же долг слоя передач, что и выше.
+#[allow(clippy::too_many_arguments)]
 async fn copy_local_to_remote(
     app: Option<&AppHandle>,
     sftp: &SftpSession,
@@ -1176,6 +1187,8 @@ async fn copy_local_to_remote(
     copy_local_to_remote_inner(sftp, app, item_id, session_id, local, remote, rel, size, alive, xfer).await
 }
 
+// Тот же долг слоя передач, что и выше.
+#[allow(clippy::too_many_arguments)]
 async fn copy_local_to_remote_inner(
     sftp: &SftpSession,
     app: Option<&AppHandle>,

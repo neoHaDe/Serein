@@ -239,7 +239,9 @@ fn helper_path() -> Result<std::path::PathBuf, String> {
     }
 }
 
+// Параметры сеанса пока не собраны в одну структуру - снято только здесь.
 /// Открывает сеанс RDP и запускает обмен.
+#[allow(clippy::too_many_arguments)]
 pub async fn open(
     id: String,
     ssh_id: String,

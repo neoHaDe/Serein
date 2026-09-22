@@ -230,6 +230,9 @@ pub async fn put_file_while(
     }
 }
 
+// Много параметров - долг слоя передач: они соберутся в структуру контекста передачи
+// отдельной правкой. Пока запрет снят только здесь, а не на весь крейт.
+#[allow(clippy::too_many_arguments)]
 pub async fn upload_path(
     app: AppHandle,
     fs: Arc<Mutex<SessionFs>>,
@@ -246,6 +249,8 @@ pub async fn upload_path(
     }
 }
 
+// Тот же долг слоя передач, что и выше.
+#[allow(clippy::too_many_arguments)]
 pub async fn download_path(
     app: AppHandle,
     fs: Arc<Mutex<SessionFs>>,
