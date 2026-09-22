@@ -1361,7 +1361,7 @@ async fn run_server(ctx: &RunCtx<'_>, server_id: String) -> Value {
         })
     };
 
-    let chain = match crate::resolve_chain_for(&server_id) {
+    let chain = match crate::commands::session::resolve_chain_for(&server_id) {
         Ok(c) => c,
         Err(e) => return finish("skipped", Some(e), Vec::new()),
     };

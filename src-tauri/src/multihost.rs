@@ -134,7 +134,7 @@ pub(crate) fn name_of(server_id: &str) -> String {
 async fn run_one(server_id: String, command: String, opts: RunOptions, cancel: ssh::CancelRx) -> Value {
     let name = name_of(&server_id);
 
-    let chain = match crate::resolve_chain_for(&server_id) {
+    let chain = match crate::commands::session::resolve_chain_for(&server_id) {
         Ok(c) => c,
         Err(e) => return skipped(&server_id, &name, e),
     };
