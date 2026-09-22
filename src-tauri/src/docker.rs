@@ -94,18 +94,31 @@ pub fn parse_stats(code: i32, stdout: &str, stderr: &str) -> Value {
     })
 }
 
-fn safe_id(id: &str) -> String {
-    id.chars()
-        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
-        .collect()
+/// Имя или id контейнера в том виде, в каком их принимает docker: латиница, цифры и `_ . -`,
+/// первым знаком - буква или цифра.
+///
+/// Остальное - отказ, а не обрезка. Обрезанное имя указывает на другой контейнер, пустое
+/// превращает `docker stats` в замер всех контейнеров сразу, а ведущий `-` docker прочёл бы
+/// как ключ.
+pub(crate) fn container_ref(id: &str) -> Result<&str, String> {
+    let mut chars = id.chars();
+    let first_ok = chars.next().is_some_and(|c| c.is_ascii_alphanumeric());
+    if first_ok && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')) {
+        Ok(id)
+    } else {
+        Err(format!(
+            "Недопустимое имя контейнера «{}»: только латиница, цифры и . _ -, первым - буква или цифра",
+            id.escape_debug()
+        ))
+    }
 }
 
-pub fn action_cmd(id: &str, action: &str) -> Option<String> {
+pub fn action_cmd(id: &str, action: &str) -> Result<String, String> {
     if !ACTIONS.contains(&action) {
-        return None;
+        return Err(format!("Неизвестное действие: {action}"));
     }
     let verb = if action == "remove" { "rm -f" } else { action };
-    Some(format!("docker {verb} {}", safe_id(id)))
+    Ok(format!("docker {verb} {}", container_ref(id)?))
 }
 
 /// Замер всех работающих контейнеров одним вызовом - для колонок CPU и памяти в списке.
@@ -150,37 +163,32 @@ pub fn parse_stats_all(code: i32, stdout: &str, stderr: &str) -> Value {
     json!({ "ok": true, "stats": stats })
 }
 
-pub fn stats_cmd(id: &str) -> String {
-    format!("docker stats --no-stream --format \"{{{{json .}}}}\" {}", safe_id(id))
+pub fn stats_cmd(id: &str) -> Result<String, String> {
+    Ok(format!(
+        "docker stats --no-stream --format \"{{{{json .}}}}\" {}",
+        container_ref(id)?
+    ))
 }
 
-pub fn logs_cmd(id: &str) -> String {
-    format!("docker logs --tail 200 -f {} 2>&1", safe_id(id))
+pub fn logs_cmd(id: &str) -> Result<String, String> {
+    Ok(format!("docker logs --tail 200 -f {} 2>&1", container_ref(id)?))
 }
 
-fn safe_container_path(p: &str) -> Option<String> {
-    let p = p.trim();
-    if p.is_empty() || p.contains("..") || p.contains('\n') || p.contains(';') || !p.starts_with('/') {
-        return None;
-    }
-    let clean: String = p
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '/' || *c == '.' || *c == '_' || *c == '-' || *c == ' ')
-        .collect();
-    if clean.is_empty() {
-        None
+/// Путь внутри контейнера. В команду он идёт в кавычках и после `--`, поэтому годится любой
+/// абсолютный путь без управляющих знаков - и с пробелами, и с кириллицей. Обрезать его нельзя:
+/// откроется другой каталог.
+fn container_path(p: &str) -> Result<&str, String> {
+    if p.starts_with('/') && !p.chars().any(char::is_control) {
+        Ok(p)
     } else {
-        Some(clean)
+        Err(format!("Недопустимый путь в контейнере: «{}»", p.escape_debug()))
     }
 }
 
-pub fn files_cmd(id: &str, path: &str) -> Option<String> {
-    let p = safe_container_path(path)?;
-    let cid = safe_id(id);
-    if cid.is_empty() {
-        return None;
-    }
-    Some(format!("docker exec {} ls -1F -- {}", cid, shell_quote(&p)))
+pub fn files_cmd(id: &str, path: &str) -> Result<String, String> {
+    let cid = container_ref(id)?;
+    let p = container_path(path)?;
+    Ok(format!("docker exec {} ls -1F -- {}", cid, shell_quote(p)))
 }
 
 fn shell_quote(s: &str) -> String {
@@ -291,7 +299,40 @@ operable program or batch file.",
 
     #[test]
     fn action_whitelist() {
-        assert!(action_cmd("abc", "restart").is_some());
-        assert!(action_cmd("abc", "rm").is_none());
+        assert_eq!(action_cmd("abc", "restart").unwrap(), "docker restart abc");
+        assert_eq!(action_cmd("abc", "remove").unwrap(), "docker rm -f abc");
+        assert!(action_cmd("abc", "rm").is_err());
+    }
+
+    #[test]
+    fn имя_контейнера_проверяется_а_не_обрезается() {
+        assert_eq!(action_cmd("my_app.web-1", "stop").unwrap(), "docker stop my_app.web-1");
+        // Раньше отсюда получалось `docker stop webrm-rf` - то есть другой контейнер.
+        for bad in ["web;rm -rf /", "web x", "", "-f", "--help", "веб", "a\nb", "a$(id)"] {
+            assert!(action_cmd(bad, "stop").is_err(), "{bad:?}");
+            assert!(logs_cmd(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn пустое_имя_не_превращает_замер_в_замер_всех_контейнеров() {
+        assert!(stats_cmd("").is_err());
+        assert!(stats_cmd("abc").unwrap().ends_with(" abc"));
+    }
+
+    #[test]
+    fn путь_в_контейнере_берётся_целиком() {
+        assert_eq!(
+            files_cmd("abc", "/srv/my app/данные").unwrap(),
+            "docker exec abc ls -1F -- '/srv/my app/данные'"
+        );
+        assert_eq!(
+            files_cmd("abc", "/it's").unwrap(),
+            "docker exec abc ls -1F -- '/it'\\''s'"
+        );
+        for bad in ["relative", "", "/a\nb", "/a\0b"] {
+            assert!(files_cmd("abc", bad).is_err(), "{bad:?}");
+        }
+        assert!(files_cmd("-x", "/").is_err());
     }
 }

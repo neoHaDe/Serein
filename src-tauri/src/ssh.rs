@@ -1225,6 +1225,16 @@ pub async fn exec(
     exec_with(handle, command, cancel, |_| {}).await
 }
 
+/// Итог команды по коду выхода: ноль - успех, иначе текст stderr, а если сервер промолчал -
+/// `fallback`. Пустое сообщение об ошибке человеку ничего не скажет, поэтому его не бывает.
+pub fn exit_result(code: i32, stderr: &str, fallback: impl FnOnce() -> String) -> Result<(), String> {
+    if code == 0 {
+        return Ok(());
+    }
+    let err = stderr.trim();
+    Err(if err.is_empty() { fallback() } else { err.to_owned() })
+}
+
 /// Exec, которому на вход подаётся текст.
 ///
 /// Нужен ровно для одного: пароля `sudo`. Его нельзя подставлять в строку команды - она
@@ -1386,6 +1396,16 @@ impl OpHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn итог_команды_никогда_не_бывает_пустой_ошибкой() {
+        assert_eq!(exit_result(0, "шум в stderr", || "запас".into()), Ok(()));
+        assert_eq!(
+            exit_result(2, "  нет прав\n", || "запас".into()),
+            Err("нет прав".into())
+        );
+        assert_eq!(exit_result(2, " \n", || "код 2".into()), Err("код 2".into()));
+    }
 
     #[test]
     fn лазейка_доверия_ключам_живёт_только_в_отладочной_сборке() {

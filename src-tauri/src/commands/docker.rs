@@ -4,6 +4,12 @@ use crate::{actionlog, docker, docker_compose, ssh, AppState};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
+/// Отказ в том же виде, что и неудача на сервере: `{ok: false, error}`. Панель Docker умеет
+/// показывать только его - ошибка вызова оставила бы кнопку висеть в состоянии «занято».
+fn refused(error: String) -> Value {
+    json!({ "ok": false, "error": error })
+}
+
 #[tauri::command]
 pub async fn docker_list(state: State<'_, AppState>, id: String) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
@@ -19,23 +25,17 @@ pub async fn docker_action(
     action: String,
 ) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let cmd = docker::action_cmd(&container_id, &action).ok_or_else(|| format!("Неизвестное действие: {action}"))?;
-    let (code, _o, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
-    let result: Result<(), String> = if code != 0 {
-        Err(if err.trim().is_empty() {
-            format!("Код {code}")
-        } else {
-            err.trim().to_string()
-        })
-    } else {
-        Ok(())
+    let detail = json!({ "container": container_id, "action": action });
+    let cmd = match docker::action_cmd(&container_id, &action) {
+        Ok(cmd) => cmd,
+        Err(e) => {
+            actionlog::record_session(&id, "docker.action", detail, &Err::<(), _>(&e));
+            return Ok(refused(e));
+        }
     };
-    actionlog::record_session(
-        &id,
-        "docker.action",
-        json!({ "container": container_id, "action": action }),
-        &result,
-    );
+    let (code, _o, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
+    let result = ssh::exit_result(code, &err, || format!("Код {code}"));
+    actionlog::record_session(&id, "docker.action", detail, &result);
     Ok(match result {
         Ok(()) => json!({ "ok": true }),
         Err(e) => json!({ "ok": false, "error": e }),
@@ -50,27 +50,26 @@ pub async fn docker_logs(
     container_id: String,
 ) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
+    let cmd = match docker::logs_cmd(&container_id) {
+        Ok(cmd) => cmd,
+        Err(e) => return Ok(refused(e)),
+    };
     let key = format!("{id}:docker-logs:{container_id}");
     let op = state.ops.begin(&key);
     let cancel = ssh::race_cancel(s.cancel.subscribe(), op);
     let app2 = app.clone();
     let sid = id.clone();
     let cid = container_id.clone();
-    let result = ssh::exec_with(
-        &s.handle,
-        &docker::logs_cmd(&container_id),
-        Some(cancel),
-        move |chunk| {
-            if chunk.is_empty() {
-                return;
-            }
-            let text = String::from_utf8_lossy(chunk);
-            let _ = app2.emit(
-                "docker-logs",
-                json!({ "sessionId": sid, "containerId": cid, "chunk": text.as_ref() }),
-            );
-        },
-    )
+    let result = ssh::exec_with(&s.handle, &cmd, Some(cancel), move |chunk| {
+        if chunk.is_empty() {
+            return;
+        }
+        let text = String::from_utf8_lossy(chunk);
+        let _ = app2.emit(
+            "docker-logs",
+            json!({ "sessionId": sid, "containerId": cid, "chunk": text.as_ref() }),
+        );
+    })
     .await;
     state.ops.finish(&key);
     let (_c, out, _e) = result?;
@@ -88,7 +87,11 @@ pub async fn docker_stats_all(state: State<'_, AppState>, id: String) -> Result<
 #[tauri::command]
 pub async fn docker_stats(state: State<'_, AppState>, id: String, container_id: String) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let (code, out, err) = ssh::exec(&s.handle, &docker::stats_cmd(&container_id), Some(s.cancel.subscribe())).await?;
+    let cmd = match docker::stats_cmd(&container_id) {
+        Ok(cmd) => cmd,
+        Err(e) => return Ok(refused(e)),
+    };
+    let (code, out, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
     Ok(docker::parse_stats(code, &out, &err))
 }
 
@@ -108,7 +111,10 @@ pub async fn docker_container_files(
     path: String,
 ) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let cmd = docker::files_cmd(&container_id, &path).ok_or("Недопустимый путь")?;
+    let cmd = match docker::files_cmd(&container_id, &path) {
+        Ok(cmd) => cmd,
+        Err(e) => return Ok(refused(e)),
+    };
     let (code, out, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
     Ok(docker::parse_files(code, &out, &err, &path))
 }
@@ -151,7 +157,10 @@ pub async fn docker_compose_ps(
     project: String,
 ) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let cmd = docker_compose::ps_cmd(&compose_file, &project).ok_or("Недопустимые параметры compose")?;
+    let cmd = match docker_compose::ps_cmd(&compose_file, &project) {
+        Ok(cmd) => cmd,
+        Err(e) => return Ok(refused(e)),
+    };
     match docker_exec(&s.handle, &cmd, Some(s.cancel.subscribe()), 20).await {
         Ok((code, out, err)) => Ok(docker_compose::parse_ps(code, &out, &err)),
         Err(e) => Ok(json!({ "ok": false, "error": e })),
@@ -168,25 +177,17 @@ pub async fn docker_compose_action(
     service: Option<String>,
 ) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let svc = service.as_deref();
-    let cmd = docker_compose::action_cmd(&compose_file, &project, &action, svc)
-        .ok_or_else(|| format!("Неизвестное действие: {action}"))?;
-    let (code, _o, err) = docker_exec(&s.handle, &cmd, Some(s.cancel.subscribe()), 60).await?;
-    let result: Result<(), String> = if code != 0 {
-        Err(if err.trim().is_empty() {
-            format!("Код {code}")
-        } else {
-            err.trim().to_string()
-        })
-    } else {
-        Ok(())
+    let detail = json!({ "composeFile": compose_file, "project": project, "action": action, "service": service });
+    let cmd = match docker_compose::action_cmd(&compose_file, &project, &action, service.as_deref()) {
+        Ok(cmd) => cmd,
+        Err(e) => {
+            actionlog::record_session(&id, "docker.compose", detail, &Err::<(), _>(&e));
+            return Ok(refused(e));
+        }
     };
-    actionlog::record_session(
-        &id,
-        "docker.compose",
-        json!({ "composeFile": compose_file, "project": project, "action": action, "service": service }),
-        &result,
-    );
+    let (code, _o, err) = docker_exec(&s.handle, &cmd, Some(s.cancel.subscribe()), 60).await?;
+    let result = ssh::exit_result(code, &err, || format!("Код {code}"));
+    actionlog::record_session(&id, "docker.compose", detail, &result);
     Ok(match result {
         Ok(()) => json!({ "ok": true }),
         Err(e) => json!({ "ok": false, "error": e }),
@@ -200,7 +201,10 @@ pub async fn docker_compose_read(
     compose_file: String,
 ) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let cmd = docker_compose::read_compose_cmd(&compose_file).ok_or("Недопустимый compose-файл")?;
+    let cmd = match docker_compose::read_compose_cmd(&compose_file) {
+        Ok(cmd) => cmd,
+        Err(e) => return Ok(refused(e)),
+    };
     let (code, out, err) = ssh::exec(&s.handle, &cmd, Some(s.cancel.subscribe())).await?;
     Ok(docker_compose::parse_compose_text(code, &out, &err))
 }
@@ -215,7 +219,10 @@ pub async fn docker_compose_logs(
     service: String,
 ) -> Result<Value, String> {
     let s = state.ssh(&id).ok_or("Сессия не подключена")?;
-    let cmd = docker_compose::logs_cmd(&compose_file, &project, &service).ok_or("Недопустимые параметры")?;
+    let cmd = match docker_compose::logs_cmd(&compose_file, &project, &service) {
+        Ok(cmd) => cmd,
+        Err(e) => return Ok(refused(e)),
+    };
     let key = format!("{id}:compose-logs:{compose_file}:{service}");
     let op = state.ops.begin(&key);
     let cancel = ssh::race_cancel(s.cancel.subscribe(), op);

@@ -116,20 +116,43 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-fn safe_compose_file(p: &str) -> Option<String> {
+/// Путь к compose-файлу для ключа `-f`.
+///
+/// `Ok(None)` - пути нет или он не POSIX (сервер на Windows): команда пойдёт по имени проекта,
+/// так compose умеет всё, кроме `up`. Путь с управляющими знаками - отказ. Годный путь идёт
+/// в кавычках целиком: раньше из него вырезались пробелы и прочие знаки, и файл в каталоге
+/// с пробелом переставал находиться.
+fn compose_file(p: &str) -> Result<Option<&str>, String> {
     let p = p.trim();
-    if p.is_empty() || p.contains("..") || p.contains('\n') || p.contains(';') || !p.starts_with('/') {
-        return None;
+    if p.chars().any(char::is_control) {
+        return Err(format!("Недопустимый путь к compose-файлу: «{}»", p.escape_debug()));
     }
-    let clean: String = p
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '/' || *c == '.' || *c == '_' || *c == '-')
-        .collect();
-    if clean.is_empty() {
-        None
+    Ok(Some(p).filter(|p| p.starts_with('/')))
+}
+
+/// Имя проекта или службы: латиница, цифры и `_ . -`, первым знаком - буква или цифра.
+/// Отказ вместо обрезки: обрезанное имя - это другой проект, а ведущий `-` compose прочёл
+/// бы как ключ.
+fn compose_name<'a>(what: &str, name: &'a str) -> Result<&'a str, String> {
+    let mut chars = name.chars();
+    let first_ok = chars.next().is_some_and(|c| c.is_ascii_alphanumeric());
+    if first_ok && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')) {
+        Ok(name)
     } else {
-        Some(clean)
+        Err(format!(
+            "Недопустимое имя {what} «{}»: только латиница, цифры и . _ -, первым - буква или цифра",
+            name.escape_debug()
+        ))
     }
+}
+
+/// Начало любой команды над проектом: `docker compose [-f файл] -p проект`.
+fn base_cmd(file: Option<&str>, project: &str) -> Result<String, String> {
+    let proj = compose_name("проекта", project)?;
+    Ok(match file {
+        Some(f) => format!("docker compose -f {} -p {}", shell_quote(f), proj),
+        None => format!("docker compose -p {proj}"),
+    })
 }
 
 fn first_compose_file(raw: &str) -> String {
@@ -146,26 +169,6 @@ fn guess_compose_file(working_dir: &str) -> String {
         return String::new();
     }
     format!("{wd}/docker-compose.yml")
-}
-
-fn safe_project(name: &str) -> Option<String> {
-    let name = name.trim();
-    if name.is_empty() || name.contains('\n') || name.contains(';') {
-        return None;
-    }
-    let clean: String = name
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
-        .collect();
-    if clean.is_empty() {
-        None
-    } else {
-        Some(clean)
-    }
-}
-
-fn safe_service(name: &str) -> Option<String> {
-    safe_project(name)
 }
 
 pub fn parse_list(code: i32, stdout: &str, stderr: &str) -> Value {
@@ -265,17 +268,11 @@ pub fn merge_projects(primary: Value, fallback: Value) -> Value {
     json!({ "ok": true, "projects": projects })
 }
 
-pub fn ps_cmd(compose_file: &str, project: &str) -> Option<String> {
-    let proj = safe_project(project)?;
-    if let Some(f) = safe_compose_file(compose_file) {
-        Some(format!(
-            "docker compose -f {} -p {} ps -a --format json",
-            shell_quote(&f),
-            proj
-        ))
-    } else {
-        Some(format!("docker compose -p {} ps -a --format json", proj))
-    }
+pub fn ps_cmd(file: &str, project: &str) -> Result<String, String> {
+    Ok(format!(
+        "{} ps -a --format json",
+        base_cmd(compose_file(file)?, project)?
+    ))
 }
 
 pub fn parse_ps(code: i32, stdout: &str, stderr: &str) -> Value {
@@ -296,41 +293,33 @@ pub fn parse_ps(code: i32, stdout: &str, stderr: &str) -> Value {
     json!({ "ok": true, "services": services })
 }
 
-pub fn action_cmd(compose_file: &str, project: &str, action: &str, service: Option<&str>) -> Option<String> {
+pub fn action_cmd(file: &str, project: &str, action: &str, service: Option<&str>) -> Result<String, String> {
     if !ACTIONS.contains(&action) {
-        return None;
+        return Err(format!("Неизвестное действие: {action}"));
     }
-    let proj = safe_project(project)?;
-    let base = if let Some(f) = safe_compose_file(compose_file) {
-        format!("docker compose -f {} -p {}", shell_quote(&f), proj)
-    } else {
-        format!("docker compose -p {}", proj)
-    };
-    match action {
-        "up" => Some(format!("{base} up -d")),
-        "down" => Some(format!("{base} down")),
-        "start" | "stop" | "restart" => {
-            let svc = safe_service(service.unwrap_or(""))?;
-            Some(format!("{base} {action} {svc}"))
-        }
-        _ => None,
+    let file = compose_file(file)?;
+    // Без `-f` compose ищет файл в текущем каталоге - на сервере это домашний каталог, и `up`
+    // поднял бы оттуда чужой проект под этим именем. Остальным действиям хватает имени.
+    if action == "up" && file.is_none() {
+        return Err("Запустить проект можно только по пути к его compose-файлу, а он неизвестен".into());
     }
+    let base = base_cmd(file, project)?;
+    Ok(match action {
+        "up" => format!("{base} up -d"),
+        "down" => format!("{base} down"),
+        _ => format!("{base} {action} {}", compose_name("службы", service.unwrap_or(""))?),
+    })
 }
 
-pub fn logs_cmd(compose_file: &str, project: &str, service: &str) -> Option<String> {
-    let proj = safe_project(project)?;
-    let svc = safe_service(service)?;
-    let base = if let Some(f) = safe_compose_file(compose_file) {
-        format!("docker compose -f {} -p {}", shell_quote(&f), proj)
-    } else {
-        format!("docker compose -p {}", proj)
-    };
-    Some(format!("{base} logs --tail 200 -f {svc} 2>&1"))
+pub fn logs_cmd(file: &str, project: &str, service: &str) -> Result<String, String> {
+    let base = base_cmd(compose_file(file)?, project)?;
+    let svc = compose_name("службы", service)?;
+    Ok(format!("{base} logs --tail 200 -f {svc} 2>&1"))
 }
 
-pub fn read_compose_cmd(compose_file: &str) -> Option<String> {
-    let f = safe_compose_file(compose_file)?;
-    Some(format!("head -n 400 {}", shell_quote(&f)))
+pub fn read_compose_cmd(file: &str) -> Result<String, String> {
+    let f = compose_file(file)?.ok_or("Путь к compose-файлу неизвестен - прочитать нечего")?;
+    Ok(format!("head -n 400 {}", shell_quote(f)))
 }
 
 pub fn parse_compose_text(code: i32, stdout: &str, stderr: &str) -> Value {
@@ -397,8 +386,56 @@ mod tests {
 
     #[test]
     fn action_whitelist() {
-        assert!(action_cmd("/srv/a/docker-compose.yml", "site", "up", None).is_some());
-        assert!(action_cmd("/srv/a/docker-compose.yml", "site", "restart", Some("web")).is_some());
-        assert!(action_cmd("/srv/a/docker-compose.yml", "", "up", None).is_none());
+        let f = "/srv/a/docker-compose.yml";
+        assert_eq!(
+            action_cmd(f, "site", "up", None).unwrap(),
+            "docker compose -f '/srv/a/docker-compose.yml' -p site up -d"
+        );
+        assert_eq!(
+            action_cmd(f, "site", "restart", Some("web")).unwrap(),
+            "docker compose -f '/srv/a/docker-compose.yml' -p site restart web"
+        );
+        assert!(action_cmd(f, "", "up", None).is_err());
+        assert!(action_cmd(f, "site", "rm", None).is_err());
+    }
+
+    #[test]
+    fn путь_к_compose_с_пробелом_не_портится() {
+        assert_eq!(
+            ps_cmd("/srv/my app/docker-compose.yml", "site").unwrap(),
+            "docker compose -f '/srv/my app/docker-compose.yml' -p site ps -a --format json"
+        );
+        assert_eq!(
+            read_compose_cmd("/srv/it's/compose.yml").unwrap(),
+            "head -n 400 '/srv/it'\\''s/compose.yml'"
+        );
+        assert!(ps_cmd("/srv/a\nb/compose.yml", "site").is_err());
+    }
+
+    #[test]
+    fn запуск_без_пути_к_файлу_отказывает_а_не_ищет_файл_в_домашнем_каталоге() {
+        assert!(action_cmd("", "site", "up", None).is_err());
+        assert!(action_cmd("C:\\srv\\compose.yml", "site", "up", None).is_err());
+        // Остальное compose умеет по имени проекта - так было и остаётся для Windows-серверов.
+        assert_eq!(
+            action_cmd("", "site", "down", None).unwrap(),
+            "docker compose -p site down"
+        );
+        assert_eq!(
+            ps_cmd("C:\\srv\\compose.yml", "site").unwrap(),
+            "docker compose -p site ps -a --format json"
+        );
+        assert!(read_compose_cmd("").is_err());
+    }
+
+    #[test]
+    fn имена_проекта_и_службы_проверяются_а_не_обрезаются() {
+        let f = "/srv/a/compose.yml";
+        for bad in ["site;x", "-p", "", "site x", "сайт"] {
+            assert!(action_cmd(f, bad, "down", None).is_err(), "проект {bad:?}");
+            assert!(action_cmd(f, "site", "restart", Some(bad)).is_err(), "служба {bad:?}");
+            assert!(logs_cmd(f, "site", bad).is_err(), "журнал {bad:?}");
+        }
+        assert!(action_cmd(f, "site", "restart", None).is_err(), "служба обязательна");
     }
 }

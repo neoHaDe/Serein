@@ -643,12 +643,9 @@ fn check_url(url: &str) -> Result<(), String> {
 
 /// Имя контейнера - те же символы, что пропускает `docker::action_cmd`. Молча выбрасывать
 /// лишнее, как делает он, здесь нельзя: шаг ушёл бы к другому контейнеру.
+/// Правило то же, что у панели Docker, - одно на всё приложение.
 fn safe_container(name: &str) -> Result<String, String> {
-    let n = name.trim();
-    if n.is_empty() || !n.chars().all(|c| c.is_alphanumeric() || ".-_".contains(c)) {
-        return Err(format!("имя контейнера «{n}»: только буквы, цифры и .-_"));
-    }
-    Ok(n.to_owned())
+    docker::container_ref(name.trim()).map(str::to_owned)
 }
 
 /// Проверяет задачу целиком до запуска: ошибка в шаге номер семь должна всплыть до того,
@@ -699,13 +696,7 @@ fn validate_step(step: &Step) -> Result<(), String> {
             crate::sftp::check_remote_path(remote_path).map(|_| ())
         }
         Action::Service { service, action } => crate::workspace::check_service(service, action).map(|_| ()),
-        Action::Docker { container, action } => {
-            safe_container(container)?;
-            if docker::action_cmd(container, action).is_none() {
-                return Err(format!("неизвестное действие с контейнером «{action}»"));
-            }
-            Ok(())
-        }
+        Action::Docker { container, action } => docker::action_cmd(&safe_container(container)?, action).map(|_| ()),
         Action::Healthcheck { check, target, .. } => {
             if empty(target) {
                 return Err("не указано, что проверять".into());
@@ -1092,7 +1083,7 @@ async fn run_action(h: &Host, action: &Action, limit: Duration) -> Result<String
         }
         Action::Docker { container, action } => {
             let name = safe_container(container)?;
-            let cmd = docker::action_cmd(&name, action).ok_or("неизвестное действие с контейнером")?;
+            let cmd = docker::action_cmd(&name, action)?;
             exec_ok(h, &cmd, limit).await
         }
         Action::Upload {
@@ -1725,6 +1716,8 @@ mod tests {
             "точки по краям снимаются - выше папки не уйти"
         );
         assert!(safe_container("web;rm").is_err());
+        assert!(safe_container("-f").is_err(), "ведущий минус docker прочёл бы как ключ");
+        assert_eq!(safe_container(" web ").unwrap(), "web");
     }
 
     #[test]
