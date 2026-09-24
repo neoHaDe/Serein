@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import type { SftpEntry, LocalEntry, TransferItem, RemoteEditStatus } from '../../shared/types'
+import type { SftpEntry, LocalEntry, TransferItem } from '../../shared/types'
 import { isImageFile, isTextFile } from '../fileKind'
 import { Icon } from './Icon'
 import { openAuxWindow, sanitizeWindowLabel } from '../auxWindows'
@@ -26,23 +26,28 @@ import {
   sortEntries,
   visibleCols,
   clickSelect,
-  entryKind,
-  fmtPerms,
 } from '../sftpExplorer'
 import { errText } from '../errText'
-
-/** Разбивает абсолютный remote-путь на сегменты-крошки: [{label, path}]. */
-function remoteCrumbs(path: string): { label: string; path: string }[] {
-  if (!path.startsWith('/')) return [] // относительный путь (напр. '.') - крошки не строим
-  const parts = path.split('/').filter(Boolean)
-  const crumbs = [{ label: '/', path: '/' }]
-  let acc = ''
-  for (const p of parts) {
-    acc += '/' + p
-    crumbs.push({ label: p, path: acc })
-  }
-  return crumbs
-}
+import {
+  filterEntries,
+  fmtMode,
+  fmtSize,
+  isDirEntry,
+  isFileLike,
+  isSereinDnd,
+  joinLocal,
+  joinRemote,
+  localBaseName,
+  parentOfRemote,
+  remoteCrumbs,
+  remoteProps,
+  localProps,
+  type PropsData,
+} from '../sftpPaths'
+import { AnchoredMenu, ExplorerHead, OverwriteAsk, PropsSheet } from './SftpParts'
+import { LocalMenu, RemoteMenu } from './SftpMenus'
+import { SftpTransferQueue, useSftpTransfers } from './SftpTransfers'
+import { SftpEditList, useRemoteEdits } from './SftpEdits'
 
 interface Props {
   sessionId: string
@@ -57,236 +62,15 @@ interface Props {
   onOpenInEditor?: (remotePath: string) => void
 }
 
-function fmtSize(n: number): string {
-  if (n < 1024) return `${n} Б`
-  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} КБ`
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} МБ`
-  return `${(n / 1024 ** 3).toFixed(2)} ГБ`
-}
-
-function fmtSpeed(bps: number | undefined): string {
-  if (!bps || !isFinite(bps) || bps < 256) return ''
-  return fmtSize(bps) + '/s'
-}
-
-function fmtEta(size: number, transferred: number, bps: number | undefined): string {
-  if (!bps || bps < 1024 || !size || transferred >= size) return ''
-  const sec = Math.round((size - transferred) / bps)
-  if (sec < 1) return ''
-  if (sec < 60) return `${sec}с`
-  return `${Math.floor(sec / 60)}м ${sec % 60}с`
-}
-
-function fmtMode(mode: number): string {
-  return (mode & 0o777).toString(8).padStart(3, '0')
-}
-
-function isHiddenName(name: string): boolean {
-  return name.startsWith('.') && name !== '.' && name !== '..'
-}
-
-function filterEntries<T extends { name: string }>(entries: T[], showHidden: boolean, query: string): T[] {
-  const q = query.trim().toLowerCase()
-  return entries.filter((e) => {
-    if (!showHidden && isHiddenName(e.name)) return false
-    if (q && !e.name.toLowerCase().includes(q)) return false
-    return true
-  })
-}
-
-function isDirEntry(e: SftpEntry): boolean {
-  return e.type === 'dir' || (e.type === 'link' && e.linkType === 'dir')
-}
-
-function isFileLike(e: SftpEntry): boolean {
-  return e.type === 'file' || (e.type === 'link' && e.linkType !== 'dir')
-}
-
-function parentOfRemote(path: string): string {
-  if (path === '/' || path === '') return '/'
-  const trimmed = path.replace(/\/+$/, '')
-  const idx = trimmed.lastIndexOf('/')
-  return idx <= 0 ? '/' : trimmed.slice(0, idx)
-}
-
-function joinRemote(dir: string, name: string): string {
-  return dir.endsWith('/') ? dir + name : dir + '/' + name
-}
-
-function joinLocal(dir: string, name: string): string {
-  if (dir.endsWith('/') || dir.endsWith('\\')) return dir + name
-  const sep = dir.includes('\\') ? '\\' : '/'
-  return dir + sep + name
-}
-
 function pointIn(el: HTMLElement | null, x: number, y: number): boolean {
   if (!el) return false
   const r = el.getBoundingClientRect()
   return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom
 }
 
-function isSereinDnd(p: string): boolean {
-  return p.replace(/\\/g, '/').toLowerCase().includes('/serein-dnd/')
-}
-
 function eventPoint(pos: { x: number; y: number }): { x: number; y: number } {
   const f = window.devicePixelRatio || 1
   return { x: pos.x / f, y: pos.y / f }
-}
-
-function localBaseName(p: string): string {
-  const n = p.replace(/\\/g, '/').replace(/\/+$/, '')
-  const i = n.lastIndexOf('/')
-  return i >= 0 ? n.slice(i + 1) : n
-}
-
-function OverwriteAsk({
-  names,
-  onYes,
-  onNo,
-}: {
-  names: string[]
-  onYes: () => void
-  onNo: () => void
-}): JSX.Element {
-  const msg =
-    names.length === 1
-      ? `«${names[0]}» уже есть на сервере. Заменить?`
-      : `На сервере уже есть ${names.length} из выбранных: ${names.slice(0, 8).join(', ')}${names.length > 8 ? '…' : ''}. Заменить?`
-  return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onNo()}>
-      <div className="modal sftp-props-modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Файл уже есть</h2>
-        <p className="hint">{msg}</p>
-        <div className="modal-actions">
-          <button type="button" onClick={onNo}>
-            Отмена
-          </button>
-          <button type="button" className="primary" onClick={onYes}>
-            Заменить
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function ExplorerHead({
-  cols,
-  sortCol,
-  sortDir,
-  onSort,
-  onResize,
-  onContext,
-}: {
-  cols: SftpColId[]
-  sortCol: SftpColId
-  sortDir: 'asc' | 'desc'
-  onSort: (id: SftpColId) => void
-  onResize: (id: SftpColId, e: React.MouseEvent) => void
-  onContext: (e: React.MouseEvent) => void
-}): JSX.Element {
-  return (
-    <div className="sftp-row sftp-row-head" onContextMenu={onContext}>
-      {cols.map((id) => (
-        <button
-          key={id}
-          type="button"
-          className={'sftp-th' + (sortCol === id ? ' sorted' : '')}
-          title="Сортировка · ПКМ - столбцы"
-          onClick={() => onSort(id)}
-        >
-          <span className="sftp-th-label">{SFTP_COL_LABEL[id]}</span>
-          {sortCol === id ? (
-            <Icon name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'} size={12} />
-          ) : null}
-          <span
-            className="sftp-col-resizer"
-            onMouseDown={(e) => onResize(id, e)}
-            onClick={(e) => e.stopPropagation()}
-          />
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function CtxItem({ label, danger, onPick }: { label: string; danger?: boolean; onPick: () => void }): JSX.Element {
-  return (
-    <button type="button" className={'sftp-ctx-item' + (danger ? ' danger' : '')} onClick={onPick}>
-      {label}
-    </button>
-  )
-}
-
-function AnchoredMenu({
-  x,
-  y,
-  className,
-  children,
-}: {
-  x: number
-  y: number
-  className: string
-  children: React.ReactNode
-}): JSX.Element {
-  const ref = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState({ left: x, top: y })
-  useLayoutEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const pad = 8
-    const { width, height } = el.getBoundingClientRect()
-    let left = x
-    let top = y
-    if (left + width > window.innerWidth - pad) left = window.innerWidth - pad - width
-    if (left < pad) left = pad
-    if (top + height > window.innerHeight - pad) top = y - height
-    if (top < pad) top = pad
-    if (top + height > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - pad - height)
-    setPos({ left, top })
-  }, [x, y])
-  return (
-    <div
-      ref={ref}
-      className={className}
-      style={{ left: pos.left, top: pos.top }}
-      onMouseDown={(e) => e.stopPropagation()}
-    >
-      {children}
-    </div>
-  )
-}
-
-function PropsSheet({
-  title,
-  rows,
-  onClose,
-}: {
-  title: string
-  rows: { k: string; v: string }[]
-  onClose: () => void
-}): JSX.Element {
-  return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal sftp-props-modal" onClick={(e) => e.stopPropagation()}>
-        <h2>{title}</h2>
-        <dl className="sftp-props">
-          {rows.map((r) => (
-            <div key={r.k} className="sftp-props-row">
-              <dt>{r.k}</dt>
-              <dd title={r.v}>{r.v || '—'}</dd>
-            </div>
-          ))}
-        </dl>
-        <div className="modal-actions">
-          <button className="primary" onClick={onClose}>
-            OK
-          </button>
-        </div>
-      </div>
-    </div>
-  )
 }
 
 export function SftpPanel({ sessionId, serverId, onClose, width, closing, detached, fill, onOpenInEditor }: Props): JSX.Element {
@@ -301,10 +85,6 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
   const [localEntries, setLocalEntries] = useState<LocalEntry[]>([])
   const [localDragOver, setLocalDragOver] = useState(false)
   const [syncOpen, setSyncOpen] = useState(false)
-
-  const [transfers, setTransfers] = useState<TransferItem[]>([])
-  const rateRef = useRef(new Map<string, { t: number; b: number; bps: number }>())
-  const [edits, setEdits] = useState<Record<string, RemoteEditStatus>>({})
 
   // Инлайн-переименование: имя редактируемой записи + текущее значение поля.
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -511,62 +291,17 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
     }
   }, [colMenu, ctxMenu])
 
-  // Подписка на очередь передач: апдейтим элементы по id, по завершении - обновляем списки.
-  useEffect(() => {
-    const off = window.api.sftp.onTransfer((item) => {
-      const now = Date.now()
-      const rates = rateRef.current
-      let speedBps = 0
-      if (item.state === 'active') {
-        const prev = rates.get(item.id)
-        if (prev && item.transferred > prev.b) {
-          const dt = (now - prev.t) / 1000
-          if (dt >= 0.2) {
-            const inst = (item.transferred - prev.b) / dt
-            speedBps = prev.bps > 0 ? prev.bps * 0.55 + inst * 0.45 : inst
-            rates.set(item.id, { t: now, b: item.transferred, bps: speedBps })
-          } else {
-            speedBps = prev.bps
-          }
-        } else if (!prev) {
-          rates.set(item.id, { t: now, b: item.transferred, bps: 0 })
-        } else {
-          speedBps = prev.bps
-        }
-      } else {
-        rates.delete(item.id)
-      }
-      const nextItem = { ...item, speedBps }
-      setTransfers((prev) => {
-        const idx = prev.findIndex((t) => t.id === nextItem.id)
-        if (idx === -1) return [...prev, nextItem]
-        const next = [...prev]
-        next[idx] = nextItem
-        return next
-      })
-      if (item.state === 'done' || item.state === 'error') {
-        if (isSereinDnd(item.localPath)) return
-        if (item.direction === 'upload') load(pathRef.current, true)
-        else if (localPathRef.current) loadLocal(localPathRef.current)
-      } else if (item.state === 'canceled' && localPathRef.current && !isSereinDnd(item.localPath)) {
-        loadLocal(localPathRef.current)
-      }
-    })
-    const offEdit = window.api.sftp.onEditStatus((s) => {
-      setEdits((prev) => ({ ...prev, [s.remotePath]: s }))
-      if (s.state === 'stopped') {
-        setEdits((prev) => {
-          const n = { ...prev }
-          delete n[s.remotePath]
-          return n
-        })
-      }
-    })
-    return () => {
-      off()
-      offEdit()
-    }
-  }, [load, loadLocal])
+  // Очередь передач этой сессии; кончилась передача - обновляем тот список, куда она писала.
+  const onTransferFinished = useCallback(
+    (item: TransferItem): void => {
+      if (isSereinDnd(item.localPath)) return
+      if (item.state !== 'canceled' && item.direction === 'upload') load(pathRef.current, true)
+      else if (localPathRef.current) loadLocal(localPathRef.current)
+    },
+    [load, loadLocal]
+  )
+  const xfer = useSftpTransfers(sessionId, onTransferFinished)
+  const editList = useRemoteEdits(sessionId)
 
   const toggleDual = (): void => {
     const next = !dualPane
@@ -834,62 +569,8 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
     await uploadToRemote(paths)
   }
 
-  const propsRowsFor = (pane: 'remote' | 'local', names: string[]): { title: string; rows: { k: string; v: string }[] } => {
-    if (pane === 'remote') {
-      const items = pickRemote(names)
-      if (items.length === 1) {
-        const e = items[0]
-        const rows = [
-          { k: 'Имя', v: e.name },
-          { k: 'Тип', v: entryKind(e) },
-          { k: 'Расположение', v: path },
-          { k: 'Размер', v: fmtSize(e.size) },
-          { k: 'Изменён', v: fmtMtime(e.mtime) },
-          { k: 'Права', v: fmtPerms(e.mode) },
-        ]
-        if (e.type === 'link' && e.target) rows.push({ k: 'Ссылка', v: e.target })
-        return { title: 'Свойства', rows }
-      }
-      const dirs = items.filter(isDirEntry).length
-      const total = items.reduce((s, e) => s + (e.size || 0), 0)
-      return {
-        title: items.length + ' элементов',
-        rows: [
-          { k: 'Выделено', v: String(items.length) },
-          { k: 'Папок', v: String(dirs) },
-          { k: 'Файлов', v: String(items.length - dirs) },
-          { k: 'Расположение', v: path },
-          { k: 'Суммарный размер', v: fmtSize(total) },
-        ],
-      }
-    }
-    const items = pickLocal(names)
-    if (items.length === 1) {
-      const e = items[0]
-      return {
-        title: 'Свойства',
-        rows: [
-          { k: 'Имя', v: e.name },
-          { k: 'Тип', v: entryKind(e) },
-          { k: 'Расположение', v: localPath },
-          { k: 'Размер', v: fmtSize(e.size) },
-          { k: 'Изменён', v: fmtMtime(e.mtime) },
-        ],
-      }
-    }
-    const dirs = items.filter((e) => e.type === 'dir').length
-    const total = items.reduce((s, e) => s + (e.size || 0), 0)
-    return {
-      title: items.length + ' элементов',
-      rows: [
-        { k: 'Выделено', v: String(items.length) },
-        { k: 'Папок', v: String(dirs) },
-        { k: 'Файлов', v: String(items.length - dirs) },
-        { k: 'Расположение', v: localPath },
-        { k: 'Суммарный размер', v: fmtSize(total) },
-      ],
-    }
-  }
+  const propsRowsFor = (pane: 'remote' | 'local', names: string[]): PropsData =>
+    pane === 'remote' ? remoteProps(pickRemote(names), path) : localProps(pickLocal(names), localPath)
 
   const onRemoteKey = (ev: React.KeyboardEvent): void => {
     if ((ev.target as HTMLElement).tagName === 'INPUT') return
@@ -944,56 +625,8 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
     if (remoteSrc && localPath) await window.api.sftp.downloadTo(sessionId, remoteSrc, localPath)
   }
 
-  // ---- Transfers ----
-  const activeTransfers = transfers.filter(
-    (t) => t.state === 'queued' || t.state === 'active' || t.state === 'paused'
-  )
-  const cancelTransfer = (id: string): void => {
-    setTransfers((prev) =>
-      prev.map((t) =>
-        t.id === id && (t.state === 'queued' || t.state === 'active' || t.state === 'paused')
-          ? { ...t, state: 'canceled' as const }
-          : t
-      )
-    )
-    void window.api.sftp.cancelTransfer(id)
-  }
-  const pauseTransfer = (id: string): void => {
-    setTransfers((prev) =>
-      prev.map((t) => (t.id === id && t.state === 'active' ? { ...t, state: 'paused' as const, speedBps: 0 } : t))
-    )
-    void window.api.sftp.pauseTransfer(id)
-  }
-  const resumeTransfer = (id: string): void => {
-    setTransfers((prev) =>
-      prev.map((t) => (t.id === id && t.state === 'paused' ? { ...t, state: 'active' as const } : t))
-    )
-    void window.api.sftp.resumeTransfer(id)
-  }
-  const retryTransfer = (t: TransferItem): void => {
-    const parent = (p: string): string => {
-      const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
-      return i <= 0 ? p : p.slice(0, i)
-    }
-    setTransfers((prev) => prev.filter((x) => x.id !== t.id))
-    if (t.direction === 'download') {
-      void window.api.sftp.downloadTo(sessionId, t.remotePath, parent(t.localPath))
-    } else {
-      void window.api.sftp.uploadPaths(sessionId, parent(t.remotePath), [t.localPath])
-    }
-  }
-  const clearFinished = (): void => {
-    setTransfers((prev) =>
-      prev.filter((t) => t.state === 'queued' || t.state === 'active' || t.state === 'paused')
-    )
-  }
-
-  const editList = Object.values(edits)
   const ctxRemoteItems = ctxMenu?.pane === 'remote' ? pickRemote(ctxMenu.names) : []
   const ctxLocalItems = ctxMenu?.pane === 'local' ? pickLocal(ctxMenu.names) : []
-  const ctxBuiltin = ctxRemoteItems.filter((e) => isFileLike(e) && (isTextFile(e.name) || isImageFile(e.name)))
-  const ctxExternal = ctxRemoteItems.filter((e) => isFileLike(e) && !isImageFile(e.name))
-  const ctxFiles = ctxRemoteItems.filter(isFileLike)
 
   const detach = async (): Promise<void> => {
     await openAuxWindow({
@@ -1252,47 +885,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
 
       {error && <div className="sftp-error" onClick={() => setError(null)}>{error}</div>}
 
-      {editList.length > 0 && (
-        <div className="sftp-edits">
-          {editList.map((ed) => (
-            <div key={ed.remotePath} className="sftp-edit-row">
-              <span className="edit-state" title={ed.error}>
-                {ed.state === 'uploading'
-                  ? '⬆'
-                  : ed.state === 'synced'
-                    ? '✓'
-                    : ed.state === 'error' || ed.state === 'conflict'
-                      ? '⚠'
-                      : '✎'}
-              </span>
-              <span className="sftp-name">{ed.remotePath.split('/').pop()}</span>
-              <span className="edit-label">
-                {ed.state === 'uploading'
-                  ? 'заливка…'
-                  : ed.state === 'synced'
-                    ? 'сохранено'
-                    : ed.state === 'error'
-                      ? 'ошибка'
-                      : ed.state === 'conflict'
-                        ? 'изменён на сервере'
-                        : 'редактируется'}
-              </span>
-              <button
-                className="mini"
-                title="Перестать следить"
-                onClick={() => window.api.sftp.editStop(sessionId, ed.remotePath)}
-              >
-                ✕
-              </button>
-              {/* Текст ошибки - на виду, а не только в подсказке: при конфликте в нём путь к
-                  сохранённой правке, и искать его под значком никто не станет. */}
-              {(ed.state === 'error' || ed.state === 'conflict') && ed.error && (
-                <div className="sftp-edit-error">{ed.error}</div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      <SftpEditList sessionId={sessionId} edits={editList} />
 
       <div
         className={'sftp-list remote' + (dragOver ? ' drag-over' : '')}
@@ -1423,80 +1016,14 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
       </div>
 
       {/* ---- Очередь передач ---- */}
-      {transfers.length > 0 && (
-        <div className="sftp-queue">
-          <div className="sftp-queue-head">
-            <span>Передачи ({activeTransfers.length} активны)</span>
-            <button className="mini" title="Очистить завершённые" onClick={clearFinished}>
-              Очистить
-            </button>
-          </div>
-          <div className="sftp-queue-list">
-            {transfers.map((t) => (
-              <div key={t.id} className={'sftp-queue-item ' + t.state}>
-                <span className="q-dir">{t.direction === 'upload' ? '⬆' : '⬇'}</span>
-                <div className="q-info">
-                  <div className="q-name" title={t.error || t.filename}>
-                    {t.filename}
-                    {t.state === 'error' && <span className="q-err"> - {t.error}</span>}
-                  </div>
-                  {(t.state === 'active' || t.state === 'queued' || t.state === 'paused') && (
-                    <div className="bar">
-                      <div
-                        className="bar-fill"
-                        style={{ width: t.size ? `${Math.min(100, (t.transferred / t.size) * 100)}%` : '0%' }}
-                      />
-                    </div>
-                  )}
-                </div>
-                <span className="q-state">
-                  {t.state === 'done'
-                    ? '✓'
-                    : t.state === 'error'
-                      ? '⚠'
-                      : t.state === 'canceled'
-                        ? '⊘'
-                        : t.state === 'queued'
-                          ? 'ожидание'
-                          : t.state === 'paused'
-                            ? 'пауза'
-                            : [
-                                t.size
-                                  ? `${fmtSize(t.transferred)} / ${fmtSize(t.size)}`
-                                  : fmtSize(t.transferred),
-                                fmtSpeed(t.speedBps),
-                                fmtEta(t.size, t.transferred, t.speedBps),
-                              ]
-                                .filter(Boolean)
-                                .join(' · ')}
-                </span>
-                <span className="q-actions">
-                  {t.state === 'active' && (
-                    <button className="mini" title="Пауза" onClick={() => pauseTransfer(t.id)}>
-                      ❚❚
-                    </button>
-                  )}
-                  {t.state === 'paused' && (
-                    <button className="mini" title="Продолжить" onClick={() => resumeTransfer(t.id)}>
-                      ▶
-                    </button>
-                  )}
-                  {(t.state === 'error' || t.state === 'canceled') && (
-                    <button className="mini" title="Повторить" onClick={() => retryTransfer(t)}>
-                      ↻
-                    </button>
-                  )}
-                  {(t.state === 'queued' || t.state === 'active' || t.state === 'paused') && (
-                    <button className="mini danger" title="Отменить" onClick={() => cancelTransfer(t.id)}>
-                      ✕
-                    </button>
-                  )}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <SftpTransferQueue
+        transfers={xfer.transfers}
+        onCancel={xfer.cancel}
+        onPause={xfer.pause}
+        onResume={xfer.resume}
+        onRetry={xfer.retry}
+        onClear={xfer.clearFinished}
+      />
       {createPortal(
         <>
       {colMenu && (
@@ -1515,105 +1042,37 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
         </AnchoredMenu>
       )}
       {ctxMenu && ctxMenu.pane === 'remote' && (
-        <AnchoredMenu className="sftp-ctx-menu" x={ctxMenu.x} y={ctxMenu.y}>
-          <CtxItem
-            label={ctxRemoteItems.length > 1 ? 'Открыть (' + ctxRemoteItems.length + ')' : 'Открыть'}
-            onPick={() => {
-              closeMenus()
-              openItems(ctxRemoteItems)
-            }}
-          />
-          {ctxBuiltin.length > 0 && onOpenInEditor ? (
-            <CtxItem
-              label={ctxBuiltin.length > 1 ? 'Во встроенном редакторе (' + ctxBuiltin.length + ')' : 'Открыть во встроенном редакторе'}
-              onPick={() => {
-                closeMenus()
-                openBuiltin(ctxBuiltin)
-              }}
-            />
-          ) : null}
-          {ctxExternal.length > 0 ? (
-            <CtxItem
-              label={ctxExternal.length > 1 ? 'Во внешнем редакторе (' + ctxExternal.length + ')' : 'Открыть во внешнем редакторе'}
-              onPick={() => {
-                closeMenus()
-                void openExternalMany(ctxExternal)
-              }}
-            />
-          ) : null}
-          <CtxItem
-            label={ctxRemoteItems.length > 1 ? 'Скачать (' + ctxRemoteItems.length + ')' : 'Скачать'}
-            onPick={() => {
-              closeMenus()
-              void downloadMany(ctxRemoteItems)
-            }}
-          />
-          {dualPane && ctxFiles.length > 0 ? (
-            <CtxItem
-              label="Скачать на этот компьютер"
-              onPick={() => {
-                closeMenus()
-                void downloadToLocalMany(ctxFiles)
-              }}
-            />
-          ) : null}
-          <div className="sftp-ctx-sep" />
-          {ctxRemoteItems.length === 1 ? (
-            <CtxItem
-              label="Переименовать"
-              onPick={() => {
-                closeMenus()
-                startRename(ctxRemoteItems[0])
-              }}
-            />
-          ) : null}
-          <CtxItem
-            label={ctxRemoteItems.length > 1 ? 'Удалить (' + ctxRemoteItems.length + ')' : 'Удалить'}
-            danger
-            onPick={() => {
-              closeMenus()
-              void removeMany(ctxRemoteItems)
-            }}
-          />
-          <div className="sftp-ctx-sep" />
-          <CtxItem
-            label="Свойства"
-            onPick={() => {
-              closeMenus()
-              setPropsOpen({ pane: 'remote', names: ctxMenu.names })
-            }}
-          />
-        </AnchoredMenu>
+        <RemoteMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          items={ctxRemoteItems}
+          dualPane={dualPane}
+          canBuiltin={!!onOpenInEditor}
+          onClose={closeMenus}
+          act={{
+            open: openItems,
+            openBuiltin,
+            openExternal: (items) => void openExternalMany(items),
+            download: (items) => void downloadMany(items),
+            downloadToLocal: (items) => void downloadToLocalMany(items),
+            rename: startRename,
+            remove: (items) => void removeMany(items),
+            properties: () => setPropsOpen({ pane: 'remote', names: ctxMenu.names }),
+          }}
+        />
       )}
       {ctxMenu && ctxMenu.pane === 'local' && (
-        <AnchoredMenu className="sftp-ctx-menu" x={ctxMenu.x} y={ctxMenu.y}>
-          {ctxLocalItems.length === 1 && ctxLocalItems[0].type === 'dir' ? (
-            <CtxItem
-              label="Открыть"
-              onPick={() => {
-                closeMenus()
-                loadLocal(joinLocal(localPath, ctxLocalItems[0].name))
-              }}
-            />
-          ) : null}
-          {ctxLocalItems.some((e) => e.type !== 'dir') ? (
-            <CtxItem
-              label={ctxLocalItems.length > 1 ? 'Загрузить на сервер (' + ctxLocalItems.length + ')' : 'Загрузить на сервер'}
-              onPick={() => {
-                closeMenus()
-                void uploadLocalMany(ctxLocalItems)
-              }}
-            />
-          ) : null}
-          <div className="sftp-ctx-sep" />
-          <CtxItem
-            label="Свойства"
-            onPick={() => {
-              closeMenus()
-              setPropsOpen({ pane: 'local', names: ctxMenu.names })
-            }}
-          />
-        </AnchoredMenu>
+        <LocalMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          items={ctxLocalItems}
+          onClose={closeMenus}
+          act={{
+            openDir: (e) => loadLocal(joinLocal(localPath, e.name)),
+            upload: (items) => void uploadLocalMany(items),
+            properties: () => setPropsOpen({ pane: 'local', names: ctxMenu.names }),
+          }}
+        />
       )}
       {overwriteNames && (
         <OverwriteAsk names={overwriteNames} onYes={() => answerOverwrite(true)} onNo={() => answerOverwrite(false)} />
