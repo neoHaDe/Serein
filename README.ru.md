@@ -308,16 +308,24 @@ Windows · без своего Chromium (системный WebView2) ·
                      команды и события Tauri
 ┌───────────────────────────────┴───────────────────────────────────────┐
 │  Rust-бэкенд (src-tauri/src)                                           │
+│  commands/  app · profile · session · files · docker · db · desktop ·  │
+│             host · tasks · fleet · observability · tools               │
+│  ────────────────────────────────────────────────────────────────────  │
 │  ssh · ssh_agent · ssh_algos · proxycmd · serial · telnet ·            │
 │  sftp · scp · remote_fs · tunnels · monitor · workspace · docker ·     │
 │  pty · term_out · store · schema · vault · crypto · dpapi ·            │
 │  os_secrets · keygen · importers · knownhosts · remoteedit ·           │
 │  ownership · multihost · tasks · foldersync · db · mongo · mysql ·     │
-│  metrics · profile_lock · tools · actionlog · policy · error · sync    │
+│  metrics · profile_lock · tools · actionlog · policy · error · sync ·  │
+│  chain · termsize                                                      │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
 - React говорит с Rust через тонкий мост `window.api` (invoke / listen).
+- Команды Tauri лежат в `commands/`, по файлу на область, и остаются тонкими: разбор входа и
+  решения - в модулях предметной области, рядом с их тестами. В `lib.rs` - только состояние и запуск.
+- Любое SSH-подключение - сессия, рабочий стол, Fleet, задачи - собирает цепочку прыжков через
+  `chain.rs`, поэтому политика администратора проверяет каждое звено в одном месте.
 - Одно SSH-соединение мультиплексирует **shell + SFTP + exec + туннели**; handle берётся
   коротким async-локом, каналы не ждут друг друга.
 - Секреты расшифровываются **только в Rust**, в момент подключения. На Linux они лежат в
@@ -355,9 +363,9 @@ npm run smoke
 ### Тесты
 
 ```bash
-npm test                                          # фронтенд, 219 тестов
+npm test                                          # фронтенд, 232 теста
 npm run lint                                      # eslint: хуки React и ловушки выражений
-cargo test --manifest-path src-tauri/Cargo.toml --lib   # 351 тест
+cargo test --manifest-path src-tauri/Cargo.toml --lib   # 383 теста
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```

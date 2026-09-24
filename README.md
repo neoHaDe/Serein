@@ -305,16 +305,24 @@ see offline mode below, and [SECURITY.md](SECURITY.md) for exactly what goes out
                      Tauri commands and events
 ┌───────────────────────────────┴───────────────────────────────────────┐
 │  Rust backend (src-tauri/src)                                          │
+│  commands/  app · profile · session · files · docker · db · desktop ·  │
+│             host · tasks · fleet · observability · tools               │
+│  ────────────────────────────────────────────────────────────────────  │
 │  ssh · ssh_agent · ssh_algos · proxycmd · serial · telnet ·            │
 │  sftp · scp · remote_fs · tunnels · monitor · workspace · docker ·     │
 │  pty · term_out · store · schema · vault · crypto · dpapi ·            │
 │  os_secrets · keygen · importers · knownhosts · remoteedit ·           │
 │  ownership · multihost · tasks · foldersync · db · mongo · mysql ·     │
-│  metrics · profile_lock · tools · actionlog · policy · error · sync    │
+│  metrics · profile_lock · tools · actionlog · policy · error · sync ·  │
+│  chain · termsize                                                      │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
 - React talks to Rust through a thin `window.api` bridge (`invoke` / `listen`).
+- Tauri commands live in `commands/`, one file per area, and stay thin: parsing and decisions
+  sit in the area modules next to their tests. `lib.rs` holds only the app state and startup.
+- Every SSH connection - session, desktop, Fleet, tasks - resolves its jump chain through
+  `chain.rs`, so the administrator policy is checked on every hop in one place.
 - One SSH connection multiplexes **shell + SFTP + exec + tunnels**. The handle is locked
   only briefly, so opening channels does not stall the others.
 - Secrets decrypt **only in Rust**, at connect time. On Linux they live in the keyring and
@@ -353,9 +361,9 @@ npm run smoke
 ### Tests
 
 ```bash
-npm test                                          # frontend, 219 tests
+npm test                                          # frontend, 232 tests
 npm run lint                                      # eslint: React hooks and regex traps
-cargo test --manifest-path src-tauri/Cargo.toml --lib   # 351 tests
+cargo test --manifest-path src-tauri/Cargo.toml --lib   # 383 tests
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
