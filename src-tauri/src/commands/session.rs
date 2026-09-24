@@ -1,7 +1,8 @@
 //! Сессии: открытие, ввод, размер окна, закрытие, владение, ключи узлов, журнал вывода, туннели.
 
 use crate::{
-    actionlog, knownhosts, metrics, policy, pty, serial, ssh, ssh_agent, store, telnet, term_out, AppState, Session,
+    actionlog, knownhosts, metrics, policy, pty, serial, ssh, ssh_agent, store, telnet, term_out, termsize, AppState,
+    Session,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -25,8 +26,7 @@ pub fn session_open_local(
     if policy::forbids_local_terminal() {
         return Err("Локальный терминал запрещён политикой администратора".into());
     }
-    let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
-    let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
+    let size = termsize::for_open(&p);
     let cwd = p.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
     let pref = store::settings_get()
         .get("localShell")
@@ -35,7 +35,7 @@ pub fn session_open_local(
         .to_string();
     let shell = pty::resolve_shell(&pref);
     let id = uuid::Uuid::new_v4().to_string();
-    let sess = pty::open_local(app.clone(), id.clone(), shell, cwd, cols, rows)?;
+    let sess = pty::open_local(app.clone(), id.clone(), shell, cwd, size.cols, size.rows)?;
     crate::sync::lock(&state.sessions).insert(id.clone(), Session::Local(sess));
     // Владельцем становится окно, которое сессию открыло: закрыть её сможет только оно.
     state.owners.claim(&id, window.label());
@@ -142,12 +142,11 @@ pub fn session_open_tcp(
         return Err("Укажите порт: у TCP-подключения нет значения по умолчанию".into());
     }
 
-    let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80).clamp(20, 500) as u16;
-    let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24).clamp(5, 200) as u16;
+    let size = termsize::for_open(&p);
     let eol = profile.get("telnetEol").and_then(|v| v.as_str());
 
     let id = uuid::Uuid::new_v4().to_string();
-    let sess = telnet::open_tcp(app.clone(), id.clone(), mode, &host, port, eol, cols, rows)?;
+    let sess = telnet::open_tcp(app.clone(), id.clone(), mode, &host, port, eol, size.cols, size.rows)?;
     crate::sync::lock(&state.sessions).insert(id.clone(), Session::Tcp(sess));
 
     // Как и у COM-порта: молчащий экран не отличить от неверного порта, поэтому
@@ -188,8 +187,8 @@ pub async fn session_open_ssh(
             return Err(e.into());
         }
     };
-    let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u32;
-    let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u32;
+    let size = termsize::for_open(&p);
+    let (cols, rows) = (u32::from(size.cols), u32::from(size.rows));
     let id = uuid::Uuid::new_v4().to_string();
     let ki = state.ki.clone();
     let host_keys = state.host_keys.clone();
@@ -252,20 +251,19 @@ pub fn session_write(state: State<'_, AppState>, id: String, data: String) {
 #[tauri::command]
 pub fn session_resize(state: State<'_, AppState>, p: Value) {
     let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let cols = p.get("cols").and_then(|v| v.as_u64()).unwrap_or(80);
-    let rows = p.get("rows").and_then(|v| v.as_u64()).unwrap_or(24);
-    if cols < 20 || rows < 5 {
+    let Some(size) = termsize::for_resize(&p) else {
         return;
-    }
+    };
     if let Some(s) = crate::sync::lock(&state.sessions).get(&id) {
         match s {
-            Session::Local(l) => l.resize(cols as u16, rows as u16),
+            Session::Local(l) => l.resize(size.cols, size.rows),
             // У последовательного порта нет размера окна - ресайз игнорируем.
             Session::Serial(_) => {}
             // У telnet размер окна есть (NAWS); у сырого TCP отправка молча пропускается.
-            Session::Tcp(t) => t.resize(cols as u16, rows as u16),
+            Session::Tcp(t) => t.resize(size.cols, size.rows),
             Session::Ssh(s) => {
-                let _ = s.tx.send(ssh::SshCmd::Resize(cols as u32, rows as u32));
+                let _ =
+                    s.tx.send(ssh::SshCmd::Resize(u32::from(size.cols), u32::from(size.rows)));
             }
         }
     }

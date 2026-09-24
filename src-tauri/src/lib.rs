@@ -53,6 +53,7 @@ pub mod sysinfo;
 mod tasks;
 mod telnet;
 mod term_out;
+mod termsize;
 pub mod tools;
 mod tray;
 mod tunnels;
