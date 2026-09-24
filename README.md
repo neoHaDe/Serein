@@ -10,7 +10,7 @@ SSH, SFTP and SCP with an editor, serial consoles, telnet and raw TCP.
 Tabs and split panes, port forwards, resource monitoring, a Docker panel
 and a local terminal - in an installer of about **8.3 MB**.
 
-Free, open source, Apache 2.0. Windows x64 and Linux x64, **v1.5.0**.
+Free, open source, Apache 2.0. Windows x64 and Linux x64, **v1.5.1**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -259,17 +259,17 @@ Matrix and smoke: [`docs/PHASE0.md`](docs/PHASE0.md).
 
 From [Releases](../../releases/latest):
 
-- **`Serein_1.5.0_x64-setup.exe`** - Windows installer (Start menu, uninstall).
-- **`Serein_1.5.0_x64-portable.zip`** - portable Windows build, no installer: `Serein.exe` and the RDP helper `serein-rdp.exe`. Unpack into a folder and run. Settings still live in `%APPDATA%\serein`.
-- **`Serein_1.5.0_amd64.deb`** - Debian/Ubuntu/**Astra** package (`/usr/bin/serein`).
-- **`Serein-1.5.0-1.x86_64.rpm`** - **Fedora** package. Installs and runs on a clean Fedora; on RedOS and Alt it has not been checked yet.
-- **`Serein_1.5.0_amd64.AppImage`** - portable Linux binary, one file for both families.
+- **`Serein_1.5.1_x64-setup.exe`** - Windows installer (Start menu, uninstall).
+- **`Serein_1.5.1_x64-portable.zip`** - portable Windows build, no installer: `Serein.exe` and the RDP helper `serein-rdp.exe`. Unpack into a folder and run. Settings still live in `%APPDATA%\serein`.
+- **`Serein_1.5.1_amd64.deb`** - Debian/Ubuntu/**Astra** package (`/usr/bin/serein`).
+- **`Serein-1.5.1-1.x86_64.rpm`** - **Fedora** package. Installs and runs on a clean Fedora; on RedOS and Alt it has not been checked yet.
+- **`Serein_1.5.1_amd64.AppImage`** - portable Linux binary, one file for both families.
 
 Every release publishes SHA-256 sums and a **CycloneDX SBOM** for both the Rust and the npm
 dependency trees. Check the sums - the Windows build is **unsigned** and SmartScreen will
 complain (*More info → Run anyway*).
 
-Release notes: [RELEASE_NOTES_v1.5.0.md](docs/RELEASE_NOTES_v1.5.0.md).
+Release notes: [RELEASE_NOTES_v1.5.1.md](docs/RELEASE_NOTES_v1.5.1.md).
 Security policy and threat model: [SECURITY.md](SECURITY.md).
 History of releases: [CHANGELOG.md](CHANGELOG.md). How to send a fix: [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -428,8 +428,9 @@ Product plan. 1.2.7 was about security; 1.3 closed three parity items at once: *
 **databases** over our own channels, and **Windows Server**; 1.3.1 added **RDP**; 1.4 brought
 **all seven databases**, **tasks**, a finished **Fleet**, **folder comparison** and **profiles**;
 1.5 started the corporate layer with the **action log** and **administrator policies**, and gave
-tasks **variables, secrets and environments**. Still open: macOS, the Russian software registry,
-a shared catalog, roles and SSO. See [release notes 1.5.0](docs/RELEASE_NOTES_v1.5.0.md).
+tasks **variables, secrets and environments**; 1.5.1 made the policy cover every way out and the
+action log record what actually happened. Still open: macOS, the Russian software registry, a
+shared catalog, roles and SSO. See [release notes 1.5.1](docs/RELEASE_NOTES_v1.5.1.md).
 
 ---
 

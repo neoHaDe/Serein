@@ -10,7 +10,7 @@ SSH, SFTP со встроенным редактором, консоль по CO
 Вкладки и сплит-панели, проброс портов, мониторинг ресурсов, панель Docker
 и локальный терминал - в установщике на **≈ 8,3 МБ**.
 
-Бесплатно, открытый код, Apache 2.0. Windows x64 и Linux x64, **v1.5.0**.
+Бесплатно, открытый код, Apache 2.0. Windows x64 и Linux x64, **v1.5.1**.
 
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -262,17 +262,17 @@ Windows · без своего Chromium (системный WebView2) ·
 
 С [Releases](../../releases/latest):
 
-- **`Serein_1.5.0_x64-setup.exe`** - установщик Windows (меню Пуск, удаление).
-- **`Serein_1.5.0_x64-portable.zip`** - переносная сборка Windows без установки: `Serein.exe` и помощник RDP `serein-rdp.exe`. Распакуй в папку и запусти. Настройки всё равно в `%APPDATA%\serein`.
-- **`Serein_1.5.0_amd64.deb`** - пакет Debian/Ubuntu/**Astra** (`/usr/bin/serein`).
-- **`Serein-1.5.0-1.x86_64.rpm`** - пакет **Fedora**. Ставится и запускается на чистой Fedora; на РедОС и Альт пока не проверялся.
-- **`Serein_1.5.0_amd64.AppImage`** - портативный Linux-бинарь, один файл на оба семейства.
+- **`Serein_1.5.1_x64-setup.exe`** - установщик Windows (меню Пуск, удаление).
+- **`Serein_1.5.1_x64-portable.zip`** - переносная сборка Windows без установки: `Serein.exe` и помощник RDP `serein-rdp.exe`. Распакуй в папку и запусти. Настройки всё равно в `%APPDATA%\serein`.
+- **`Serein_1.5.1_amd64.deb`** - пакет Debian/Ubuntu/**Astra** (`/usr/bin/serein`).
+- **`Serein-1.5.1-1.x86_64.rpm`** - пакет **Fedora**. Ставится и запускается на чистой Fedora; на РедОС и Альт пока не проверялся.
+- **`Serein_1.5.1_amd64.AppImage`** - портативный Linux-бинарь, один файл на оба семейства.
 
 К каждому выпуску публикуются суммы SHA-256 и **SBOM (CycloneDX)** по зависимостям Rust и npm.
 Сверяй суммы: сборка под Windows **не подписана**, SmartScreen ругнётся
 (*Подробнее → Выполнить в любом случае*).
 
-Что нового - [release notes](docs/RELEASE_NOTES_v1.5.0.md) и описание выпуска на GitHub.
+Что нового - [release notes](docs/RELEASE_NOTES_v1.5.1.md) и описание выпуска на GitHub.
 Политика безопасности и модель угроз - [SECURITY.md](SECURITY.md).
 История выпусков - [CHANGELOG.md](CHANGELOG.md). Как прислать правку - [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -432,8 +432,9 @@ cargo test --manifest-path src-tauri/Cargo.toml -- --ignored --test-threads=1
 **VNC**, **базы данных** поверх своих же каналов и **Windows Server**, 1.3.1 добавил **RDP**,
 1.4 - **все семь баз**, **задачи**, доводку **Fleet**, **сравнение папок** и **профили**, а 1.5
 начал корпоративный слой с **журнала действий** и **политик администратора** и дал задачам
-**переменные, секреты и среды**. Осталось: macOS, реестр отечественного ПО, общий каталог, роли
-и SSO. Подробнее - [release notes 1.5.0](docs/RELEASE_NOTES_v1.5.0.md).
+**переменные, секреты и среды**; 1.5.1 закрыл политикой все пути наружу и научил журнал писать то,
+что произошло на самом деле. Осталось: macOS, реестр отечественного ПО, общий каталог, роли и
+SSO. Подробнее - [release notes 1.5.1](docs/RELEASE_NOTES_v1.5.1.md).
 
 ---
 
