@@ -13,7 +13,7 @@
       <string id="Offline">Offline mode</string>
       <string id="Offline_Explain">Enabled - the app does not check for updates or make any other requests of its own to the internet.</string>
       <string id="AllowedHosts">Allowed servers</string>
-      <string id="AllowedHosts_Explain">SSH, telnet and TCP connections are allowed only to the listed addresses, one per line: a full name (prod.corp.local), all subdomains (*.corp.local), a subnet (10.0.0.0/8) or * for any. Jump hosts are checked too. The address is compared as written in the server profile: names are not resolved, so a subnet matches only an address written as an IP.</string>
+      <string id="AllowedHosts_Explain">Connections are allowed only to the listed addresses, one per line: a full name (prod.corp.local), all subdomains (*.corp.local), a subnet (10.0.0.0/8) or * for any. Checked for SSH (every jump host too), telnet and TCP, local port forwards including those that start with the session, each SOCKS5 request, databases, RDP, VNC and the network utilities. Servers with a ProxyCommand are refused while this policy is set: the command could connect anywhere. The address is compared as written in the server profile: names are not resolved, so a subnet matches only an address written as an IP.</string>
       <string id="ForbidLegacySshAlgorithms">Forbid legacy SSH algorithms</string>
       <string id="ForbidLegacySshAlgorithms_Explain">Legacy algorithms (ssh-rsa, CBC ciphers, hmac-sha1, DH group1) are never offered, even if a server profile allows them.</string>
       <string id="ForbidSavedPasswords">Forbid saved passwords</string>
@@ -21,7 +21,7 @@
       <string id="RequireMasterPassword">Require a master password</string>
       <string id="RequireMasterPassword_Explain">The master password cannot be turned off, and secrets are not saved until it is turned on.</string>
       <string id="ForbidLocalTerminal">Forbid the local terminal</string>
-      <string id="ForbidLocalTerminal_Explain">The local shell of this machine cannot be opened from Serein.</string>
+      <string id="ForbidLocalTerminal_Explain">The local shell of this machine cannot be opened from Serein. Servers with a ProxyCommand are refused too: it is a command run on this machine.</string>
       <string id="ForbidSessionRecording">Forbid recording sessions to a file</string>
       <string id="ForbidSessionRecording_Explain">Terminal output cannot be recorded to a file on this machine.</string>
       <string id="Udp">UDP</string>

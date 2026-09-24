@@ -1352,13 +1352,11 @@ async fn run_server(ctx: &RunCtx<'_>, server_id: String) -> Value {
         })
     };
 
-    let chain = match crate::commands::session::resolve_chain_for(&server_id) {
+    // COM-порт цепочка отклоняет сама: по SSH он не открывается.
+    let chain = match crate::chain::resolve(&server_id) {
         Ok(c) => c,
         Err(e) => return finish("skipped", Some(e), Vec::new()),
     };
-    if chain.first().and_then(|s| s.get("connection")).and_then(|v| v.as_str()) == Some("serial") {
-        return finish("skipped", Some("COM-порт: задачи не поддерживаются".into()), Vec::new());
-    }
     if let Some(why) = crate::multihost::skip_reason(&chain) {
         return finish("skipped", Some(why), Vec::new());
     }

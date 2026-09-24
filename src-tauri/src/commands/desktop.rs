@@ -1,6 +1,5 @@
 //! Удалённый рабочий стол: VNC и RDP, подготовка сервера, окна передачи.
 
-use super::session::resolve_chain;
 use crate::{actionlog, deskout, platform, policy, rdp, rdp_capture, rdpsetup, ssh, vnc, vncsetup, AppState};
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
@@ -134,7 +133,7 @@ async fn desktop_link(server_id: &str, window: u32, compress: bool) -> Option<ss
         rdp::log("рабочий стол идёт общим каналом сессии: у неё нет сохранённого профиля");
         return None;
     }
-    let chain = match resolve_chain(server_id) {
+    let chain = match crate::chain::resolve(server_id) {
         Ok(c) => c,
         Err(e) => {
             rdp::log(&format!("рабочий стол идёт общим каналом сессии: {e}"));

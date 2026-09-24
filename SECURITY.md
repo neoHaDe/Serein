@@ -132,8 +132,11 @@ The registry value overrides the file key by key.
   port check and range, DNS, TLS certificate, HTTP request, traceroute, LDAP — both from this
   machine and from the server. A refusal is written to the action log. A remote forward (`-R`) is
   not checked: its target is the server's own loopback, chosen by the server, not by the user. The
-  address is compared as written; names are not resolved, so a subnet matches only an address
-  written as an IP, and a DNS alias of a forbidden host is not caught.
+  check sits where the connection is opened, not only behind the button: tunnels that start with
+  the session are checked the same way, a tunnel of unknown type is refused rather than treated as
+  a local forward, and a server marked as a COM port cannot be used as a jump host. The address is
+  compared as written; names are not resolved, so a subnet matches only an address written as an
+  IP, and a DNS alias of a forbidden host is not caught.
 - `forbidSavedPasswords` — passwords and key passphrases are not saved and saved ones are not
   used; they are asked for on connection. Saved ones already on disk are left in place, unused.
   Note how a saved password is used when it *is* allowed: it answers a keyboard-interactive
@@ -145,6 +148,9 @@ The registry value overrides the file key by key.
   until it is on.
 - `forbidLocalTerminal`, `forbidSessionRecording` — no local shell, no recording terminal output
   to a file.
+- A server with a **ProxyCommand** is refused while `allowedHosts` or `forbidLocalTerminal` is set:
+  the command runs on this machine and connects wherever it likes, so the address in the profile
+  would mean nothing, and the command itself would be a local shell the policy forbids.
 
 `settings` accepts any key of `settings.json`; those keys are shown as locked and changes to them
 are dropped before anything is written. The policy is read once at startup. A policy that cannot

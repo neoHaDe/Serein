@@ -13,7 +13,7 @@
       <string id="Offline">Закрытый контур</string>
       <string id="Offline_Explain">Включено - приложение не проверяет обновления и не делает других собственных запросов в интернет.</string>
       <string id="AllowedHosts">Разрешённые серверы</string>
-      <string id="AllowedHosts_Explain">Подключаться по SSH, telnet и TCP можно только к перечисленным адресам - по одному на строку: имя целиком (prod.corp.local), все поддомены (*.corp.local), подсеть (10.0.0.0/8) или * для любого. Проверяются и промежуточные jump-хосты. Сравнивается адрес так, как он записан в профиле сервера: имя не разрешается в IP, поэтому подсеть совпадает только с адресом, записанным как IP.</string>
+      <string id="AllowedHosts_Explain">Подключаться можно только к перечисленным адресам - по одному на строку: имя целиком (prod.corp.local), все поддомены (*.corp.local), подсеть (10.0.0.0/8) или * для любого. Проверяются SSH (и каждый jump-хост), telnet и TCP, локальные пробросы портов - и те, что поднимаются вместе с сессией, - каждый запрос через SOCKS5, базы данных, RDP, VNC и сетевые утилиты. Серверы с ProxyCommand при этой политике не открываются: команда может соединиться куда угодно. Сравнивается адрес так, как он записан в профиле сервера: имя не разрешается в IP, поэтому подсеть совпадает только с адресом, записанным как IP.</string>
       <string id="ForbidLegacySshAlgorithms">Запретить устаревшие алгоритмы SSH</string>
       <string id="ForbidLegacySshAlgorithms_Explain">Устаревшие алгоритмы (ssh-rsa, CBC-шифры, hmac-sha1, DH group1) не предлагаются, даже если профиль сервера их разрешает.</string>
       <string id="ForbidSavedPasswords">Запретить хранить пароли</string>
@@ -21,7 +21,7 @@
       <string id="RequireMasterPassword">Требовать мастер-пароль</string>
       <string id="RequireMasterPassword_Explain">Мастер-пароль нельзя отключить, а пока он не включён, секреты не сохраняются.</string>
       <string id="ForbidLocalTerminal">Запретить локальный терминал</string>
-      <string id="ForbidLocalTerminal_Explain">Локальную командную оболочку этой машины из Serein открыть нельзя.</string>
+      <string id="ForbidLocalTerminal_Explain">Локальную командную оболочку этой машины из Serein открыть нельзя. Серверы с ProxyCommand тоже не открываются: это команда на этой машине.</string>
       <string id="ForbidSessionRecording">Запретить запись сессии в файл</string>
       <string id="ForbidSessionRecording_Explain">Вывод терминала нельзя записать в файл на этой машине.</string>
       <string id="Udp">UDP</string>

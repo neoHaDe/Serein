@@ -3,6 +3,7 @@
 
 mod actionlog;
 mod backup;
+mod chain;
 mod clipboard;
 mod commands;
 mod crypto;

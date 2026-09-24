@@ -4,7 +4,6 @@ use crate::{
     actionlog, knownhosts, metrics, policy, pty, serial, ssh, ssh_agent, store, telnet, term_out, AppState, Session,
 };
 use serde_json::{json, Value};
-use std::collections::HashSet;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
@@ -14,44 +13,6 @@ pub(crate) fn emit_connected(app: &AppHandle, id: String) {
         tokio::time::sleep(std::time::Duration::from_millis(160)).await;
         let _ = app.emit("session-status", json!({ "id": id, "status": "connected" }));
     });
-}
-
-/// Цепочка «целевой сервер → jump-хосты» с расшифрованными секретами.
-pub(crate) fn resolve_chain_for(server_id: &str) -> Result<Vec<Value>, String> {
-    resolve_chain(server_id)
-}
-
-pub(crate) fn resolve_chain(server_id: &str) -> Result<Vec<Value>, String> {
-    let mut chain = Vec::new();
-    let mut seen = HashSet::new();
-    let mut id = Some(server_id.to_string());
-    while let Some(sid) = id {
-        if !seen.insert(sid.clone()) {
-            return Err("Циклическая цепочка jump-хостов".into());
-        }
-        let mut s = store::server_with_secrets(&sid).ok_or("Сервер из цепочки jump-хостов не найден")?;
-        // Политика администратора проверяет каждое звено, а не только конечный сервер: иначе
-        // запрещённый адрес прошёл бы jump-хостом.
-        if s.get("connection").and_then(|v| v.as_str()) != Some("serial") {
-            let host = s.get("host").and_then(|v| v.as_str()).unwrap_or("").to_owned();
-            policy::check_host(&host)?;
-        }
-        // Сохранённые раньше пароли при запрете не идут в ход: их спросят при подключении.
-        if policy::forbids_saved_passwords() {
-            if let Some(o) = s.as_object_mut() {
-                o.remove("password");
-                o.remove("passphrase");
-            }
-        }
-        let next = s
-            .get("proxyJump")
-            .and_then(|v| v.as_str())
-            .filter(|x| !x.is_empty())
-            .map(|x| x.to_string());
-        chain.push(s);
-        id = next;
-    }
-    Ok(chain)
 }
 
 #[tauri::command]
@@ -220,7 +181,7 @@ pub async fn session_open_ssh(
     p: Value,
 ) -> Result<String, crate::error::OpenError> {
     let server_id = p.get("serverId").and_then(|v| v.as_str()).ok_or("Не задан serverId")?;
-    let chain = match resolve_chain(server_id) {
+    let chain = match crate::chain::resolve(server_id) {
         Ok(c) => c,
         Err(e) => {
             actionlog::record(Some(server_id), None, "ssh.connect", json!({}), Err(e.clone()));
@@ -244,22 +205,15 @@ pub async fn session_open_ssh(
             }
         };
     let sess = Arc::new(sess);
-    // Автозапуск туннелей + команда на подключении.
+    actionlog::bind(&id, server_id);
+    actionlog::record(Some(server_id), Some(&id), "ssh.connect", json!({}), Ok(()));
+    // Туннели профиля + команда на подключении. Туннели идут тем же путём, что и кнопка:
+    // с проверкой политики и записью в журнал.
     let server = store::server_with_secrets(server_id);
     if let Some(srv) = &server {
         if let Some(tunnels) = srv.get("tunnels").and_then(|v| v.as_array()) {
             for t in tunnels {
-                let _ = state
-                    .tunnels
-                    .open(
-                        app.clone(),
-                        sess.handle.clone(),
-                        id.clone(),
-                        t.clone(),
-                        sess.remote_forwards.clone(),
-                        sess.cancel.subscribe(),
-                    )
-                    .await;
+                let _ = open_tunnel(app.clone(), &state, &sess, &id, t.clone()).await;
             }
         }
         if let Some(cmd) = srv
@@ -273,8 +227,6 @@ pub async fn session_open_ssh(
     // Сборщик метрик заводится вместе с сессией, а не с панелью обзора: история за час
     // должна быть и у сервера, на обзор которого ещё не смотрели.
     metrics::spawn(id.clone(), sess.handle.clone(), sess.cancel.subscribe());
-    actionlog::bind(&id, server_id);
-    actionlog::record(Some(server_id), Some(&id), "ssh.connect", json!({}), Ok(()));
     crate::sync::lock(&state.sessions).insert(id.clone(), Session::Ssh(sess));
     // Владельцем становится окно, которое сессию открыло: закрыть её сможет только оно.
     state.owners.claim(&id, window.label());
@@ -450,35 +402,38 @@ pub async fn tunnel_open(
         })
         .cloned()
         .ok_or("Конфиг туннеля не найден")?;
-    // Политика администратора. У `-L` адрес назначения выбирает человек - его и проверяем;
-    // у `-R` цель это петля самого сервера, проверять нечего; у SOCKS5 адрес приходит в
-    // каждом запросе клиента, поэтому там проверка на соединение (`tunnels.rs`).
-    if cfg.get("type").and_then(|v| v.as_str()).unwrap_or("local") == "local" {
-        let target = cfg.get("remoteHost").and_then(|v| v.as_str()).unwrap_or("");
-        policy::check_target(target, "туннель")?;
-    }
-    let journal = (
-        session_id.clone(),
-        json!({
-            "tunnel": tunnel_id,
-            "type": cfg.get("type"),
-            "localPort": cfg.get("localPort"),
-            "remoteHost": cfg.get("remoteHost"),
-            "remotePort": cfg.get("remotePort"),
-        }),
-    );
+    open_tunnel(app, &state, &s, &session_id, cfg).await
+}
+
+/// Открывает туннель и пишет итог в журнал. Один путь и для кнопки, и для туннелей, которые
+/// поднимаются при подключении: раньше вторые шли мимо журнала. Тип и политику проверяет
+/// сам `TunnelManager::open`.
+async fn open_tunnel(
+    app: AppHandle,
+    state: &AppState,
+    sess: &ssh::SshSession,
+    session_id: &str,
+    cfg: Value,
+) -> Result<(), String> {
+    let detail = json!({
+        "tunnel": cfg.get("id"),
+        "type": cfg.get("type"),
+        "localPort": cfg.get("localPort"),
+        "remoteHost": cfg.get("remoteHost"),
+        "remotePort": cfg.get("remotePort"),
+    });
     let r = state
         .tunnels
         .open(
             app,
-            s.handle.clone(),
-            session_id,
+            sess.handle.clone(),
+            session_id.to_owned(),
             cfg,
-            s.remote_forwards.clone(),
-            s.cancel.subscribe(),
+            sess.remote_forwards.clone(),
+            sess.cancel.subscribe(),
         )
         .await;
-    actionlog::record_session(&journal.0, "tunnel.open", journal.1, &r);
+    actionlog::record_session(session_id, "tunnel.open", detail, &r);
     r
 }
 

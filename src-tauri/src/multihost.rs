@@ -134,17 +134,11 @@ pub(crate) fn name_of(server_id: &str) -> String {
 async fn run_one(server_id: String, command: String, opts: RunOptions, cancel: ssh::CancelRx) -> Value {
     let name = name_of(&server_id);
 
-    let chain = match crate::commands::session::resolve_chain_for(&server_id) {
+    // COM-порт цепочка отклоняет сама: по SSH он не открывается.
+    let chain = match crate::chain::resolve(&server_id) {
         Ok(c) => c,
         Err(e) => return skipped(&server_id, &name, e),
     };
-    if chain.first().and_then(|s| s.get("connection")).and_then(|v| v.as_str()) == Some("serial") {
-        return skipped(
-            &server_id,
-            &name,
-            "COM-порт: выполнение команд не поддерживается".into(),
-        );
-    }
     if let Some(why) = skip_reason(&chain) {
         return skipped(&server_id, &name, why);
     }

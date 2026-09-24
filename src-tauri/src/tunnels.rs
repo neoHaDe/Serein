@@ -17,6 +17,41 @@ struct TunnelEntry {
     error: Option<String>,
 }
 
+/// Вид туннеля из поля `type` конфига.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// `-L`: порт на этой машине, соединение идёт на `remoteHost` со стороны сервера.
+    Local,
+    /// `-R`: порт на сервере, соединение приходит на петлю этой машины.
+    Remote,
+    /// SOCKS5: адрес выбирает клиент в каждом запросе.
+    Dynamic,
+}
+
+impl Kind {
+    /// Нет поля - `local`, как было всегда. Незнакомое значение - отказ, а не «значит,
+    /// локальный»: раньше тип «L» или «forward» открывал локальный проброс, а проверку
+    /// политики, завязанную на `local`, обходил.
+    pub fn of(cfg: &Value) -> Result<Kind, String> {
+        match cfg.get("type") {
+            None | Some(Value::Null) => Ok(Kind::Local),
+            Some(v) => match v.as_str() {
+                Some("local") => Ok(Kind::Local),
+                Some("remote") => Ok(Kind::Remote),
+                Some("dynamic") => Ok(Kind::Dynamic),
+                _ => Err(format!("неизвестный тип туннеля: {v}")),
+            },
+        }
+    }
+}
+
+/// Какой адрес туннеля проверяет политика до открытия. У `-L` адрес назначения задан в
+/// конфиге. У `-R` цель - петля самой этой машины, проверять нечего. У SOCKS5 адрес приходит
+/// в каждом запросе клиента, и проверка стоит на каждом соединении (`handle_socks5`).
+pub fn policy_target(kind: Kind, cfg: &Value) -> Option<&str> {
+    (kind == Kind::Local).then(|| cfg.get("remoteHost").and_then(|v| v.as_str()).unwrap_or(""))
+}
+
 #[derive(Default)]
 pub struct TunnelManager {
     active: Mutex<HashMap<String, HashMap<String, TunnelEntry>>>,
@@ -76,7 +111,6 @@ impl TunnelManager {
         cancel: CancelRx,
     ) -> Result<(), String> {
         let tunnel_id = cfg.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let ttype = cfg.get("type").and_then(|v| v.as_str()).unwrap_or("local").to_string();
         let local_port = cfg.get("localPort").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
 
         self.close(&session_id, &tunnel_id, &app);
@@ -95,8 +129,26 @@ impl TunnelManager {
             );
         }
 
+        // Тип и политика - здесь, в единственной точке открытия: сюда приходят и кнопка, и
+        // туннели, которые поднимаются при подключении. Раньше проверка стояла только у кнопки,
+        // и туннель из профиля открывался при входе мимо `allowedHosts`.
+        let checked = Kind::of(&cfg).and_then(|kind| {
+            if let Some(target) = policy_target(kind, &cfg) {
+                crate::policy::check_target(target, "туннель")?;
+            }
+            Ok(kind)
+        });
+        let kind = match checked {
+            Ok(kind) => kind,
+            Err(msg) => {
+                self.set_error(&session_id, &tunnel_id, &msg);
+                emit(&app, &session_id, &tunnel_id, false, Some(&msg));
+                return Err(msg);
+            }
+        };
+
         // ---- Remote (-R remotePort:127.0.0.1:localPort) ----
-        if ttype == "remote" {
+        if kind == Kind::Remote {
             let remote_port = cfg.get("remotePort").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             crate::sync::lock(&remote_forwards).insert(remote_port, local_port);
             // tcpip_forward требует &mut - лочим Handle на время вызова.
@@ -179,7 +231,7 @@ impl TunnelManager {
 
         let remote_host = cfg.get("remoteHost").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let remote_port = cfg.get("remotePort").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-        let is_dynamic = ttype == "dynamic";
+        let is_dynamic = kind == Kind::Dynamic;
         let cancel_loop = cancel.clone();
 
         tokio::spawn(async move {
@@ -317,5 +369,41 @@ async fn handle_socks5(
             sock.write_all(&[0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await.ok();
             Err("Канал не открылся".into())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn тип_туннеля_разбирается_строго() {
+        assert_eq!(
+            Kind::of(&json!({})).unwrap(),
+            Kind::Local,
+            "нет поля - local, как раньше"
+        );
+        assert_eq!(Kind::of(&json!({ "type": null })).unwrap(), Kind::Local);
+        assert_eq!(Kind::of(&json!({ "type": "local" })).unwrap(), Kind::Local);
+        assert_eq!(Kind::of(&json!({ "type": "remote" })).unwrap(), Kind::Remote);
+        assert_eq!(Kind::of(&json!({ "type": "dynamic" })).unwrap(), Kind::Dynamic);
+        // Раньше всё это открывалось локальным пробросом без проверки политики.
+        for bad in [json!("L"), json!("forward"), json!("Local"), json!(""), json!(5)] {
+            assert!(Kind::of(&json!({ "type": bad })).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn политика_смотрит_на_адрес_только_у_локального_проброса() {
+        let cfg = json!({ "remoteHost": "192.168.1.1" });
+        assert_eq!(policy_target(Kind::Local, &cfg), Some("192.168.1.1"));
+        assert_eq!(
+            policy_target(Kind::Local, &json!({})),
+            Some(""),
+            "без адреса - пустой, и политика его отклонит"
+        );
+        assert_eq!(policy_target(Kind::Remote, &cfg), None);
+        assert_eq!(policy_target(Kind::Dynamic, &cfg), None);
     }
 }
