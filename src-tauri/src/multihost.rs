@@ -80,6 +80,19 @@ fn cap_output(text: String) -> (String, bool) {
 }
 
 /// Хост, к которому не станем подключаться, и почему.
+/// Итог команды на одном хосте - для журнала действий: успех - только код 0.
+pub fn exec_outcome(host: &Value) -> Result<(), String> {
+    let state = host["state"].as_str().unwrap_or("");
+    let code = host["code"].as_i64();
+    if state == "done" && code == Some(0) {
+        return Ok(());
+    }
+    Err(host["error"].as_str().map(str::to_owned).unwrap_or_else(|| match code {
+        Some(c) => format!("код {c}"),
+        None => state.to_owned(),
+    }))
+}
+
 pub(crate) fn skip_reason(chain: &[Value]) -> Option<String> {
     // Проверяем всю цепочку: незнакомый jump-хост опаснее незнакомой цели.
     let known: Vec<String> = knownhosts::list()
@@ -246,6 +259,20 @@ async fn run_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn итог_хоста_для_журнала() {
+        assert_eq!(exec_outcome(&json!({ "state": "done", "code": 0 })), Ok(()));
+        assert_eq!(
+            exec_outcome(&json!({ "state": "done", "code": 2 })),
+            Err("код 2".into())
+        );
+        assert_eq!(
+            exec_outcome(&json!({ "state": "failed", "error": "нет связи" })),
+            Err("нет связи".into())
+        );
+        assert_eq!(exec_outcome(&json!({ "state": "skipped" })), Err("skipped".into()));
+    }
 
     #[test]
     fn unknown_host_is_skipped_with_a_reason() {

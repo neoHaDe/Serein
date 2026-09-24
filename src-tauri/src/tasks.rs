@@ -643,6 +643,37 @@ fn check_url(url: &str) -> Result<(), String> {
 
 /// Имя контейнера - те же символы, что пропускает `docker::action_cmd`. Молча выбрасывать
 /// лишнее, как делает он, здесь нельзя: шаг ушёл бы к другому контейнеру.
+/// Имя для загруженной задачи, не совпадающее с уже имеющимися. Раньше приписка была одна на
+/// все случаи, и вторая загрузка той же задачи давала второе «… (загружена)».
+pub fn import_name(name: &str, taken: &[String]) -> String {
+    if !taken.iter().any(|t| t == name) {
+        return name.to_owned();
+    }
+    (1..)
+        .map(|n| {
+            if n == 1 {
+                format!("{name} (загружена)")
+            } else {
+                format!("{name} (загружена {n})")
+            }
+        })
+        .find(|c| !taken.iter().any(|t| t == c))
+        .expect("бесконечный ряд кончиться не может")
+}
+
+/// Итог запуска задачи на одном сервере - для журнала действий.
+pub fn run_outcome(server: &Value) -> Result<(), String> {
+    let st = server["state"].as_str().unwrap_or("");
+    if st == "done" || st == "planned" {
+        Ok(())
+    } else {
+        Err(server["error"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| st.to_owned()))
+    }
+}
+
 /// Правило то же, что у панели Docker, - одно на всё приложение.
 fn safe_container(name: &str) -> Result<String, String> {
     docker::container_ref(name.trim()).map(str::to_owned)
@@ -1615,6 +1646,28 @@ async fn run_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn загруженная_задача_получает_свободное_имя() {
+        let taken: Vec<String> = ["бэкап", "бэкап (загружена)", "другая"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(import_name("новая", &taken), "новая");
+        assert_eq!(import_name("другая", &taken), "другая (загружена)");
+        assert_eq!(import_name("бэкап", &taken), "бэкап (загружена 2)");
+    }
+
+    #[test]
+    fn итог_задачи_на_сервере_для_журнала() {
+        assert_eq!(run_outcome(&json!({ "state": "done" })), Ok(()));
+        assert_eq!(run_outcome(&json!({ "state": "planned" })), Ok(()));
+        assert_eq!(
+            run_outcome(&json!({ "state": "failed", "error": "шаг 3" })),
+            Err("шаг 3".into())
+        );
+        assert_eq!(run_outcome(&json!({ "state": "skipped" })), Err("skipped".into()));
+    }
 
     fn task_json() -> Value {
         json!({

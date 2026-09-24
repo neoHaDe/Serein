@@ -41,17 +41,8 @@ pub async fn tools_http_on(
     // своей стороны: узел через `check_host`, схема - только http и https.
     let u = tools::parse_url(&url)?;
     policy::check_target(&u.host, "запрос HTTP с сервера")?;
-    let method = method.unwrap_or_else(|| "GET".into()).to_uppercase();
-    if !matches!(method.as_str(), "GET" | "HEAD") {
-        return Err("Пока умеем только GET и HEAD".into());
-    }
-    let целый = format!(
-        "{}://{}:{}{}",
-        if u.secure { "https" } else { "http" },
-        u.host,
-        u.port,
-        u.path
-    );
+    let method = tools::http_method(method)?;
+    let целый = u.full();
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     let (kind, _) = platform::of_session(&session_id, &s.handle).await;
     if kind == platform::Kind::Windows {

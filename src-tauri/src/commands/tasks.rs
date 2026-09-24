@@ -52,9 +52,7 @@ pub fn tasks_import(path: String) -> Result<Value, String> {
         .filter_map(|t| t.get("name").and_then(|v| v.as_str()).map(str::to_owned))
         .collect();
     if let Some(name) = body.get("name").and_then(|v| v.as_str()).map(str::to_owned) {
-        if taken.contains(&name) {
-            body["name"] = json!(format!("{name} (загружена)"));
-        }
+        body["name"] = json!(tasks::import_name(&name, &taken));
     }
     let saved = store::tasks_save(body)?;
     Ok(json!({ "task": saved, "missing": missing }))
@@ -93,14 +91,7 @@ pub async fn tasks_run(
                     continue;
                 };
                 let st = srv["state"].as_str().unwrap_or("");
-                let result = if st == "done" || st == "planned" {
-                    Ok(())
-                } else {
-                    Err(srv["error"]
-                        .as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| st.to_owned()))
-                };
+                let result = tasks::run_outcome(srv);
                 actionlog::record(
                     Some(server),
                     None,

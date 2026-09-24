@@ -26,14 +26,7 @@ pub async fn multi_exec(
         };
         let state_name = host["state"].as_str().unwrap_or("");
         let code = host["code"].as_i64();
-        let result = if state_name == "done" && code == Some(0) {
-            Ok(())
-        } else {
-            Err(host["error"].as_str().map(str::to_owned).unwrap_or_else(|| match code {
-                Some(c) => format!("код {c}"),
-                None => state_name.to_owned(),
-            }))
-        };
+        let result = multihost::exec_outcome(host);
         actionlog::record(
             Some(server),
             None,

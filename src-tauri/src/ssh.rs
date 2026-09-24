@@ -1235,6 +1235,25 @@ pub fn exit_result(code: i32, stderr: &str, fallback: impl FnOnce() -> String) -
     Err(if err.is_empty() { fallback() } else { err.to_owned() })
 }
 
+/// Итог шага с `sudo -S`: вывод при успехе, иначе понятная причина. Неверный пароль sudo
+/// выглядит именно так, и сказать об этом прямо полезнее, чем показать сырой вывод пакетного
+/// менеджера.
+pub fn sudo_result(code: i32, out: &str, err: &str, what: &str) -> Result<String, String> {
+    if code == 0 {
+        return Ok(out.to_owned());
+    }
+    if out.contains("incorrect password") || err.contains("incorrect password") {
+        return Err("Пароль sudo не подошёл".into());
+    }
+    let text = format!("{out}\n{err}");
+    let text = text.trim();
+    Err(if text.is_empty() {
+        format!("{what}: код {code}")
+    } else {
+        text.to_owned()
+    })
+}
+
 /// Exec, которому на вход подаётся текст.
 ///
 /// Нужен ровно для одного: пароля `sudo`. Его нельзя подставлять в строку команды - она
@@ -1396,6 +1415,21 @@ impl OpHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn шаг_с_sudo_объясняет_отказ_словами() {
+        assert_eq!(sudo_result(0, "ок", "", "установка"), Ok("ок".into()));
+        let wrong = "[sudo] password for u: Sorry, try again.\nsudo: 1 incorrect password attempt";
+        assert_eq!(
+            sudo_result(1, "", wrong, "установка"),
+            Err("Пароль sudo не подошёл".into())
+        );
+        assert_eq!(
+            sudo_result(100, "E: нет пакета", "", "установка"),
+            Err("E: нет пакета".into())
+        );
+        assert_eq!(sudo_result(3, " ", "\n", "запуск"), Err("запуск: код 3".into()));
+    }
 
     #[test]
     fn итог_команды_никогда_не_бывает_пустой_ошибкой() {

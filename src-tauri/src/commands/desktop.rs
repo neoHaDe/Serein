@@ -36,30 +36,14 @@ pub async fn desktop_install(
 ) -> Result<Value, String> {
     let cmd = vncsetup::install_cmd(&package_manager).ok_or("Не знаем, как ставить пакеты этим менеджером")?;
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    let (code, out, err) = ssh::exec_with_input(
-        &s.handle,
-        &cmd,
-        &format!("{sudo_password}\n"),
-        Some(s.cancel.subscribe()),
-    )
-    .await?;
-    if code != 0 {
-        // Неверный пароль sudo выглядит именно так, и сказать об этом прямо полезнее,
-        // чем показать сырой вывод пакетного менеджера.
-        let текст = if out.contains("incorrect password") || err.contains("incorrect password") {
-            "Пароль sudo не подошёл".to_string()
-        } else {
-            let x = format!("{out}\n{err}");
-            let x = x.trim();
-            if x.is_empty() {
-                format!("установка вернула код {code}")
-            } else {
-                x.to_string()
-            }
-        };
-        return Ok(json!({ "ok": false, "error": текст }));
-    }
-    Ok(json!({ "ok": true }))
+    let r = sudo_step(&s, &cmd, &sudo_password, "установка").await?;
+    actionlog::record_session(
+        &session_id,
+        "desktop.install",
+        json!({ "for": "vnc", "packageManager": package_manager }),
+        &r,
+    );
+    Ok(step_json(r))
 }
 
 /// Задаёт пароль рабочего стола.
@@ -80,18 +64,26 @@ pub async fn desktop_set_password(
         Some(s.cancel.subscribe()),
     )
     .await?;
-    if code != 0 || !out.contains("OK") {
+    let r = if code != 0 || !out.contains("OK") {
         // Сюда попадает то, что сказала сама программа. Раньше её вывод глушился, и панель
         // показывала «не удалось сохранить пароль» без единого слова о причине - на сервере
         // с tigervnc это выглядело как поломка на пустом месте.
         let x = format!("{err}\n{out}");
         let x = x.trim();
-        return Ok(json!({
-            "ok": false,
-            "error": if x.is_empty() { format!("команда вернула код {code}") } else { x.to_string() },
-        }));
-    }
-    Ok(json!({ "ok": true }))
+        Err(if x.is_empty() {
+            format!("команда вернула код {code}")
+        } else {
+            x.to_string()
+        })
+    } else {
+        Ok(())
+    };
+    // Сам пароль в журнал не идёт - только факт смены.
+    actionlog::record_session(&session_id, "desktop.password", json!({ "for": "vnc" }), &r);
+    Ok(match r {
+        Ok(()) => json!({ "ok": true }),
+        Err(e) => json!({ "ok": false, "error": e }),
+    })
 }
 
 /// Окно SSH-соединения рабочего стола - сколько сервер держит в пути, не дожидаясь нас.
@@ -303,7 +295,14 @@ pub async fn desktop_rdp_install(
     let cmd = rdpsetup::install_cmd(&package_manager)
         .ok_or("Этим менеджером пакетов xrdp не поставить: пакета нет в основных хранилищах")?;
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    run_setup_step(&s, &cmd, &sudo_password, "установка").await
+    let r = sudo_step(&s, &cmd, &sudo_password, "установка").await?;
+    actionlog::record_session(
+        &session_id,
+        "desktop.install",
+        json!({ "for": "rdp", "packageManager": package_manager }),
+        &r,
+    );
+    Ok(step_json(r))
 }
 
 /// Включает и запускает службу xrdp.
@@ -326,6 +325,8 @@ pub async fn desktop_rdp_start(
     // для этого не нужен: открывать его «за компанию» значит выставить порт 3389 наружу
     // молча.
     let (kind, _) = platform::of_session(&session_id, &s.handle).await;
+    // Включение RDP - изменение сервера, а открытый межсетевой экран - ещё и наружу: оба в журнал.
+    let detail = json!({ "openFirewall": open_firewall.unwrap_or(false), "windows": kind == platform::Kind::Windows });
     if kind == platform::Kind::Windows {
         let (_c, out, _e) = ssh::exec(
             &s.handle,
@@ -333,35 +334,45 @@ pub async fn desktop_rdp_start(
             Some(s.cancel.subscribe()),
         )
         .await?;
-        return Ok(rdpsetup::parse_enable_windows(&out));
-    }
-    let r = run_setup_step(&s, rdpsetup::ENABLE_CMD, &sudo_password, "запуск").await?;
-    if r["ok"] != true {
-        return Ok(r);
+        let v = rdpsetup::parse_enable_windows(&out);
+        let r = if v["ok"] == true {
+            Ok(())
+        } else {
+            Err(v["error"].as_str().unwrap_or("не удалось включить RDP").to_owned())
+        };
+        actionlog::record_session(&session_id, "desktop.rdp.enable", detail, &r);
+        return Ok(v);
     }
     // `systemctl` возвращает ноль, успев только отправить запрос. Служба, упавшая
     // секундой позже, ответила бы «готово» - поэтому спрашиваем её саму.
-    let out = r["output"].as_str().unwrap_or_default();
-    if out.lines().any(|l| l.trim() == "active") {
-        Ok(json!({ "ok": true }))
-    } else {
-        Ok(json!({
-            "ok": false,
-            "error": format!("служба не поднялась: {}", out.trim()),
-        }))
-    }
+    let r = sudo_step(&s, rdpsetup::ENABLE_CMD, &sudo_password, "запуск")
+        .await?
+        .and_then(|out| {
+            if out.lines().any(|l| l.trim() == "active") {
+                Ok(out)
+            } else {
+                Err(format!("служба не поднялась: {}", out.trim()))
+            }
+        });
+    actionlog::record_session(&session_id, "desktop.rdp.enable", detail, &r);
+    Ok(match r {
+        Ok(_) => json!({ "ok": true }),
+        Err(e) => json!({ "ok": false, "error": e }),
+    })
 }
 
 /// Общая часть установки и запуска: выполнить с паролем на входе и разобрать отказ.
 ///
 /// Неверный пароль sudo выглядит одинаково в обоих случаях, и сказать об этом прямо
 /// полезнее, чем показать сырой вывод команды.
-async fn run_setup_step(
+/// Шаг установки с `sudo -S`: пароль идёт на стандартный вход, а не в командную строку.
+/// Внешний `Err` - обрыв связи, внутренний - отказ самого шага.
+async fn sudo_step(
     s: &std::sync::Arc<ssh::SshSession>,
     cmd: &str,
     sudo_password: &str,
-    что: &str,
-) -> Result<Value, String> {
+    what: &str,
+) -> Result<Result<String, String>, String> {
     let (code, out, err) = ssh::exec_with_input(
         &s.handle,
         cmd,
@@ -369,21 +380,15 @@ async fn run_setup_step(
         Some(s.cancel.subscribe()),
     )
     .await?;
-    if code != 0 {
-        let текст = if out.contains("incorrect password") || err.contains("incorrect password") {
-            "Пароль sudo не подошёл".to_string()
-        } else {
-            let x = format!("{out}\n{err}");
-            let x = x.trim();
-            if x.is_empty() {
-                format!("{что} вернулась с кодом {code}")
-            } else {
-                x.to_string()
-            }
-        };
-        return Ok(json!({ "ok": false, "error": текст }));
+    Ok(ssh::sudo_result(code, &out, &err, what))
+}
+
+/// Итог шага для панели: `{ok, output}` или `{ok: false, error}`.
+fn step_json(r: Result<String, String>) -> Value {
+    match r {
+        Ok(out) => json!({ "ok": true, "output": out }),
+        Err(e) => json!({ "ok": false, "error": e }),
     }
-    Ok(json!({ "ok": true, "output": out }))
 }
 
 /// Открывает рабочий стол по RDP.

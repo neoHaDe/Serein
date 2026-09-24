@@ -297,6 +297,25 @@ pub struct Url {
     pub path: String,
 }
 
+/// Метод запроса утилиты: нет - GET, регистр не важен. Кроме GET и HEAD - отказ: проверка
+/// адреса не должна ничего менять на том конце.
+pub fn http_method(method: Option<String>) -> Result<String, String> {
+    let method = method.unwrap_or_else(|| "GET".into()).to_uppercase();
+    if matches!(method.as_str(), "GET" | "HEAD") {
+        Ok(method)
+    } else {
+        Err("Пока умеем только GET и HEAD".into())
+    }
+}
+
+impl Url {
+    /// Адрес целиком, с явным портом, - в таком виде его получает `curl` на сервере.
+    pub fn full(&self) -> String {
+        let scheme = if self.secure { "https" } else { "http" };
+        format!("{scheme}://{}:{}{}", self.host, self.port, self.path)
+    }
+}
+
 /// Разбор адреса. Без схемы считаем `http` - так короче для человека, который просто
 /// хочет проверить, отвечает ли служба.
 pub fn parse_url(input: &str) -> Result<Url, String> {
@@ -583,10 +602,7 @@ fn https_exchange(addr: &str, host: &str, req: &str) -> Result<Vec<u8>, String> 
 /// Переходы показываются цепочкой, а не прячутся: половина вопросов к службе - это
 /// «куда меня в итоге увело» и «на каком шаге сломалось».
 pub async fn http_probe(url: String, method: Option<String>, max_redirects: Option<u8>) -> Result<Value, String> {
-    let method = method.unwrap_or_else(|| "GET".into()).to_uppercase();
-    if !matches!(method.as_str(), "GET" | "HEAD") {
-        return Err("Пока умеем только GET и HEAD".into());
-    }
+    let method = http_method(method)?;
     let limit = max_redirects.unwrap_or(5).min(10);
     let timeout = Duration::from_secs(10);
 
@@ -1752,6 +1768,18 @@ P=8080
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn метод_и_адрес_http_утилиты() {
+        assert_eq!(http_method(None).unwrap(), "GET");
+        assert_eq!(http_method(Some("head".into())).unwrap(), "HEAD");
+        assert!(http_method(Some("POST".into())).is_err());
+        assert_eq!(
+            parse_url("example.com/x?y=1").unwrap().full(),
+            "http://example.com:80/x?y=1"
+        );
+        assert_eq!(parse_url("https://h:8443").unwrap().full(), "https://h:8443/");
+    }
 
     #[test]
     fn host_port_parsing() {
