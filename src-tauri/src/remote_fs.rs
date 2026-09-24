@@ -243,7 +243,7 @@ pub struct Ctx {
     pub hub: TransferHub,
 }
 
-pub async fn upload_path(ctx: &Ctx, local: &str, remote_dir: &str) -> Result<(), String> {
+pub async fn upload_path(ctx: &Ctx, local: &str, remote_dir: &str) -> Result<sftp::Batch, String> {
     let (app, handle, sid, alive, hub) = (
         ctx.app.clone(),
         ctx.handle.clone(),
@@ -253,11 +253,13 @@ pub async fn upload_path(ctx: &Ctx, local: &str, remote_dir: &str) -> Result<(),
     );
     match backend(&ctx.fs, &ctx.handle).await {
         Backend::Sftp => sftp::upload_path(app, handle, sid, local, remote_dir, alive, hub).await,
-        Backend::Scp => scp::upload_path(app, handle, sid, local, remote_dir, alive, hub).await,
+        Backend::Scp => scp::upload_path(app, handle, sid, local, remote_dir, alive, hub)
+            .await
+            .map(|()| sftp::Batch::default()),
     }
 }
 
-pub async fn download_path(ctx: &Ctx, remote: &str, local_dir: &str) -> Result<(), String> {
+pub async fn download_path(ctx: &Ctx, remote: &str, local_dir: &str) -> Result<sftp::Batch, String> {
     let (app, handle, sid, alive, hub) = (
         ctx.app.clone(),
         ctx.handle.clone(),
@@ -267,31 +269,58 @@ pub async fn download_path(ctx: &Ctx, remote: &str, local_dir: &str) -> Result<(
     );
     match backend(&ctx.fs, &ctx.handle).await {
         Backend::Sftp => sftp::download_path(app, handle, sid, remote, local_dir, alive, hub).await,
-        Backend::Scp => scp::download_path(app, handle, sid, remote, local_dir, alive, hub).await,
+        Backend::Scp => scp::download_path(app, handle, sid, remote, local_dir, alive, hub)
+            .await
+            .map(|()| sftp::Batch::default()),
     }
 }
 
-/// Итог пачки передач для журнала: успех - только если прошли все. Раньше загрузка пачки
+/// Итог нескольких передач для журнала: успех - только если прошли все. Раньше загрузка пачки
 /// писалась в журнал успешной всегда, какие бы файлы в ней ни упали.
-pub fn batch_outcome(results: &[Result<(), String>]) -> Result<(), String> {
-    let failed: Vec<&String> = results.iter().filter_map(|r| r.as_ref().err()).collect();
-    match failed.first() {
-        None => Ok(()),
-        Some(first) => Err(format!("не удалось {} из {}: {first}", failed.len(), results.len())),
+///
+/// Итоги складываются в один счёт, а не вкладываются друг в друга. Путь, который упал ещё до
+/// очереди (файла нет), - одна неудача. SCP при успехе счёта не ведёт: такой путь - один файл.
+pub fn batch_outcome_of(results: &[Result<sftp::Batch, String>]) -> Result<(), String> {
+    let mut all = sftp::Batch::default();
+    for r in results {
+        match r {
+            Ok(b) => {
+                all.total += b.total.max(1);
+                all.failed.extend(b.failed.iter().cloned());
+                all.canceled += b.canceled;
+            }
+            Err(e) => {
+                all.total += 1;
+                all.failed.push(e.clone());
+            }
+        }
     }
+    all.outcome()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn batch(total: usize, failed: &[&str], canceled: usize) -> sftp::Batch {
+        sftp::Batch {
+            total,
+            failed: failed.iter().map(|s| s.to_string()).collect(),
+            canceled,
+        }
+    }
+
     #[test]
-    fn пачка_успешна_только_целиком() {
-        assert_eq!(batch_outcome(&[]), Ok(()));
-        assert_eq!(batch_outcome(&[Ok(()), Ok(())]), Ok(()));
+    fn итоги_путей_складываются_в_один_счёт() {
+        assert_eq!(batch_outcome_of(&[]), Ok(()));
         assert_eq!(
-            batch_outcome(&[Ok(()), Err("нет места".into()), Err("нет прав".into())]),
-            Err("не удалось 2 из 3: нет места".into())
+            batch_outcome_of(&[Ok(batch(3, &[], 0)), Ok(sftp::Batch::default())]),
+            Ok(())
+        );
+        assert_eq!(batch_outcome_of(&[Ok(batch(1, &[], 1))]), Err("отменено 1 из 1".into()));
+        assert_eq!(
+            batch_outcome_of(&[Ok(batch(3, &["нет места"], 0)), Err("нет такого файла".into())]),
+            Err("не удалось 2 из 4: нет места".into())
         );
     }
 }

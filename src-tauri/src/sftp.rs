@@ -1215,6 +1215,47 @@ pub async fn copy_file_down(
     download_one(ssh, sftp, &Item::quiet("download", local, remote, 0), None, None).await
 }
 
+/// Чем кончилась пачка передач.
+///
+/// Раньше SFTP отвечал «готово», что бы ни случилось с файлами по отдельности: ошибки видела
+/// только очередь передач, а журнал действий записывал отменённую или упавшую загрузку как
+/// успешную. Панели по-прежнему хватает очереди, а журнал пишет по этому итогу.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Batch {
+    pub total: usize,
+    /// Причины неудач - по одной на файл.
+    pub failed: Vec<String>,
+    pub canceled: usize,
+}
+
+impl Batch {
+    fn tally(results: Vec<Result<(), String>>) -> Batch {
+        let mut b = Batch {
+            total: results.len(),
+            ..Default::default()
+        };
+        for r in results {
+            match r {
+                Ok(()) => {}
+                Err(e) if e == CANCELLED => b.canceled += 1,
+                Err(e) => b.failed.push(e),
+            }
+        }
+        b
+    }
+
+    /// Итог для журнала: успех - только если прошли все файлы.
+    pub fn outcome(&self) -> Result<(), String> {
+        if let Some(first) = self.failed.first() {
+            Err(format!("не удалось {} из {}: {first}", self.failed.len(), self.total))
+        } else if self.canceled > 0 {
+            Err(format!("отменено {} из {}", self.canceled, self.total))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// Рекурсивно заливает локальный путь (файл/папка) в remoteDir, эмитя события.
 pub async fn upload_path(
     app: AppHandle,
@@ -1224,7 +1265,7 @@ pub async fn upload_path(
     remote_dir: &str,
     alive: Arc<AtomicBool>,
     hub: TransferHub,
-) -> Result<(), String> {
+) -> Result<Batch, String> {
     gone(Some(&alive), None)?;
     check_remote_path(remote_dir)?;
     let local = local.replace('\\', "/");
@@ -1276,7 +1317,7 @@ pub async fn upload_path(
     }
 
     let session_id = session_id.to_string();
-    stream::iter(jobs)
+    let results = stream::iter(jobs)
         .map(|(id, ctrl, lp, rp, rel, size)| {
             let app = app.clone();
             let handle = handle.clone();
@@ -1298,7 +1339,7 @@ pub async fn upload_path(
                 if !ctrl.is_live() || !alive.load(Ordering::Relaxed) {
                     hub.finish(&id);
                     item.emit(0, "canceled", None);
-                    return;
+                    return Err(CANCELLED.to_owned());
                 }
                 item.emit(0, "active", None);
                 let result = match open(handle.as_ref()).await {
@@ -1308,15 +1349,16 @@ pub async fn upload_path(
                 hub.finish(&id);
                 match result {
                     Ok(_) => item.emit(size, "done", None),
-                    Err(e) if e == CANCELLED => item.emit(0, "canceled", None),
-                    Err(e) => item.emit(0, "error", Some(&e)),
+                    Err(ref e) if e == CANCELLED => item.emit(0, "canceled", None),
+                    Err(ref e) => item.emit(0, "error", Some(e)),
                 }
+                result.map(|_| ())
             }
         })
         .buffer_unordered(TRANSFER_MAX * 2)
-        .for_each(|_| async {})
+        .collect::<Vec<_>>()
         .await;
-    Ok(())
+    Ok(Batch::tally(results))
 }
 
 /// Рекурсивно скачивает удалённый путь (файл/папка) в localDir, эмитя события.
@@ -1394,13 +1436,18 @@ pub async fn download_path(
     local_dir: &str,
     alive: Arc<AtomicBool>,
     hub: TransferHub,
-) -> Result<(), String> {
+) -> Result<Batch, String> {
     gone(Some(&alive), None)?;
     let plan = plan_download_while(handle.as_ref(), remote, local_dir, Some(alive.as_ref())).await?;
     let files = plan.jobs;
 
     // Отказ виден в списке передач, а не только в журнале: молча недокачанная папка
     // выглядит как успешно скачанная.
+    let refused: Vec<String> = plan
+        .refused
+        .iter()
+        .map(|(rel, why)| format!("{rel}: не сохранено: {why}"))
+        .collect();
     for (rel, why) in plan.refused {
         let id = uuid::Uuid::new_v4().to_string();
         Item {
@@ -1447,7 +1494,7 @@ pub async fn download_path(
     }
 
     let session_id = session_id.to_string();
-    stream::iter(jobs)
+    let results = stream::iter(jobs)
         .map(|(id, ctrl, lp, rp, rel, size)| {
             let app = app.clone();
             let handle = handle.clone();
@@ -1469,13 +1516,13 @@ pub async fn download_path(
                 if !ctrl.is_live() || !alive.load(Ordering::Relaxed) {
                     hub.finish(&id);
                     item.emit(0, "canceled", None);
-                    return;
+                    return Err(CANCELLED.to_owned());
                 }
                 // Ссылку могли подложить уже после плана: перед записью проверяем ещё раз.
                 if let Err(e) = crate::localname::no_links_below(Path::new(local_dir), Path::new(&lp)) {
                     hub.finish(&id);
                     item.emit(0, "error", Some(&e));
-                    return;
+                    return Err(e);
                 }
                 item.emit(0, "active", None);
                 let result = match open(handle.as_ref()).await {
@@ -1485,15 +1532,19 @@ pub async fn download_path(
                 hub.finish(&id);
                 match result {
                     Ok(n) => item.emit(n, "done", None),
-                    Err(e) if e == CANCELLED => item.emit(0, "canceled", None),
-                    Err(e) => item.emit(0, "error", Some(&e)),
+                    Err(ref e) if e == CANCELLED => item.emit(0, "canceled", None),
+                    Err(ref e) => item.emit(0, "error", Some(e)),
                 }
+                result.map(|_| ())
             }
         })
         .buffer_unordered(TRANSFER_MAX * 2)
-        .for_each(|_| async {})
+        .collect::<Vec<_>>()
         .await;
-    Ok(())
+    let mut batch = Batch::tally(results);
+    batch.total += refused.len();
+    batch.failed.extend(refused);
+    Ok(batch)
 }
 
 async fn ensure_remote_dir(sftp: &SftpSession, dir: &str) -> Result<(), String> {
@@ -1683,6 +1734,17 @@ pub async fn name_conflicts(
 #[cfg(test)]
 mod tests {
     use super::check_remote_path;
+
+    #[test]
+    fn итог_пачки_для_журнала() {
+        use super::{Batch, CANCELLED};
+        let ok = Batch::tally(vec![Ok(()), Ok(())]);
+        assert_eq!(ok.outcome(), Ok(()));
+        let canceled = Batch::tally(vec![Ok(()), Err(CANCELLED.into())]);
+        assert_eq!(canceled.outcome(), Err("отменено 1 из 2".into()));
+        let failed = Batch::tally(vec![Err(CANCELLED.into()), Err("нет места".into()), Ok(())]);
+        assert_eq!(failed.outcome(), Err("не удалось 1 из 3: нет места".into()));
+    }
 
     #[test]
     fn событие_передачи_не_путает_откуда_и_куда() {

@@ -156,9 +156,16 @@ pub async fn sftp_upload_paths(
     // Каждый файл виден в списке передач; в журнал - что и куда отправлено и чем кончилось.
     let journal = json!({ "remoteDir": remote_dir, "paths": paths.iter().take(50).collect::<Vec<_>>(), "count": n });
     let results = futures::future::join_all(paths.iter().map(|p| remote_fs::upload_path(&ctx, p, &remote_dir))).await;
-    let outcome = remote_fs::batch_outcome(&results);
-    actionlog::record_session(&session_id, "file.upload", journal, &outcome);
-    let failed = results.iter().filter(|r| r.is_err()).count();
+    actionlog::record_session(
+        &session_id,
+        "file.upload",
+        journal,
+        &remote_fs::batch_outcome_of(&results),
+    );
+    let failed = results
+        .iter()
+        .filter(|r| r.as_ref().map_err(Clone::clone).and_then(sftp::Batch::outcome).is_err())
+        .count();
     Ok(json!({ "uploaded": n - failed, "failed": failed }))
 }
 
@@ -189,9 +196,10 @@ pub async fn sftp_download_to(
         &session_id,
         "file.download",
         json!({ "remotePath": remote_path, "localDir": local_dir }),
-        &r,
+        &r.as_ref().map_err(Clone::clone).and_then(sftp::Batch::outcome),
     );
-    r
+    // Панели - как раньше: сбои отдельных файлов она видит в очереди передач.
+    r.map(|_| ())
 }
 
 #[tauri::command]
@@ -246,7 +254,7 @@ pub async fn sftp_drag_out(
                 "localDir": dest_s,
                 "via": "drag",
             }),
-            &remote_fs::batch_outcome(&results),
+            &remote_fs::batch_outcome_of(&results),
         );
         if !ole {
             return;
