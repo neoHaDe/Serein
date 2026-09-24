@@ -108,4 +108,10 @@ ordinary profile settings.
 ### Checksums
 
 ```
+d52dab3779eb773829620a8b323f0f8ff7dadf946f3b85335972263d49237673 Serein_1.5.1_x64-setup.exe
+731b76dd5013c013838e9fc7bf5ec6511ca74523b6aceb23e263ef91415528da Serein_1.5.1_x64-portable.zip
+dbb81b1fcad6bd20901c096c7548b9c478f36026c7004440a67761e80df4157d Serein_1.5.1_amd64.deb
+c9c1c0417d2f24ca647ffcd99a0c8a2a57a59cbde4632385e8a68ece9a6d9fab Serein_1.5.1_amd64.AppImage
+c37bbdde5e5cbc534811c323e11df7ff8bc0607a12bd404ed56a748b14b011b0 Serein-1.5.1-1.x86_64.rpm
+1858ebee17fca320e7ab8e4d88f274f35f69d34cc406c7cb3c5211fa2f72be86 serein-1.5.1-sbom.zip
 ```
