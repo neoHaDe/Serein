@@ -230,39 +230,68 @@ pub async fn put_file_while(
     }
 }
 
-// Много параметров - долг слоя передач: они соберутся в структуру контекста передачи
-// отдельной правкой. Пока запрет снят только здесь, а не на весь крейт.
-#[allow(clippy::too_many_arguments)]
-pub async fn upload_path(
-    app: AppHandle,
-    fs: Arc<Mutex<SessionFs>>,
-    handle: SharedHandle,
-    session_id: &str,
-    local: &str,
-    remote_dir: &str,
-    alive: Arc<AtomicBool>,
-    hub: TransferHub,
-) -> Result<(), String> {
-    match backend(&fs, &handle).await {
-        Backend::Sftp => sftp::upload_path(app, handle, session_id, local, remote_dir, alive, hub).await,
-        Backend::Scp => scp::upload_path(app, handle, session_id, local, remote_dir, alive, hub).await,
+/// Всё, что нужно передаче файлов внутри одной SSH-сессии. Собирается один раз на команду
+/// и дальше передаётся ссылкой - вместо восьми параметров у каждой функции.
+#[derive(Clone)]
+pub struct Ctx {
+    pub app: AppHandle,
+    pub fs: Arc<Mutex<SessionFs>>,
+    pub handle: SharedHandle,
+    pub session_id: String,
+    /// Жива ли сессия: передача сама останавливается, когда её закрыли.
+    pub alive: Arc<AtomicBool>,
+    pub hub: TransferHub,
+}
+
+pub async fn upload_path(ctx: &Ctx, local: &str, remote_dir: &str) -> Result<(), String> {
+    let (app, handle, sid, alive, hub) = (
+        ctx.app.clone(),
+        ctx.handle.clone(),
+        ctx.session_id.as_str(),
+        ctx.alive.clone(),
+        ctx.hub.clone(),
+    );
+    match backend(&ctx.fs, &ctx.handle).await {
+        Backend::Sftp => sftp::upload_path(app, handle, sid, local, remote_dir, alive, hub).await,
+        Backend::Scp => scp::upload_path(app, handle, sid, local, remote_dir, alive, hub).await,
     }
 }
 
-// Тот же долг слоя передач, что и выше.
-#[allow(clippy::too_many_arguments)]
-pub async fn download_path(
-    app: AppHandle,
-    fs: Arc<Mutex<SessionFs>>,
-    handle: SharedHandle,
-    session_id: &str,
-    remote: &str,
-    local_dir: &str,
-    alive: Arc<AtomicBool>,
-    hub: TransferHub,
-) -> Result<(), String> {
-    match backend(&fs, &handle).await {
-        Backend::Sftp => sftp::download_path(app, handle, session_id, remote, local_dir, alive, hub).await,
-        Backend::Scp => scp::download_path(app, handle, session_id, remote, local_dir, alive, hub).await,
+pub async fn download_path(ctx: &Ctx, remote: &str, local_dir: &str) -> Result<(), String> {
+    let (app, handle, sid, alive, hub) = (
+        ctx.app.clone(),
+        ctx.handle.clone(),
+        ctx.session_id.as_str(),
+        ctx.alive.clone(),
+        ctx.hub.clone(),
+    );
+    match backend(&ctx.fs, &ctx.handle).await {
+        Backend::Sftp => sftp::download_path(app, handle, sid, remote, local_dir, alive, hub).await,
+        Backend::Scp => scp::download_path(app, handle, sid, remote, local_dir, alive, hub).await,
+    }
+}
+
+/// Итог пачки передач для журнала: успех - только если прошли все. Раньше загрузка пачки
+/// писалась в журнал успешной всегда, какие бы файлы в ней ни упали.
+pub fn batch_outcome(results: &[Result<(), String>]) -> Result<(), String> {
+    let failed: Vec<&String> = results.iter().filter_map(|r| r.as_ref().err()).collect();
+    match failed.first() {
+        None => Ok(()),
+        Some(first) => Err(format!("не удалось {} из {}: {first}", failed.len(), results.len())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn пачка_успешна_только_целиком() {
+        assert_eq!(batch_outcome(&[]), Ok(()));
+        assert_eq!(batch_outcome(&[Ok(()), Ok(())]), Ok(()));
+        assert_eq!(
+            batch_outcome(&[Ok(()), Err("нет места".into()), Err("нет прав".into())]),
+            Err("не удалось 2 из 3: нет места".into())
+        );
     }
 }

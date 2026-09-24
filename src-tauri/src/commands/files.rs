@@ -1,6 +1,6 @@
 //! Файлы: локальная панель, SFTP, передачи, правка удалённых файлов.
 
-use crate::{actionlog, dnd, foldersync, localfs, localname, remote_fs, sftp, AppState};
+use crate::{actionlog, dnd, foldersync, localfs, remote_fs, sftp, ssh, AppState};
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
@@ -151,29 +151,27 @@ pub async fn sftp_upload_paths(
     paths: Vec<String>,
 ) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
+    let ctx = transfer_ctx(app, &state, &s, &session_id);
     let n = paths.len();
-    // Каждый файл виден в списке передач; в журнал - что и куда отправлено.
+    // Каждый файл виден в списке передач; в журнал - что и куда отправлено и чем кончилось.
     let journal = json!({ "remoteDir": remote_dir, "paths": paths.iter().take(50).collect::<Vec<_>>(), "count": n });
-    let handle = s.handle.clone();
-    let remote_fs = s.remote_fs.clone();
-    let alive = s.alive.clone();
-    let hub = state.transfers.clone();
-    let futs: Vec<_> = paths
-        .into_iter()
-        .map(|p| {
-            let app = app.clone();
-            let handle = handle.clone();
-            let remote_fs = remote_fs.clone();
-            let sid = session_id.clone();
-            let remote = remote_dir.clone();
-            let alive = alive.clone();
-            let hub = hub.clone();
-            async move { remote_fs::upload_path(app, remote_fs, handle, &sid, &p, &remote, alive, hub).await }
-        })
-        .collect();
-    futures::future::join_all(futs).await;
-    actionlog::record_session(&session_id, "file.upload", journal, &Ok::<(), String>(()));
-    Ok(json!({ "uploaded": n }))
+    let results = futures::future::join_all(paths.iter().map(|p| remote_fs::upload_path(&ctx, p, &remote_dir))).await;
+    let outcome = remote_fs::batch_outcome(&results);
+    actionlog::record_session(&session_id, "file.upload", journal, &outcome);
+    let failed = results.iter().filter(|r| r.is_err()).count();
+    Ok(json!({ "uploaded": n - failed, "failed": failed }))
+}
+
+/// Контекст передачи для команд этой сессии.
+fn transfer_ctx(app: AppHandle, state: &AppState, s: &ssh::SshSession, session_id: &str) -> remote_fs::Ctx {
+    remote_fs::Ctx {
+        app,
+        fs: s.remote_fs.clone(),
+        handle: s.handle.clone(),
+        session_id: session_id.to_owned(),
+        alive: s.alive.clone(),
+        hub: state.transfers.clone(),
+    }
 }
 
 #[tauri::command]
@@ -185,17 +183,8 @@ pub async fn sftp_download_to(
     local_dir: String,
 ) -> Result<(), String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    let r = remote_fs::download_path(
-        app,
-        s.remote_fs.clone(),
-        s.handle.clone(),
-        &session_id,
-        &remote_path,
-        &local_dir,
-        s.alive.clone(),
-        state.transfers.clone(),
-    )
-    .await;
+    let ctx = transfer_ctx(app, &state, &s, &session_id);
+    let r = remote_fs::download_path(&ctx, &remote_path, &local_dir).await;
     actionlog::record_session(
         &session_id,
         "file.download",
@@ -217,30 +206,23 @@ pub async fn sftp_drag_out(
         return Err("Нечего перетаскивать".into());
     }
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
-    let handle = s.handle.clone();
-    let remote_fs = s.remote_fs.clone();
-    let alive = s.alive.clone();
-    let hub = state.transfers.clone();
+    let ctx = transfer_ctx(app, &state, &s, &session_id);
     // Не ждём скачивание в invoke с dragstart: WebView2 может оборвать промис и дропнуть SFTP-канал.
     tauri::async_runtime::spawn(async move {
         dnd::cleanup_old();
-        let mut ole_ok = true;
-        if let Ok(sftp) = sftp::open(&handle).await {
-            let mut total = 0u64;
-            for remote in &remote_paths {
-                match sftp.metadata(remote).await {
-                    Ok(m) if m.file_type().is_dir() => ole_ok = false,
-                    Ok(m) => total = total.saturating_add(m.size.unwrap_or(0)),
-                    Err(_) => ole_ok = false,
+        // Мелкие файлы - OLE-перетаскиванием в Проводник, остальное - сразу в Загрузки.
+        let ole = match sftp::open(&ctx.handle).await {
+            Ok(sftp) => {
+                let mut items = Vec::with_capacity(remote_paths.len());
+                for remote in &remote_paths {
+                    let meta = sftp.metadata(remote).await.ok();
+                    items.push(meta.map(|m| (m.file_type().is_dir(), m.size.unwrap_or(0))));
                 }
+                dnd::fits_ole(&items)
             }
-            if total > dnd::OLE_MAX_BYTES {
-                ole_ok = false;
-            }
-        } else {
-            ole_ok = false;
-        }
-        let dest_dir = if ole_ok {
+            Err(_) => false,
+        };
+        let dest_dir = if ole {
             match dnd::new_tmp() {
                 Ok(t) => t,
                 Err(_) => return,
@@ -249,42 +231,27 @@ pub async fn sftp_drag_out(
             dnd::downloads_dir()
         };
         let dest_s = dest_dir.to_string_lossy().replace('\\', "/");
+        let mut results = Vec::with_capacity(remote_paths.len());
         for remote in &remote_paths {
-            let _ = remote_fs::download_path(
-                app.clone(),
-                remote_fs.clone(),
-                handle.clone(),
-                &session_id,
-                remote,
-                &dest_s,
-                alive.clone(),
-                hub.clone(),
-            )
-            .await;
+            results.push(remote_fs::download_path(&ctx, remote, &dest_s).await);
         }
-        if !ole_ok {
+        // Скачивание перетаскиванием - такое же скачивание, как кнопкой: раньше оно в журнал
+        // не попадало вовсе.
+        actionlog::record_session(
+            &ctx.session_id,
+            "file.download",
+            json!({
+                "remotePaths": remote_paths.iter().take(50).collect::<Vec<_>>(),
+                "count": remote_paths.len(),
+                "localDir": dest_s,
+                "via": "drag",
+            }),
+            &remote_fs::batch_outcome(&results),
+        );
+        if !ole {
             return;
         }
-        let mut locals = Vec::new();
-        for remote in &remote_paths {
-            let Some(name) = std::path::Path::new(remote)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-            else {
-                continue;
-            };
-            // Имя пришло с сервера: в `join` оно не должно уметь увести за каталог.
-            if localname::safe_component(&name).is_err() {
-                continue;
-            }
-            let dest = dest_dir.join(&name);
-            if !dest.exists() {
-                let _ = std::fs::create_dir_all(&dest);
-            }
-            if let Ok(p) = dnd::drag_path(&dest) {
-                locals.push(p);
-            }
-        }
+        let locals = dnd::drag_items(&dest_dir, &remote_paths);
         if locals.is_empty() {
             return;
         }

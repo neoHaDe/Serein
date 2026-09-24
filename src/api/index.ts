@@ -224,7 +224,7 @@ export const api = {
       if (typeof sel !== 'string') return { uploaded: 0 }
       return invoke('sftp_upload_paths', { sessionId, remoteDir, paths: [sel] })
     },
-    uploadPaths: (sessionId: string, remoteDir: string, paths: string[]): Promise<{ uploaded: number }> =>
+    uploadPaths: (sessionId: string, remoteDir: string, paths: string[]): Promise<{ uploaded: number; failed: number }> =>
       invoke('sftp_upload_paths', { sessionId, remoteDir, paths }),
     nameConflicts: (sessionId: string, remoteDir: string, names: string[]): Promise<string[]> =>
       invoke('sftp_name_conflicts', { sessionId, remoteDir, names }),

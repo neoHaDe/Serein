@@ -46,6 +46,34 @@ pub fn drag_path(p: &Path) -> Result<PathBuf, String> {
     dunce::canonicalize(p).map_err(|e| format!("{}: {e}", p.display()))
 }
 
+/// Годится ли выбор для OLE-перетаскивания: только файлы, все прочитались, и в сумме не больше
+/// [`OLE_MAX_BYTES`]. `None` - метаданные не прочитались; иначе (каталог ли, размер).
+pub fn fits_ole(items: &[Option<(bool, u64)>]) -> bool {
+    let mut total = 0u64;
+    for item in items {
+        match item {
+            Some((false, size)) => total = total.saturating_add(*size),
+            _ => return false,
+        }
+    }
+    total <= OLE_MAX_BYTES
+}
+
+/// Что отдать Проводнику после скачивания во временный каталог: только то, что реально
+/// скачалось. Раньше на месте несостоявшегося файла создавался пустой каталог с его именем -
+/// и человек получал в Проводнике пустую папку вместо ошибки. Имя пришло с сервера, поэтому
+/// увести за каталог оно не должно.
+pub fn drag_items(dest_dir: &Path, remote_paths: &[String]) -> Vec<PathBuf> {
+    remote_paths
+        .iter()
+        .filter_map(|remote| Path::new(remote).file_name().map(|n| n.to_string_lossy().to_string()))
+        .filter(|name| crate::localname::safe_component(name).is_ok())
+        .map(|name| dest_dir.join(name))
+        .filter(|dest| dest.exists())
+        .filter_map(|dest| drag_path(&dest).ok())
+        .collect()
+}
+
 pub fn downloads_dir() -> PathBuf {
     dirs::download_dir()
         .or_else(dirs::desktop_dir)
@@ -161,4 +189,42 @@ pub fn start_files(window: &tauri::WebviewWindow, paths: Vec<PathBuf>, tmp: Path
 #[cfg(not(windows))]
 pub fn start_files(_window: &tauri::WebviewWindow, _paths: Vec<PathBuf>, _tmp: PathBuf) -> Result<(), String> {
     Err("Перетаскивание файлов наружу пока только на Windows".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn для_ole_годятся_только_небольшие_файлы() {
+        assert!(fits_ole(&[Some((false, 10)), Some((false, 20))]));
+        assert!(!fits_ole(&[Some((false, 10)), Some((true, 0))]), "каталог");
+        assert!(!fits_ole(&[Some((false, 10)), None]), "не прочиталось");
+        assert!(
+            !fits_ole(&[Some((false, OLE_MAX_BYTES)), Some((false, 1))]),
+            "в сумме много"
+        );
+        assert!(
+            !fits_ole(&[Some((false, u64::MAX)), Some((false, u64::MAX))]),
+            "без переполнения"
+        );
+    }
+
+    #[test]
+    fn в_проводник_уходит_только_скачанное() {
+        let dir = std::env::temp_dir().join(format!("serein-dnd-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("есть.txt"), b"1").unwrap();
+        let items = drag_items(
+            &dir,
+            &["/srv/есть.txt".into(), "/srv/не-скачался.txt".into(), "/srv/..".into()],
+        );
+        let names: Vec<String> = items
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, ["есть.txt"]);
+        assert!(!dir.join("не-скачался.txt").exists(), "пустого каталога-призрака нет");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
