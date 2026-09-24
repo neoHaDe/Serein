@@ -18,6 +18,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
+use crate::termsize::TermSize;
+
 /// Сколько ждём установления соединения. Дальше - «хост не отвечает»: у сетевой железки,
 /// до которой нет маршрута, системный таймаут тянется десятками секунд.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -405,9 +407,7 @@ fn connect_error(host: &str, port: u16, e: &std::io::Error) -> String {
     }
 }
 
-// Параметры открытия пока не собраны в одну структуру - снято только здесь.
 /// Открывает TCP-сессию (telnet или сырую) и запускает поток-читатель.
-#[allow(clippy::too_many_arguments)]
 pub fn open_tcp(
     app: AppHandle,
     id: String,
@@ -415,8 +415,7 @@ pub fn open_tcp(
     host: &str,
     port: u16,
     eol_cfg: Option<&str>,
-    cols: u16,
-    rows: u16,
+    size: TermSize,
 ) -> Result<TcpSession, String> {
     if host.trim().is_empty() {
         return Err("Не указан адрес хоста".into());
@@ -441,46 +440,48 @@ pub fn open_tcp(
         .try_clone()
         .map_err(|e| format!("Не удалось открыть сокет для ответов: {e}"))?;
 
-    let alive = Arc::new(AtomicBool::new(true));
-    let binary_out = Arc::new(AtomicBool::new(false));
-    let naws = Arc::new(AtomicBool::new(false));
-
-    spawn_reader(
-        app,
-        id,
-        mode,
-        reader_sock,
-        reply_sock,
-        alive.clone(),
-        binary_out.clone(),
-        naws.clone(),
-        cols,
-        rows,
-    );
+    let flags = Flags {
+        alive: Arc::new(AtomicBool::new(true)),
+        binary_out: Arc::new(AtomicBool::new(false)),
+        naws: Arc::new(AtomicBool::new(false)),
+    };
+    spawn_reader(app, id, mode, reader_sock, reply_sock, flags.clone(), size);
 
     Ok(TcpSession {
         sock: Mutex::new(Some(sock)),
-        alive,
+        alive: flags.alive,
         mode,
         eol: Eol::from_cfg(eol_cfg),
-        binary_out,
-        naws,
+        binary_out: flags.binary_out,
+        naws: flags.naws,
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Что читатель делит с сессией: жива ли она и что согласовано с сервером.
+#[derive(Clone)]
+struct Flags {
+    alive: Arc<AtomicBool>,
+    /// Сервер согласился принимать поток как двоичный.
+    binary_out: Arc<AtomicBool>,
+    /// Сервер хочет знать размер окна (NAWS).
+    naws: Arc<AtomicBool>,
+}
+
 fn spawn_reader(
     app: AppHandle,
     id: String,
     mode: Mode,
     mut reader: TcpStream,
     mut reply_sock: TcpStream,
-    alive: Arc<AtomicBool>,
-    binary_out: Arc<AtomicBool>,
-    naws: Arc<AtomicBool>,
-    cols: u16,
-    rows: u16,
+    flags: Flags,
+    size: TermSize,
 ) {
+    let Flags {
+        alive,
+        binary_out,
+        naws,
+    } = flags;
+    let TermSize { cols, rows } = size;
     let out = crate::term_out::TermOut::spawn(app.clone(), id.clone());
     std::thread::spawn(move || {
         let mut neg = Negotiator::new(cols, rows);

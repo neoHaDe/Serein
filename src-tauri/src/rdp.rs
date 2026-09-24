@@ -309,20 +309,24 @@ fn helper_path() -> Result<std::path::PathBuf, String> {
     }
 }
 
-// Параметры сеанса пока не собраны в одну структуру - снято только здесь.
+/// Под кем входить на рабочий стол. `Debug` нет намеренно: здесь пароль.
+pub struct Login {
+    pub user: String,
+    pub password: String,
+    pub domain: Option<String>,
+}
+
 /// Открывает сеанс RDP и запускает обмен.
-#[allow(clippy::too_many_arguments)]
 pub async fn open(
     id: String,
     ssh_id: String,
     target: Target,
-    user: String,
-    password: String,
-    domain: Option<String>,
+    login: Login,
     size: (u16, u16),
     opts: Options,
     on_frame: Channel<InvokeResponseBody>,
 ) -> Result<(), String> {
+    let Login { user, password, domain } = login;
     let helper = helper_path()?;
 
     // Слушаем только петлю и только один раз: помощник подключится ровно один, а порт

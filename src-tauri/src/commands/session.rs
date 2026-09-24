@@ -146,7 +146,7 @@ pub fn session_open_tcp(
     let eol = profile.get("telnetEol").and_then(|v| v.as_str());
 
     let id = uuid::Uuid::new_v4().to_string();
-    let sess = telnet::open_tcp(app.clone(), id.clone(), mode, &host, port, eol, size.cols, size.rows)?;
+    let sess = telnet::open_tcp(app.clone(), id.clone(), mode, &host, port, eol, size)?;
     crate::sync::lock(&state.sessions).insert(id.clone(), Session::Tcp(sess));
 
     // Как и у COM-порта: молчащий экран не отличить от неверного порта, поэтому

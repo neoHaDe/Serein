@@ -1,6 +1,6 @@
 //! SCP поверх SSH exec (`scp -f` / `scp -t`) и ls/exec для каталогов без SFTP.
 
-use crate::sftp::{check_remote_path, dup_key, emit_transfer, join_remote, TransferHub, CANCELLED};
+use crate::sftp::{check_remote_path, dup_key, join_remote, Item, TransferHub, Walk, CANCELLED};
 use crate::ssh::{ClientHandler, SharedHandle};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use russh::client;
@@ -466,24 +466,29 @@ fn finish_upload_script(tmp: &str, remote: &str, mtime_secs: Option<u64>) -> Str
     )
 }
 
+/// Что известно о заливаемом файле: размер, права и время правки (если его надо сохранить).
+struct PutAttrs {
+    size: u64,
+    mode: u32,
+    mtime_secs: Option<u64>,
+}
+
 /// Заливка во временный файл рядом с целевым и замена одним `mv`.
 ///
 /// Раньше `scp -t` писал прямо в целевой файл: обрыв посреди передачи оставлял на сервере
 /// половину нового содержимого под именем старого.
-#[allow(clippy::too_many_arguments)]
 async fn put_via_temp<R>(
     handle: &tokio::sync::Mutex<client::Handle<ClientHandler>>,
     remote: &str,
     src: &mut R,
-    size: u64,
-    mode: u32,
-    mtime_secs: Option<u64>,
+    attrs: PutAttrs,
     live: &(dyn Fn() -> bool + Send + Sync),
     progress: &mut (dyn FnMut(u64, u64) + Send),
 ) -> Result<(), String>
 where
     R: tokio::io::AsyncRead + Unpin + Send,
 {
+    let PutAttrs { size, mode, mtime_secs } = attrs;
     check_remote_path(remote)?;
     let (parent, name) = split_remote(remote);
     let tmp_name = remote_part_name(&name);
@@ -534,7 +539,12 @@ pub async fn put_file_ctl(
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs());
     let mut src = tokio::io::BufReader::with_capacity(SCP_CHUNK, file);
-    put_via_temp(handle, remote, &mut src, size, local_mode(&meta), mtime, live, progress).await?;
+    let attrs = PutAttrs {
+        size,
+        mode: local_mode(&meta),
+        mtime_secs: mtime,
+    };
+    put_via_temp(handle, remote, &mut src, attrs, live, progress).await?;
     Ok(size)
 }
 
@@ -646,17 +656,12 @@ pub async fn write_file(
     // Через временный файл и одну замену: оборванная запись не оставит полфайла, а права
     // правленого файла сохраняются.
     let mut src = data.as_bytes();
-    put_via_temp(
-        handle,
-        remote,
-        &mut src,
-        data.len() as u64,
+    let attrs = PutAttrs {
+        size: data.len() as u64,
         mode,
-        None,
-        &|| true,
-        &mut |_: u64, _: u64| {},
-    )
-    .await?;
+        mtime_secs: None,
+    };
+    put_via_temp(handle, remote, &mut src, attrs, &|| true, &mut |_: u64, _: u64| {}).await?;
     Ok(json!({ "ok": true, "mtime": base_mtime }))
 }
 
@@ -721,51 +726,41 @@ pub async fn upload_path(
         let Some(ctrl) = hub.start(&id, session_id, key) else {
             continue;
         };
-        emit_transfer(&app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "active", None);
+        let item = Item {
+            app: Some(&app),
+            id: &id,
+            session_id,
+            direction: "upload",
+            local: &lp,
+            remote: &rp,
+            rel: &rel,
+            size,
+        };
+        item.emit(0, "active", None);
         let result = {
             let live = || ctrl.is_live() && alive.load(Ordering::Relaxed);
             let mut last = 0u64;
             let mut progress = |done: u64, total: u64| {
                 if done - last >= PROGRESS_STEP {
                     last = done;
-                    emit_transfer(
-                        &app, &id, session_id, "upload", &lp, &rp, &rel, total, done, "active", None,
-                    );
+                    item.with_size(total).emit(done, "active", None);
                 }
             };
             put_file_ctl(handle.as_ref(), &lp, &rp, &live, &mut progress).await
         };
         hub.finish(&id);
         if !ctrl.is_live() {
-            emit_transfer(
-                &app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "canceled", None,
-            );
+            item.emit(0, "canceled", None);
             return Err(CANCELLED.into());
         }
         match result {
-            Ok(_) => emit_transfer(
-                &app, &id, session_id, "upload", &lp, &rp, &rel, size, size, "done", None,
-            ),
+            Ok(_) => item.emit(size, "done", None),
             Err(e) if e == CANCELLED => {
-                emit_transfer(
-                    &app, &id, session_id, "upload", &lp, &rp, &rel, size, 0, "canceled", None,
-                );
+                item.emit(0, "canceled", None);
                 return Err(e);
             }
             Err(e) => {
-                emit_transfer(
-                    &app,
-                    &id,
-                    session_id,
-                    "upload",
-                    &lp,
-                    &rp,
-                    &rel,
-                    size,
-                    0,
-                    "error",
-                    Some(&e),
-                );
+                item.emit(0, "error", Some(&e));
                 return Err(e);
             }
         }
@@ -785,20 +780,17 @@ pub async fn walk_remote(
     rel: &str,
     alive: Option<&AtomicBool>,
 ) -> Result<(Vec<(String, String, String, u64)>, Vec<(String, String)>), String> {
-    let mut jobs = Vec::new();
-    let mut refused = Vec::new();
-    collect_remote_list(handle, remote, local_root, rel, &mut jobs, &mut refused, alive, 0).await?;
-    Ok((jobs, refused))
+    let mut walk = Walk::default();
+    collect_remote_list(handle, remote, local_root, rel, &mut walk, alive, 0).await?;
+    Ok((walk.jobs, walk.refused))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn collect_remote_list<'a>(
     handle: &'a tokio::sync::Mutex<client::Handle<ClientHandler>>,
     remote: &'a str,
     local: &'a str,
     rel: &'a str,
-    out: &'a mut Vec<(String, String, String, u64)>,
-    refused: &'a mut Vec<(String, String)>,
+    walk: &'a mut Walk,
     alive: Option<&'a AtomicBool>,
     depth: usize,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
@@ -813,7 +805,7 @@ fn collect_remote_list<'a>(
             if alive.is_some_and(|a| !a.load(Ordering::Relaxed)) {
                 return Err("Сессия закрыта".into());
             }
-            if out.len() >= crate::sftp::MAX_WALK_ENTRIES {
+            if walk.jobs.len() >= crate::sftp::MAX_WALK_ENTRIES {
                 return Err(crate::sftp::walk_too_big());
             }
             let name = entry["name"].as_str().unwrap_or("").to_string();
@@ -823,17 +815,17 @@ fn collect_remote_list<'a>(
             let r = format!("{rel}/{name}");
             // Имя с сервера - не путь. Что бывает иначе, объяснено в `localname`.
             if let Err(why) = crate::localname::safe_component(&name) {
-                refused.push((r, why));
+                walk.refused.push((r, why));
                 continue;
             }
             let rp = join_remote(&abs, &name);
             let lp = format!("{local}/{name}");
             match entry["type"].as_str() {
-                Some("dir") => collect_remote_list(handle, &rp, &lp, &r, out, refused, alive, depth + 1).await?,
-                Some("file") => out.push((lp, rp, r, entry["size"].as_u64().unwrap_or(0))),
+                Some("dir") => collect_remote_list(handle, &rp, &lp, &r, walk, alive, depth + 1).await?,
+                Some("file") => walk.jobs.push((lp, rp, r, entry["size"].as_u64().unwrap_or(0))),
                 // `ls` не говорит, куда ведёт ссылка - на файл или на каталог, а заходить в
                 // каталог по ссылке нельзя: так обход уходит в `/proc` и по кругу.
-                Some("link") => refused.push((
+                Some("link") => walk.refused.push((
                     r,
                     "это ссылка - по SCP не разобрать, файл за ней или каталог; скачайте её отдельно".to_owned(),
                 )),
@@ -931,19 +923,17 @@ pub async fn download_path(
     // скачанная целиком.
     for (rel, why) in refused {
         let id = uuid::Uuid::new_v4().to_string();
-        emit_transfer(
-            &app,
-            &id,
+        Item {
+            app: Some(&app),
+            id: &id,
             session_id,
-            "download",
-            "",
+            direction: "download",
+            local: "",
             remote,
-            &rel,
-            0,
-            0,
-            "error",
-            Some(&format!("не сохранено: {why}")),
-        );
+            rel: &rel,
+            size: 0,
+        }
+        .emit(0, "error", Some(&format!("не сохранено: {why}")));
     }
     for (lp, rp, rel, size) in jobs {
         if !alive.load(Ordering::Relaxed) {
@@ -952,19 +942,17 @@ pub async fn download_path(
         // Перед записью - ещё раз: ссылку могли подложить уже после плана.
         if let Err(e) = crate::localname::no_links_below(Path::new(&local_dir), Path::new(&lp)) {
             let id = uuid::Uuid::new_v4().to_string();
-            emit_transfer(
-                &app,
-                &id,
+            Item {
+                app: Some(&app),
+                id: &id,
                 session_id,
-                "download",
-                &lp,
-                &rp,
-                &rel,
+                direction: "download",
+                local: &lp,
+                remote: &rp,
+                rel: &rel,
                 size,
-                0,
-                "error",
-                Some(&e),
-            );
+            }
+            .emit(0, "error", Some(&e));
             return Err(e);
         }
         if let Some(parent) = Path::new(&lp).parent() {
@@ -975,63 +963,41 @@ pub async fn download_path(
         let Some(ctrl) = hub.start(&id, session_id, key) else {
             continue;
         };
-        emit_transfer(
-            &app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "active", None,
-        );
+        let item = Item {
+            app: Some(&app),
+            id: &id,
+            session_id,
+            direction: "download",
+            local: &lp,
+            remote: &rp,
+            rel: &rel,
+            size,
+        };
+        item.emit(0, "active", None);
         let result = {
             let live = || ctrl.is_live() && alive.load(Ordering::Relaxed);
             let mut last = 0u64;
             let mut progress = |done: u64, total: u64| {
                 if done - last >= PROGRESS_STEP {
                     last = done;
-                    emit_transfer(
-                        &app, &id, session_id, "download", &lp, &rp, &rel, total, done, "active", None,
-                    );
+                    item.with_size(total).emit(done, "active", None);
                 }
             };
             download_file_ctl(handle.as_ref(), &rp, &lp, &live, &mut progress).await
         };
         hub.finish(&id);
         if !ctrl.is_live() {
-            emit_transfer(
-                &app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "canceled", None,
-            );
+            item.emit(0, "canceled", None);
             return Err(CANCELLED.into());
         }
         match result {
-            Ok(n) => emit_transfer(
-                &app,
-                &id,
-                session_id,
-                "download",
-                &lp,
-                &rp,
-                &rel,
-                n,
-                n.max(1),
-                "done",
-                None,
-            ),
+            Ok(n) => item.with_size(n).emit(n.max(1), "done", None),
             Err(e) if e == CANCELLED => {
-                emit_transfer(
-                    &app, &id, session_id, "download", &lp, &rp, &rel, size, 0, "canceled", None,
-                );
+                item.emit(0, "canceled", None);
                 return Err(e);
             }
             Err(e) => {
-                emit_transfer(
-                    &app,
-                    &id,
-                    session_id,
-                    "download",
-                    &lp,
-                    &rp,
-                    &rel,
-                    size,
-                    0,
-                    "error",
-                    Some(&e),
-                );
+                item.emit(0, "error", Some(&e));
                 return Err(e);
             }
         }
