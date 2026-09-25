@@ -22,7 +22,7 @@ Free, open source, Apache 2.0. Windows x64 and Linux x64, **v1.5.1**.
 Windows · no bundled Chromium (system WebView2) ·
 [Russian version](README.ru.md)
 
-### → [Download the latest release](../../releases/latest)
+### → [Download the latest release](../../releases/latest) · [User guide (Russian)](docs/guide/README.md)
 
 <img src="docs/screenshot.png" width="820" alt="Serein screenshot" />
 
@@ -54,7 +54,7 @@ figures are public measurements normalised to the same metric; size is the 1.5.1
 
 ### Server Workspace (v1.1.0)
 - **Server workspace rail** on SSH tabs: Terminal, Docker, Logs, Processes, Services, Tunnels
-- **Processes** - `ps` table plus CPU/RAM/disk metrics; **Docker** - compact rows, properties via right-click
+- **Processes** - `ps` table with search and sorting, metrics live in the overview; **Docker** - compact rows, properties via right-click
 - **SFTP** - side panel from TabBar; server list collapses on connect
 - **Detach** a tab or workspace panel; **reattach** to main (SSH session stays alive)
 
@@ -95,8 +95,8 @@ figures are public measurements normalised to the same metric; size is the 1.5.1
 - **A "Stop" button (v1.4)** for a running query; a long query is stopped by the database itself
   after 28 seconds
 - Result table paged at 200 rows, several result sets with a switch between them, query history,
-  and a confirmation for destructive statements: `DELETE` without `WHERE` asks twice, and a `#`
-  in MySQL counts as a comment too
+  and a confirmation for destructive statements: `DELETE` and `UPDATE` without `WHERE`, `DROP`,
+  `TRUNCATE`, `FLUSHALL`; a `#` in MySQL counts as a comment too
 - The connection survives switching tabs and detaching the panel into its own window
 
 ### Remote desktop (v1.3, RDP in v1.3.1)
@@ -164,7 +164,7 @@ figures are public measurements normalised to the same metric; size is the 1.5.1
   count, failed services and Docker health on one screen
 - **Last-hour charts and health (v1.4)** in the overview: CPU, memory, disk, load and network;
   "Normal / Attention / Bad" with the reasons. Thresholds are global and per server
-- **Run one command on several servers** (`Ctrl+Shift+M`) - results per host with exit code,
+- **Run one command on several servers** (server list menu → "Выполнить на нескольких…") - results per host with exit code,
   stdout and stderr; hosts whose key is unknown are skipped with a reason, never trusted silently.
   **Since v1.4:** how many hosts at once (up to 64), a time limit per host, "Retry failed", a
   summary by exit code and a report saved to a file
@@ -237,7 +237,8 @@ figures are public measurements normalised to the same metric; size is the 1.5.1
 2. Import `~/.ssh/config` or add a host by hand.
 3. Connect. The local terminal works with no SSH at all.
 
-Target: install → first session in under two minutes.
+Target: install → first session in under two minutes. Where everything is and how it works -
+the [user guide](docs/guide/README.md) with screenshots (in Russian, like the interface).
 
 ---
 
@@ -361,9 +362,9 @@ npm run smoke
 ### Tests
 
 ```bash
-npm test                                          # frontend, 232 tests
+npm test                                          # frontend, 235 tests
 npm run lint                                      # eslint: React hooks and regex traps
-cargo test --manifest-path src-tauri/Cargo.toml --lib   # 383 tests
+cargo test --manifest-path src-tauri/Cargo.toml --lib   # 391 tests
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
