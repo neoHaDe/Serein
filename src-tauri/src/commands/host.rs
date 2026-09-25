@@ -76,16 +76,86 @@ pub async fn workspace_service_action(
     session_id: String,
     name: String,
     action: String,
+    sudo_password: Option<String>,
 ) -> Result<Value, String> {
     let s = state.ssh(&session_id).ok_or("Сессия не подключена")?;
     // Управлять службой каждая система умеет по-своему: systemctl, rc-service, PowerShell.
     let (kind, _) = platform::of_session(&session_id, &s.handle).await;
     let cmd = platform::service_cmd(kind, &name, &action);
-    let detail = json!({ "name": name, "action": action });
-    run_action(&s, &session_id, "service.action", detail, cmd, |code| {
-        format!("Служба {name}: действие {action} вернуло код {code}")
+    let mut detail = json!({ "name": name, "action": action });
+    // На Windows права у самой сессии, sudo там нет - и переводить нечего.
+    let (Ok(cmd), false) = (&cmd, kind == platform::Kind::Windows) else {
+        return run_action(&s, &session_id, "service.action", detail, cmd, |code| {
+            format!("Служба {name}: действие {action} вернуло код {code}")
+        })
+        .await;
+    };
+    let (result, via_sudo, need_password) = service_step(&s, &name, cmd, sudo_password).await?;
+    if via_sudo {
+        detail["sudo"] = json!(true);
+    }
+    actionlog::record_session(&session_id, "service.action", detail, &result);
+    Ok(match result {
+        Ok(()) => json!({ "ok": true }),
+        Err(e) => json!({ "ok": false, "error": e, "needSudo": need_password }),
     })
-    .await
+}
+
+/// Действие над службой юникса: как есть, а при отказе в правах - через sudo.
+///
+/// Возвращает итог, был ли sudo и нужен ли пароль, чтобы попробовать ещё раз. Внешний `Err` -
+/// обрыв связи. Пароль, если он есть, уходит на стандартный ввод `sudo -S`.
+async fn service_step(
+    s: &ssh::SshSession,
+    name: &str,
+    cmd: &str,
+    sudo_password: Option<String>,
+) -> Result<(Result<(), String>, bool, bool), String> {
+    use platform::privileged as p;
+    if let Some(password) = sudo_password.filter(|v| !v.is_empty()) {
+        let (code, out, err) = ssh::exec_with_input(
+            &s.handle,
+            &p::sudo_with_password(cmd),
+            &format!("{password}\n"),
+            Some(s.cancel.subscribe()),
+        )
+        .await?;
+        if code == 0 {
+            return Ok((Ok(()), true, false));
+        }
+        let text = format!("{out}\n{err}");
+        // Неверный пароль - повод спросить снова, а не закрыть форму.
+        let again = text.contains("incorrect password");
+        return Ok((Err(p::service_error(name, &text)), true, again));
+    }
+
+    let (code, _out, err) = ssh::exec(&s.handle, &p::c_locale(cmd), Some(s.cancel.subscribe())).await?;
+    if code == 0 {
+        return Ok((Ok(()), false, false));
+    }
+    if !p::denied(&err) {
+        return Ok((Err(p::service_error(name, &err)), false, false));
+    }
+    let (code, _out, err) = ssh::exec(&s.handle, &p::sudo_nopass(cmd), Some(s.cancel.subscribe())).await?;
+    Ok(match code {
+        0 => (Ok(()), true, false),
+        p::SUDO_NEEDS_PASSWORD => (
+            Err(format!(
+                "Чтобы управлять службой {name}, нужны права администратора - введите пароль sudo"
+            )),
+            false,
+            true,
+        ),
+        p::SUDO_MISSING => (
+            Err(format!(
+                "Чтобы управлять службой {name}, нужны права администратора, а sudo на сервере нет. \
+                 Подключитесь под root или разрешите это пользователю правилом polkit"
+            )),
+            false,
+            false,
+        ),
+        _ => (Err(p::service_error(name, &err)), true, false),
+    })
 }
 
 /// Действие над хостом с записью в журнал.

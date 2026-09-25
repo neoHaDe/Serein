@@ -685,12 +685,18 @@ export const api = {
       sessionId: string
     ): Promise<{ ok: boolean; error?: string; rows?: WorkspaceService[]; note?: string }> =>
       invoke('workspace_services', { sessionId }),
+    /**
+     * Действие над службой. При отказе в правах сервер пробует sudo сам; `needSudo` значит,
+     * что sudo просит пароль - тогда тот же вызов повторяют с `sudoPassword`. Пароль уходит
+     * на стандартный ввод `sudo -S`, в командной строке сервера его нет.
+     */
     serviceAction: (
       sessionId: string,
       name: string,
-      action: 'start' | 'stop' | 'restart'
-    ): Promise<{ ok: boolean; error?: string }> =>
-      invoke('workspace_service_action', { sessionId, name, action }),
+      action: 'start' | 'stop' | 'restart',
+      sudoPassword?: string
+    ): Promise<{ ok: boolean; error?: string; needSudo?: boolean }> =>
+      invoke('workspace_service_action', { sessionId, name, action, sudoPassword: sudoPassword ?? null }),
     logs: (sessionId: string): Promise<{ ok: boolean; error?: string; text?: string }> =>
       invoke('workspace_logs', { sessionId })
   },

@@ -3771,6 +3771,18 @@ button.secondary:hover {
 .ws-toolbar .search {
   width: 100%;
 }
+/* Пароль sudo для действия со службой: строка под фильтром, пока не введён или не отменён. */
+.ws-sudo {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.ws-sudo input {
+  flex: 1;
+  min-width: 0;
+}
 .ws-table-wrap {
   flex: 1;
   overflow: auto;

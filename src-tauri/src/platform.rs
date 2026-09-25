@@ -314,6 +314,110 @@ pub fn service_cmd(kind: Kind, name: &str, action: &str) -> Result<String, Strin
     })
 }
 
+/// Службы на юниксах управляются только с правами: root, правило polkit или `sudo`.
+///
+/// Обычному пользователю systemd отвечает «Interactive authentication required» - по SSH
+/// спросить пароль ему некому. Поэтому действие идёт в два шага: сначала как есть (у root и
+/// при разрешении polkit этого хватает), а при отказе в правах - через `sudo`: без пароля,
+/// если он так пускает, иначе панель спрашивает пароль, и он уходит на стандартный ввод.
+pub mod privileged {
+    /// Код выхода [`sudo_nopass`]: sudo есть, но просит пароль.
+    pub const SUDO_NEEDS_PASSWORD: i32 = 90;
+    /// Код выхода [`sudo_nopass`]: sudo на сервере нет.
+    pub const SUDO_MISSING: i32 = 91;
+
+    /// Команда с английскими сообщениями. По ним узнаётся отказ в правах, а на русской
+    /// локали systemd и polkit отвечают по-русски, и разбор промахнулся бы.
+    pub fn c_locale(cmd: &str) -> String {
+        format!("env LC_ALL=C {cmd}")
+    }
+
+    /// Та же команда через `sudo`, если он пускает без пароля.
+    ///
+    /// Иначе код выхода скажет почему: [`SUDO_NEEDS_PASSWORD`] или [`SUDO_MISSING`].
+    /// Проверка `sudo -n true` идёт отдельно, чтобы отказ самого sudo не спутать с отказом
+    /// команды: код 1 бывает у обоих.
+    pub fn sudo_nopass(cmd: &str) -> String {
+        format!(
+            "command -v sudo >/dev/null 2>&1 || exit {SUDO_MISSING}; \
+             sudo -n true 2>/dev/null || exit {SUDO_NEEDS_PASSWORD}; \
+             exec sudo -n {}",
+            c_locale(cmd)
+        )
+    }
+
+    /// Та же команда через `sudo -S`: пароль придёт на стандартный ввод, в строке его нет.
+    /// Сам sudo тоже с английскими сообщениями - по ним узнаётся неверный пароль.
+    pub fn sudo_with_password(cmd: &str) -> String {
+        format!("env LC_ALL=C sudo -S -p '' {}", c_locale(cmd))
+    }
+
+    /// Отказ по правам - повод повторить через sudo, а не показывать ошибку как есть.
+    pub fn denied(err: &str) -> bool {
+        let e = err.to_lowercase();
+        [
+            "interactive authentication required",
+            "access denied",
+            "permission denied",
+            "operation not permitted",
+            "must be root",
+            "superuser access required",
+            "not authorized",
+        ]
+        .iter()
+        .any(|m| e.contains(m))
+    }
+
+    /// Ошибка службы по-русски.
+    ///
+    /// Узнаваемые ответы systemd пересказываются словами, хвост «See system logs…» заменяется
+    /// подсказкой, где смотреть. Незнакомое остаётся как есть: пересказ того, чего не понял,
+    /// хуже оригинала.
+    pub fn service_error(name: &str, err: &str) -> String {
+        let text = err.trim();
+        let low = text.to_lowercase();
+        let logs = format!("Подробности - в журнале: journalctl -u {name}");
+        if low.contains("incorrect password") {
+            return "Пароль sudo не подошёл".into();
+        }
+        if low.contains("not in the sudoers") || low.contains("not allowed to execute") {
+            return format!("Этому пользователю sudo не разрешён, а без него службой {name} не управлять");
+        }
+        if low.contains("not found") || low.contains("does not exist") {
+            return format!("Служба {name} на сервере не найдена");
+        }
+        if denied(text) {
+            return format!("Недостаточно прав, чтобы управлять службой {name}");
+        }
+        if low.starts_with("job for") {
+            let why = if low.contains("timeout") {
+                "не уложилась в отведённое время"
+            } else if low.contains("too often") || low.contains("too quickly") {
+                "перезапускалась слишком часто, и systemd её придержал"
+            } else if low.contains("dependency") {
+                "не запустилась зависимость"
+            } else {
+                "процесс службы завершился с ошибкой"
+            };
+            return format!("Служба {name} не запустилась: {why}. {logs}");
+        }
+        let main: Vec<&str> = text
+            .lines()
+            .filter(|l| {
+                let l = l.trim_start();
+                !l.starts_with("See system logs") && !l.starts_with("See \"systemctl status")
+            })
+            .collect();
+        let main = main.join("\n");
+        let main = main.trim();
+        if main.is_empty() {
+            format!("Служба {name}: действие не удалось. {logs}")
+        } else {
+            format!("Служба {name}: {main}")
+        }
+    }
+}
+
 /// Команда завершения процесса под конкретную систему.
 pub fn kill_cmd(kind: Kind, pid: u32) -> Result<String, String> {
     if pid <= 1 {
@@ -886,6 +990,78 @@ net\tEthernet\t1234567890\t987654321
         );
         assert!(расшифровать(&service_cmd(Kind::Windows, "Spooler", "stop").unwrap())
             .ends_with("Stop-Service -Name 'Spooler'"));
+    }
+
+    #[test]
+    fn отказ_в_правах_узнаётся() {
+        use privileged::denied;
+        // Живые ответы: systemd без polkit, systemd с отказом polkit, OpenRC не от root.
+        assert!(denied(
+            "Failed to restart nginx.service: Interactive authentication required.\n\
+             See system logs and 'systemctl status nginx.service' for details."
+        ));
+        assert!(denied("Failed to stop nginx.service: Access denied"));
+        assert!(denied(" * nginx: superuser access required"));
+        assert!(!denied("Failed to restart nope.service: Unit nope.service not found."));
+        assert!(!denied(
+            "Job for report-export.service failed because the control process exited with error code."
+        ));
+    }
+
+    #[test]
+    fn ошибки_служб_по_русски() {
+        use privileged::service_error;
+        assert_eq!(
+            service_error("nope", "Failed to restart nope.service: Unit nope.service not found."),
+            "Служба nope на сервере не найдена"
+        );
+        let job = service_error(
+            "report-export",
+            "Job for report-export.service failed because the control process exited with error code.\n\
+             See \"systemctl status report-export.service\" and \"journalctl -xeu report-export.service\" for details.",
+        );
+        assert!(
+            job.starts_with("Служба report-export не запустилась: процесс службы завершился с ошибкой"),
+            "{job}"
+        );
+        assert!(job.contains("journalctl -u report-export"), "{job}");
+        assert_eq!(
+            service_error("nginx", "Failed to stop nginx.service: Access denied"),
+            "Недостаточно прав, чтобы управлять службой nginx"
+        );
+        assert_eq!(
+            service_error("nginx", "Sorry, try again.\nsudo: 1 incorrect password attempt"),
+            "Пароль sudo не подошёл"
+        );
+        assert!(service_error("nginx", "deploy is not in the sudoers file.").contains("sudo не разрешён"));
+        // Незнакомое не пересказываем, только убираем английский хвост про журналы.
+        assert_eq!(
+            service_error(
+                "x",
+                "Failed to start x.service: Something odd\nSee system logs and 'systemctl status x.service' for details."
+            ),
+            "Служба x: Failed to start x.service: Something odd"
+        );
+    }
+
+    #[test]
+    fn sudo_без_пароля_отличим_от_отказа_команды() {
+        use privileged::*;
+        let c = sudo_nopass("systemctl restart -- nginx.service");
+        assert!(c.contains(&format!("|| exit {SUDO_MISSING}")), "{c}");
+        assert!(
+            c.contains(&format!("sudo -n true 2>/dev/null || exit {SUDO_NEEDS_PASSWORD}")),
+            "{c}"
+        );
+        assert!(
+            c.ends_with("exec sudo -n env LC_ALL=C systemctl restart -- nginx.service"),
+            "{c}"
+        );
+        // Пароль в строку не попадает: он уходит на стандартный ввод.
+        assert_eq!(
+            sudo_with_password("systemctl stop -- nginx.service"),
+            "env LC_ALL=C sudo -S -p '' env LC_ALL=C systemctl stop -- nginx.service"
+        );
     }
 
     #[test]

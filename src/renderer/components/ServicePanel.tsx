@@ -5,6 +5,8 @@ import { WsDetachButton } from './WsDetachButton'
 import { openDetachedWorkspace } from './workspaceWindow'
 import { confirmAction } from '../confirmDialog'
 
+type ServiceAction = 'start' | 'stop' | 'restart'
+
 export function ServicePanel({
   sessionId,
   panelTitle,
@@ -22,6 +24,10 @@ export function ServicePanel({
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
+  // Действие, которому не хватило прав: ждёт пароль sudo. Пароль живёт только в поле формы
+  // и стирается сразу после попытки.
+  const [pending, setPending] = useState<{ row: WorkspaceService; action: ServiceAction } | null>(null)
+  const [sudo, setSudo] = useState('')
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -50,14 +56,22 @@ export function ServicePanel({
     )
   }, [rows, filter])
 
-  const act = async (row: WorkspaceService, action: 'start' | 'stop' | 'restart'): Promise<void> => {
+  const run = async (row: WorkspaceService, action: ServiceAction, sudoPassword?: string): Promise<void> => {
+    setBusy(row.name + action)
+    setError(null)
+    const res = await window.api.workspace.serviceAction(sessionId, row.name, action, sudoPassword)
+    setBusy(null)
+    setSudo('')
+    setPending(res.needSudo ? { row, action } : null)
+    if (!res.ok) setError(res.error ?? `Служба ${row.name}: действие не удалось`)
+    else void reload()
+  }
+
+  const act = async (row: WorkspaceService, action: ServiceAction): Promise<void> => {
     const verb = action === 'start' ? 'запустить' : action === 'stop' ? 'остановить' : 'перезапустить'
     if (!(await confirmAction(`${verb[0]!.toUpperCase() + verb.slice(1)} ${row.name}?`))) return
-    setBusy(row.name + action)
-    const res = await window.api.workspace.serviceAction(sessionId, row.name, action)
-    setBusy(null)
-    if (!res.ok) setError(res.error ?? `systemctl ${action} не удался`)
-    else void reload()
+    setPending(null)
+    await run(row, action)
   }
 
   const detach = async (): Promise<void> => {
@@ -89,6 +103,32 @@ export function ServicePanel({
         <div className="sftp-error" onClick={() => setError(null)}>
           {error}
         </div>
+      )}
+      {pending && (
+        <form
+          className="ws-sudo"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (sudo) void run(pending.row, pending.action, sudo)
+          }}
+        >
+          <input
+            type="password"
+            autoFocus
+            placeholder="Пароль sudo"
+            value={sudo}
+            onChange={(e) => setSudo(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setPending(null)
+            }}
+          />
+          <button className="primary" type="submit" disabled={!sudo || busy !== null}>
+            {busy ? '…' : 'Выполнить'}
+          </button>
+          <button className="secondary" type="button" onClick={() => setPending(null)}>
+            Отмена
+          </button>
+        </form>
       )}
       {note && <div className="agent-hint">{note}</div>}
       {loading && <div className="hint" style={{ padding: '10px 12px' }}>Загрузка…</div>}
