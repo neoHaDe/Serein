@@ -11,6 +11,11 @@ interface Props {
   /** Сколько сессий получит broadcast-ввод (панели текущей вкладки). */
   broadcastTargets?: number
   editor?: { remotePath: string; dirty: boolean }
+  /**
+   * Вкладка утилит. Панель в ней служебная и никуда не подключается, поэтому её статус
+   * показывать нельзя: он навсегда оставался «Подключение…».
+   */
+  tools?: boolean
 }
 
 const statusText: Record<string, string> = {
@@ -32,7 +37,7 @@ const statusColor: Record<string, string> = {
 const PING_EVERY = 5000
 const PING_AFTER_FAIL = 15000
 
-export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }: Props): JSX.Element {
+export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor, tools }: Props): JSX.Element {
   const [latency, setLatency] = useState<number | null>(null)
   const sessionId = leaf?.kind === 'ssh' && leaf.status === 'connected' ? leaf.sessionId : undefined
   const timerRef = useRef<ReturnType<typeof setTimeout>>()
@@ -94,6 +99,17 @@ export function StatusBar({ leaf, server, broadcast, broadcastTargets, editor }:
         <span className="sb-item" style={{ color: editor.dirty ? '#e0af68' : '#9ece6a' }}>
           {editor.dirty ? '● Несохранено' : <><Icon name="check" size={13} /> Сохранено</>}
         </span>
+      </div>
+    )
+  }
+
+  if (tools) {
+    return (
+      <div className="statusbar">
+        <span className="sb-item"><Icon name="bolt" size={13} /> Утилиты</span>
+        <span className="sb-item sb-muted">сеть, адреса и расчёты</span>
+        <span className="sb-spacer" />
+        <MinimizedWindowsHint />
       </div>
     )
   }

@@ -153,7 +153,10 @@ export function CodeEditor({ sessionId, remotePath, fileName, active, onDirtyCha
   return (
     <div className="code-editor">
       <div className="code-editor-bar">
-        <span className="ce-path" title={remotePath}>{remotePath}</span>
+        {/* Строка справа налево нужна, чтобы длинный путь обрезался с начала, а имя файла
+            оставалось видно. Но в ней начальный `/` уезжает в конец (`home/x/a.md/`), поэтому
+            путь обрамлён метками «слева направо». */}
+        <span className="ce-path" title={remotePath}>{'‎' + remotePath + '‎'}</span>
         <span className="ce-spacer" />
         <span className={'ce-state ' + saveState}>
           {saveState === 'saving'

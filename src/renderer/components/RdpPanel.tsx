@@ -71,6 +71,9 @@ export function RdpPanel({
   const screenRef = useRef<Screen | null>(null)
   const idRef = useRef<string | null>(null)
   const sizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 })
+  // Размер для подписи. Ссылка выше её не обновляет: при смене разрешения на лету статус
+  // уже «live», и без своего состояния подпись оставалась от первого кадра.
+  const [screenSize, setScreenSize] = useState<{ w: number; h: number } | null>(null)
   const scaledRef = useRef(true)
   const presentRafRef = useRef<number | null>(null)
   const pointerRafRef = useRef<number | null>(null)
@@ -207,6 +210,7 @@ export function RdpPanel({
       switch (f.kind) {
         case 'resize': {
           sizeRef.current = { w: f.w, h: f.h }
+          setScreenSize({ w: f.w, h: f.h })
           const canvas = document.createElement('canvas')
           canvas.width = f.w
           canvas.height = f.h
@@ -548,7 +552,7 @@ export function RdpPanel({
           <Icon name="monitor" size={15} /> RDP
           <span className="vnc-status">
             {status === 'connecting' && 'подключение…'}
-            {status === 'live' && `${sizeRef.current.w}×${sizeRef.current.h}`}
+            {status === 'live' && screenSize && `${screenSize.w}×${screenSize.h}`}
             {status === 'closed' && 'нет связи'}
           </span>
         </span>

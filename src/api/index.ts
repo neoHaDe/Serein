@@ -333,7 +333,8 @@ export const api = {
     export: async (password: string): Promise<{ saved: boolean; path?: string }> => {
       const path = await saveDialog({
         title: 'Сохранить бэкап',
-        defaultPath: `terminal-backup-${new Date().toISOString().slice(0, 10)}.tbk`,
+        // Имя от прежнего названия приложения. Расширение то же: старые бэкапы читаются.
+        defaultPath: `serein-backup-${new Date().toISOString().slice(0, 10)}.tbk`,
         filters: [{ name: 'Serein backup', extensions: ['tbk'] }]
       })
       if (!path) return { saved: false }

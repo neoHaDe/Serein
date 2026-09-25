@@ -54,6 +54,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
   const [masterEnabled, setMasterEnabled] = useState(false)
   const [action, setAction] = useState<Action>(null)
   const [password, setPassword] = useState('')
+  // Повтор нужен там, где пароль задаётся впервые: опечатку в мастер-пароле или в пароле
+  // бэкапа потом не исправить - зашифрованное им уже не открыть.
+  const [password2, setPassword2] = useState('')
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
   const [busy, setBusy] = useState(false)
   const [backupPreview, setBackupPreview] = useState<BackupPreview | null>(null)
@@ -80,13 +83,20 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
   const startAction = (a: Action): void => {
     setAction(a)
     setPassword('')
+    setPassword2('')
     setMsg(null)
     setBackupPreview(null)
     setAcceptedProxyCommands([])
   }
 
+  const needsRepeat = action === 'enable' || action === 'export'
+
   const runAction = async (): Promise<void> => {
     if (!password) return
+    if (needsRepeat && password !== password2) {
+      setMsg({ text: 'Пароли не совпадают', ok: false })
+      return
+    }
     setBusy(true)
     setMsg(null)
     try {
@@ -120,6 +130,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
       }
       setAction(null)
       setPassword('')
+      setPassword2('')
     } catch (e) {
       setMsg({ text: errText(e), ok: false })
     } finally {
@@ -559,6 +570,20 @@ export function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element
                   }}
                 />
               </label>
+              {needsRepeat && (
+                <label>
+                  Повторите пароль
+                  <input
+                    type="password"
+                    value={password2}
+                    onChange={(e) => setPassword2(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void runAction()
+                      if (e.key === 'Escape') setAction(null)
+                    }}
+                  />
+                </label>
+              )}
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 <button className="secondary" onClick={() => setAction(null)}>Отмена</button>
                 <button className="primary" disabled={busy} onClick={() => void runAction()}>

@@ -365,6 +365,9 @@ export default function App(): JSX.Element {
               />
             )
           }
+          if (activeTab?.kind === 'tools') {
+            return <StatusBar leaf={undefined} server={undefined} broadcast={false} tools />
+          }
           const activeLeaf = activeTab ? findLeaf(activeTab.root, activeTab.activePaneId) : undefined
           const srv = ops.servers.find((s) => s.id === activeLeaf?.serverId)
           return (
