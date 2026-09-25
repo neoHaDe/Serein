@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tokio::sync::mpsc;
 pub use vnc::X11Event;
-use vnc::{PixelFormat, VncConnector, VncEncoding, VncError, VncEvent};
+use vnc::{PixelFormat, VncClient, VncConnector, VncEncoding, VncError, VncEvent};
 
 /// Тип пакета в первом байте. Значения дублируются во фронтенде - держать их синхронно.
 ///
@@ -198,6 +198,32 @@ pub async fn open(
     Ok(())
 }
 
+/// Рукопожатие RFB вплоть до готового клиента.
+///
+/// Пароль не задан - серверу не отвечаем вовсе. Библиотека спрашивает пароль после того,
+/// как сервер прислал вызов, и пустой ответ он засчитал бы как неудачную попытку входа: а
+/// после нескольких таких TigerVNC закрывает доступ. К тому же окно сразу писало «Неверный
+/// пароль VNC» человеку, который ещё ничего не вводил, - первое подключение идёт без пароля.
+async fn handshake<S>(stream: S, password: Option<String>) -> Result<VncClient, VncError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync + 'static,
+{
+    let secret = password.filter(|p| !p.is_empty());
+    VncConnector::new(stream)
+        .set_auth_method(async move { secret.ok_or(VncError::NoPassword) })
+        .add_encoding(VncEncoding::Tight)
+        .add_encoding(VncEncoding::Zrle)
+        .add_encoding(VncEncoding::CopyRect)
+        .add_encoding(VncEncoding::Raw)
+        .add_encoding(VncEncoding::CursorPseudo)
+        .add_encoding(VncEncoding::DesktopSizePseudo)
+        .set_pixel_format(PixelFormat::bgra())
+        .build()?
+        .try_start()
+        .await?
+        .finish()
+}
+
 async fn spawn_loop<S>(
     id: String,
     stream: S,
@@ -210,26 +236,7 @@ async fn spawn_loop<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync + 'static,
 {
-    let secret = password.unwrap_or_default();
-    let started = async {
-        VncConnector::new(stream)
-            .set_auth_method(async move { Ok(secret) })
-            .add_encoding(VncEncoding::Tight)
-            .add_encoding(VncEncoding::Zrle)
-            .add_encoding(VncEncoding::CopyRect)
-            .add_encoding(VncEncoding::Raw)
-            .add_encoding(VncEncoding::CursorPseudo)
-            .add_encoding(VncEncoding::DesktopSizePseudo)
-            .set_pixel_format(PixelFormat::bgra())
-            .build()
-            .map_err(|e| OpenError::from(&e))?
-            .try_start()
-            .await
-            .map_err(|e| OpenError::from(&e))?
-            .finish()
-            .map_err(|e| OpenError::from(&e))
-    }
-    .await;
+    let started = handshake(stream, password).await.map_err(|e| OpenError::from(&e));
     // Не вошли - своё соединение рабочего стола больше не нужно, а висеть оно будет,
     // пока его не закроют явно.
     let client = match started {
@@ -405,7 +412,7 @@ async fn event_loop(
 /// то, что увидит пользователь в окне вместо экрана.
 fn vnc_err(e: &VncError) -> String {
     match e {
-        VncError::NoPassword => "Сервер требует пароль, а он не задан".into(),
+        VncError::NoPassword => "Рабочий стол защищён паролем VNC - введите его".into(),
         VncError::WrongPassword => "Неверный пароль VNC".into(),
         VncError::InvalidSecurityTyep(t) => {
             format!("Сервер предлагает способ входа {t}, который не поддерживается")
@@ -530,6 +537,62 @@ mod tests {
         let wrong = VncError::General("Authentication failed".into());
         assert!(!is_blacklisted(&wrong));
         assert_eq!(vnc_err(&wrong), "Неверный пароль VNC");
+    }
+
+    /// Сервер RFB 3.8 с входом по паролю: отдаёт вызов и возвращает ответ клиента на него -
+    /// до 16 байт, пока клиент не закрыл соединение.
+    async fn сервер_с_паролем(mut s: tokio::io::DuplexStream) -> Vec<u8> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        s.write_all(b"RFB 003.008\n").await.unwrap();
+        let mut version = [0u8; 12];
+        s.read_exact(&mut version).await.unwrap();
+        s.write_all(&[1, 2]).await.unwrap(); // один способ входа: VNC Authentication
+        let mut chosen = [0u8; 1];
+        s.read_exact(&mut chosen).await.unwrap();
+        // Вызов. Клиент без пароля к этому моменту уже ушёл - отвечать ему нечем.
+        if s.write_all(&[7u8; 16]).await.is_err() {
+            return Vec::new();
+        }
+        let mut answer = vec![0u8; 16];
+        let mut got = 0;
+        while got < answer.len() {
+            match s.read(&mut answer[got..]).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => got += n,
+            }
+        }
+        answer.truncate(got);
+        answer
+    }
+
+    #[tokio::test]
+    async fn без_пароля_серверу_ничего_не_отвечают() {
+        // Пустой ответ сервер засчитал бы как неудачный вход и после нескольких закрыл бы
+        // доступ - а первое подключение всегда идёт без пароля.
+        for пароль in [None, Some(String::new())] {
+            let (client, server) = tokio::io::duplex(4096);
+            let сервер = tokio::spawn(сервер_с_паролем(server));
+            let e = handshake(client, пароль).await.err().expect("без пароля не входим");
+            assert!(matches!(e, VncError::NoPassword), "{e:?}");
+            let e = OpenError::from(&e);
+            assert!(e.needs_password && !e.blacklisted);
+            assert!(!e.message.contains("Неверный"), "{}", e.message);
+            assert!(сервер.await.unwrap().is_empty(), "ответ на вызов ушёл серверу");
+        }
+    }
+
+    #[tokio::test]
+    async fn с_паролем_отвечают_на_вызов() {
+        let (client, server) = tokio::io::duplex(4096);
+        let сервер = tokio::spawn(сервер_с_паролем(server));
+        let попытка = tokio::spawn(handshake(client, Some("secret".into())));
+        let ответ = tokio::time::timeout(std::time::Duration::from_secs(5), сервер)
+            .await
+            .expect("сервер не дождался ответа")
+            .unwrap();
+        assert_eq!(ответ.len(), 16, "ответ на вызов - 16 байт");
+        // Итога входа сервер так и не прислал - клиент заканчивает обрывом, это ожидаемо.
+        let _ = попытка.await;
     }
 
     #[test]
