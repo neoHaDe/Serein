@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import type { SerializedTab, ServerConfig, WorkspaceProfile } from '../../shared/types'
 import { errText } from '../errText'
 import { nameProblem, profileInfo, profileSummary, withoutMissing } from '../workspaceProfiles'
+import { confirmAction } from '../confirmDialog'
 
 interface Props {
   servers: ServerConfig[]
   /** Текущие вкладки в сохраняемом виде. */
   snapshot: () => SerializedTab[]
   /** Открыть вкладки рядом с текущими или вместо них. `false` - человек передумал. */
-  onOpen: (tabs: SerializedTab[], replace: boolean) => boolean
+  onOpen: (tabs: SerializedTab[], replace: boolean) => Promise<boolean>
   onClose: () => void
 }
 
@@ -60,7 +61,7 @@ export function WorkspaceProfilesModal({ servers, snapshot, onOpen, onClose }: P
   }
 
   const overwrite = async (p: WorkspaceProfile): Promise<void> => {
-    if (!confirm(`Заменить содержимое «${p.name}» текущими вкладками (${current.length})?`)) return
+    if (!(await confirmAction(`Заменить содержимое «${p.name}» текущими вкладками (${current.length})?`))) return
     try {
       await window.api.workspaces.save({ ...p, tabs: current, savedAt: Date.now() })
       await reload()
@@ -70,7 +71,7 @@ export function WorkspaceProfilesModal({ servers, snapshot, onOpen, onClose }: P
   }
 
   const remove = async (p: WorkspaceProfile): Promise<void> => {
-    if (!p.id || !confirm(`Удалить профиль «${p.name}»? Открытые вкладки это не закроет.`)) return
+    if (!p.id || !(await confirmAction(`Удалить профиль «${p.name}»? Открытые вкладки это не закроет.`))) return
     try {
       await window.api.workspaces.remove(p.id)
       await reload()
@@ -79,14 +80,14 @@ export function WorkspaceProfilesModal({ servers, snapshot, onOpen, onClose }: P
     }
   }
 
-  const open = (p: WorkspaceProfile, replace: boolean): void => {
+  const open = async (p: WorkspaceProfile, replace: boolean): Promise<void> => {
     const tabs = withoutMissing(p.tabs, servers)
     if (tabs.length === 0) {
       setError(`В «${p.name}» не осталось вкладок: все его серверы удалены`)
       return
     }
-    if (replace && !confirm(`Закрыть все текущие вкладки и открыть «${p.name}»?`)) return
-    if (onOpen(tabs, replace)) onClose()
+    if (replace && !(await confirmAction(`Закрыть все текущие вкладки и открыть «${p.name}»?`))) return
+    if (await onOpen(tabs, replace)) onClose()
   }
 
   return (

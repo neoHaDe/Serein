@@ -11,6 +11,7 @@ import {
   targetsFor,
   type Selection
 } from '../selection'
+import { confirmAction } from '../confirmDialog'
 
 /** Цвет точки по агрегированному статусу подключения сервера. */
 const STATUS_DOT: Record<string, string> = {
@@ -643,11 +644,11 @@ export function Sidebar({
           label: many ? `Удалить${suffix}` : 'Удалить',
           danger: true,
           separated: true,
-          onClick: () => {
+          onClick: async () => {
             const question = many
               ? `Удалить серверы (${ids.length})? Действие необратимо.`
               : `Удалить сервер «${s.name}»?`
-            if (confirm(question)) ids.forEach(onDelete)
+            if (await confirmAction(question)) ids.forEach(onDelete)
           }
         }
       ]
@@ -906,8 +907,8 @@ export function Sidebar({
                             <button
                               className="mini danger"
                               title="Удалить"
-                              onClick={() => {
-                                if (confirm(`Удалить сервер «${s.name}»?`)) onDelete(s.id)
+                              onClick={async () => {
+                                if (await confirmAction(`Удалить сервер «${s.name}»?`)) onDelete(s.id)
                               }}
                             >
                               <Icon name="trash" size={14} />

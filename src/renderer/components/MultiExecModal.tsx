@@ -18,6 +18,7 @@ import {
   summaryText
 } from '../fleetReport'
 import { Icon } from './Icon'
+import { confirmAction } from '../confirmDialog'
 
 const UNGROUPED = ''
 const UNGROUPED_TITLE = 'Без группы'
@@ -136,8 +137,8 @@ export function MultiExecModal({ servers, onClose }: Props): JSX.Element {
     void run([...picked], command.trim())
   }
 
-  const retry = (): void => {
-    if (!confirm(`Повторить «${ranCommand}» на ${toRetry.length} серверах, где команда не удалась?`)) return
+  const retry = async (): Promise<void> => {
+    if (!(await confirmAction(`Повторить «${ranCommand}» на ${toRetry.length} серверах, где команда не удалась?`))) return
     void run(toRetry, ranCommand)
   }
 

@@ -31,6 +31,7 @@ import {
   type TaskStep,
   type TaskVariable
 } from '../taskModel'
+import { confirmAction } from '../confirmDialog'
 
 interface Props {
   servers: ServerConfig[]
@@ -265,9 +266,9 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
   )
 
   /** Открыть задачу в редакторе. `false` - человек не захотел бросать несохранённое. */
-  const select = (t: TaskDef | null): boolean => {
+  const select = async (t: TaskDef | null): Promise<boolean> => {
     if (running) return false
-    if (dirty && !confirm('Изменения задачи не сохранены. Бросить их?')) return false
+    if (dirty && !(await confirmAction('Изменения задачи не сохранены. Бросить их?'))) return false
     setDraft(t ? withStepIds(structuredClone(t)) : null)
     setDirty(false)
     setError('')
@@ -339,7 +340,7 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
   }
 
   const remove = async (): Promise<void> => {
-    if (!draft?.id || !confirm(`Удалить задачу «${draft.name}»? История её запусков останется.`)) return
+    if (!draft?.id || !(await confirmAction(`Удалить задачу «${draft.name}»? История её запусков останется.`))) return
     try {
       await window.api.tasks.remove(draft.id)
       setDraft(null)
@@ -350,22 +351,22 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
     }
   }
 
-  const fromTemplate = (id: string): void => {
+  const fromTemplate = async (id: string): Promise<void> => {
     const tpl = TEMPLATES.find((x) => x.id === id)
-    if (tpl && select(tpl.make())) {
+    if (tpl && (await select(tpl.make()))) {
       setDirty(true)
       setNote(`Задача из шаблона «${tpl.label}». Отметьте серверы, проверьте значения и сохраните.`)
     }
   }
 
   const importTask = async (): Promise<void> => {
-    if (running || (dirty && !confirm('Изменения задачи не сохранены. Бросить их?'))) return
+    if (running || (dirty && !(await confirmAction('Изменения задачи не сохранены. Бросить их?')))) return
     try {
       const r = await window.api.tasks.importFrom()
       if (!r.imported || !r.task) return
       await load()
       setDirty(false)
-      select(r.task)
+      void select(r.task)
       setNote(
         r.missing && r.missing.length > 0
           ? `Задача загружена. На этой машине не нашлись серверы: ${r.missing.join(', ')} - отметьте нужные вручную.`
@@ -419,7 +420,7 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
     }
   }
 
-  const start = (dry: boolean): void => {
+  const start = async (dry: boolean): Promise<void> => {
     if (!draft) return
     const problem = taskProblem(draft)
     if (problem) {
@@ -433,9 +434,9 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
     }
     if (
       !dry &&
-      !confirm(
+      !(await confirmAction(
         `Запустить «${draft.name}»${runProfile ? ` в среде «${runProfile}»` : ''} на ${targets.length} серверах?\n\nПробный прогон покажет, что будет сделано, ничего не меняя.`
-      )
+      ))
     ) {
       return
     }
@@ -470,10 +471,10 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
         <div className="tasks-layout">
           <div className="tasks-list">
             <div className="tasks-list-tools">
-              <button className="primary" disabled={running} onClick={() => select(emptyTask())}>
+              <button className="primary" disabled={running} onClick={() => void select(emptyTask())}>
                 Новая задача
               </button>
-              <select value="" disabled={running} onChange={(e) => fromTemplate(e.target.value)} title="Готовые сценарии">
+              <select value="" disabled={running} onChange={(e) => void fromTemplate(e.target.value)} title="Готовые сценарии">
                 <option value="">Из шаблона…</option>
                 {TEMPLATES.map((t) => (
                   <option key={t.id} value={t.id} title={t.hint}>
@@ -491,7 +492,7 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
                 key={t.id}
                 className={'tasks-list-item' + (draft?.id === t.id ? ' on' : '')}
                 disabled={running}
-                onClick={() => select(t)}
+                onClick={() => void select(t)}
               >
                 <span className="tasks-list-name">{t.name}</span>
                 <span className="tasks-list-meta">
@@ -885,7 +886,13 @@ export function TasksModal({ servers, onClose }: Props): JSX.Element {
         </div>
 
         <div className="modal-actions">
-          <button disabled={running} onClick={() => (dirty && !confirm('Изменения задачи не сохранены. Закрыть?') ? undefined : onClose())}>
+          <button
+            disabled={running}
+            onClick={async () => {
+              if (dirty && !(await confirmAction('Изменения задачи не сохранены. Закрыть?'))) return
+              onClose()
+            }}
+          >
             Закрыть
           </button>
         </div>

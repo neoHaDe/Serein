@@ -3,6 +3,7 @@ import type { WorkspaceService } from '../../shared/types'
 import { Icon } from './Icon'
 import { WsDetachButton } from './WsDetachButton'
 import { openDetachedWorkspace } from './workspaceWindow'
+import { confirmAction } from '../confirmDialog'
 
 export function ServicePanel({
   sessionId,
@@ -51,7 +52,7 @@ export function ServicePanel({
 
   const act = async (row: WorkspaceService, action: 'start' | 'stop' | 'restart'): Promise<void> => {
     const verb = action === 'start' ? 'запустить' : action === 'stop' ? 'остановить' : 'перезапустить'
-    if (!confirm(`${verb[0]!.toUpperCase() + verb.slice(1)} ${row.name}?`)) return
+    if (!(await confirmAction(`${verb[0]!.toUpperCase() + verb.slice(1)} ${row.name}?`))) return
     setBusy(row.name + action)
     const res = await window.api.workspace.serviceAction(sessionId, row.name, action)
     setBusy(null)

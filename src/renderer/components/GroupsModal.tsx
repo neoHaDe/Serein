@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { ServerConfig } from '../../shared/types'
 import { Icon } from './Icon'
+import { confirmAction } from '../confirmDialog'
 
 interface Props {
   groups: string[]
@@ -188,8 +189,8 @@ export function GroupsModal({
                 <button
                   className="mini danger"
                   style={{ marginTop: 14 }}
-                  onClick={() => {
-                    if (!confirm(`Удалить группу «${selected}»? Серверы останутся, но окажутся без группы.`))
+                  onClick={async () => {
+                    if (!(await confirmAction(`Удалить группу «${selected}»? Серверы останутся, но окажутся без группы.`)))
                       return
                     onDelete(selected)
                     setSelected(null)

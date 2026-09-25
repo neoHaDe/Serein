@@ -48,6 +48,7 @@ import { AnchoredMenu, ExplorerHead, OverwriteAsk, PropsSheet } from './SftpPart
 import { LocalMenu, RemoteMenu } from './SftpMenus'
 import { SftpTransferQueue, useSftpTransfers } from './SftpTransfers'
 import { SftpEditList, useRemoteEdits } from './SftpEdits'
+import { confirmAction } from '../confirmDialog'
 
 interface Props {
   sessionId: string
@@ -511,7 +512,7 @@ export function SftpPanel({ sessionId, serverId, onClose, width, closing, detach
     const msg = dirs
       ? `Удалить ${what} вместе со всем содержимым? Отменить будет нельзя.`
       : `Удалить ${what}?`
-    if (!confirm(msg)) return
+    if (!(await confirmAction(msg))) return
     try {
       for (const item of items) {
         await window.api.sftp.remove(sessionId, joinRemote(path, item.name), item.type === 'dir')

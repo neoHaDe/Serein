@@ -38,6 +38,7 @@ import {
 } from '../tabs'
 import type { AuxRestore } from './useAuxRestore'
 import { useReconnect, type Reconnect } from './useReconnect'
+import { confirmAction } from '../confirmDialog'
 
 /**
  * Вкладки, панели, сессии и broadcast.
@@ -87,7 +88,7 @@ export interface TabsApi {
   /** Текущие вкладки терминалов в сохраняемом виде - для профиля. */
   snapshotTabs: () => SerializedTab[]
   /** Открыть вкладки профиля рядом с текущими или вместо них. `false` - человек передумал. */
-  openProfile: (saved: SerializedTab[], replace: boolean) => boolean
+  openProfile: (saved: SerializedTab[], replace: boolean) => Promise<boolean>
   connectedSessions: { sessionId: string; title: string }[]
 }
 
@@ -364,10 +365,10 @@ export function useTabs({
   }, [tabs, activeKey])
 
   const closeTab = useCallback(
-    (key: string) => {
+    async (key: string) => {
       const tab = tabsRef.current.find((t) => t.key === key)
       if (tab?.kind === 'editor' && tab.editorDirty) {
-        if (!confirm(`В «${tab.title}» есть несохранённые изменения. Закрыть без сохранения?`)) return
+        if (!(await confirmAction(`В «${tab.title}» есть несохранённые изменения. Закрыть без сохранения?`))) return
       }
       if (tab) {
         for (const l of allLeaves(tab.root)) {
@@ -594,16 +595,16 @@ export function useTabs({
   const snapshotTabs = useCallback(() => tabsForLayoutPersist(tabsRef.current), [])
 
   const openProfile = useCallback(
-    (saved: SerializedTab[], replace: boolean) => {
+    async (saved: SerializedTab[], replace: boolean) => {
       if (replace) {
         // Вместо текущих - значит закрыть текущие со всеми сессиями. Несохранённую правку
         // файла молча не выбрасываем: один вопрос на все такие вкладки.
         const dirty = tabsRef.current.filter((t) => t.kind === 'editor' && t.editorDirty)
         if (
           dirty.length &&
-          !confirm(
+          !(await confirmAction(
             `Во вкладках ${dirty.map((t) => `«${t.title}»`).join(', ')} есть несохранённые изменения. Закрыть без сохранения?`
-          )
+          ))
         ) {
           return false
         }

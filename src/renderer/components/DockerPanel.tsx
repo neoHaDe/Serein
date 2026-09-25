@@ -16,6 +16,7 @@ import { openDetachedWorkspace } from './workspaceWindow'
 import { matchesQuery, nextSort, parseBytes, parsePercent, saveSort, sortRows, loadSort } from '../tableSort'
 import { SortHeader } from './SortHeader'
 import { formatPorts } from '../dockerPorts'
+import { confirmAction } from '../confirmDialog'
 
 interface Props {
   /** SSH-сессия, на которой выполняем docker-команды и shell. */
@@ -464,7 +465,7 @@ function DockerComposeView({
     service?: string,
     confirmMsg?: string
   ): Promise<void> => {
-    if (confirmMsg && !confirm(confirmMsg)) return
+    if (confirmMsg && !(await confirmAction(confirmMsg))) return
     const key = service ? `${composeFile}:${service}:${action}` : `${composeFile}:${action}`
     setBusy(key)
     const res = await window.api.docker.composeAction(sessionId, composeFile, project, action, service)
@@ -847,7 +848,7 @@ export function DockerPanel({
   }, [sessionId])
 
   const doAction = async (c: DockerContainer, action: DockerAction): Promise<void> => {
-    if (action === 'remove' && !confirm(`Удалить контейнер «${c.name}»?`)) return
+    if (action === 'remove' && !(await confirmAction(`Удалить контейнер «${c.name}»?`))) return
     setBusy(c.id)
     const res = await window.api.docker.action(sessionId, c.id, action)
     setBusy(null)

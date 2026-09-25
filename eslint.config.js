@@ -24,7 +24,17 @@ export default tseslint.config(
       // `==` с null - привычная и намеренная проверка «null или undefined».
       eqeqeq: ['error', 'always', { null: 'ignore' }],
       'no-var': 'error',
-      'prefer-const': 'error'
+      'prefer-const': 'error',
+      // Плагин диалогов подменяет `confirm` асинхронным: `if (!confirm(...))` не ждёт ответа
+      // и выполняет действие без вопроса. Спрашивать - через `confirmAction`.
+      'no-restricted-globals': [
+        'error',
+        { name: 'confirm', message: 'confirm не ждёт ответа в Tauri - await confirmAction() из confirmDialog.ts' }
+      ],
+      'no-restricted-properties': [
+        'error',
+        { object: 'window', property: 'confirm', message: 'await confirmAction() из confirmDialog.ts' }
+      ]
     }
   }
 )

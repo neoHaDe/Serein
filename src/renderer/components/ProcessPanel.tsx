@@ -6,6 +6,7 @@ import { openDetachedWorkspace } from './workspaceWindow'
 import { metricView } from '../processMetric'
 import { loadSort, matchesQuery, nextSort, saveSort, sortRows, type SortDir } from '../tableSort'
 import { SortHeader } from './SortHeader'
+import { confirmAction } from '../confirmDialog'
 
 type ProcessKey = 'pid' | 'user' | 'cpu' | 'mem' | 'stat' | 'cmd'
 
@@ -117,7 +118,7 @@ export function ProcessPanel({
   }
 
   const kill = async (row: WorkspaceProcess): Promise<void> => {
-    if (!confirm(`Завершить процесс ${row.pid} (${row.cmd})?`)) return
+    if (!(await confirmAction(`Завершить процесс ${row.pid} (${row.cmd})?`))) return
     setBusy(row.pid)
     const res = await window.api.workspace.kill(sessionId, row.pid)
     setBusy(null)

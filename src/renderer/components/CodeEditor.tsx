@@ -6,6 +6,7 @@ import { languageFor } from '../editorLang'
 import { isImageFile } from '../fileKind'
 import { useSettings } from '../SettingsContext'
 import { errText } from '../errText'
+import { confirmAction } from '../confirmDialog'
 
 interface Props {
   sessionId: string
@@ -128,7 +129,7 @@ export function CodeEditor({ sessionId, remotePath, fileName, active, onDirtyCha
     try {
       let res = await window.api.sftp.writeFile(sessionId, remotePath, text, m.mode, m.mtime, m.eol)
       if (res.conflict) {
-        if (!confirm('Файл изменился на сервере с момента открытия. Перезаписать своей версией?')) {
+        if (!(await confirmAction('Файл изменился на сервере с момента открытия. Перезаписать своей версией?'))) {
           setSaveState('idle')
           return
         }

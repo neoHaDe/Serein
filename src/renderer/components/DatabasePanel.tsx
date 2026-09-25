@@ -5,6 +5,7 @@ import { openDetachedWorkspace } from './workspaceWindow'
 import { errText } from '../errText'
 import { cellText, isNull, needsConfirm, pageBounds, summarize, type QueryResult } from '../dbQuery'
 import { forget, isGone, recall, remember, update } from '../dbMemory'
+import { confirmAction } from '../confirmDialog'
 
 /**
  * Базы данных рядом с сервером.
@@ -211,7 +212,7 @@ export function DatabasePanel({ sessionId, panelTitle, onDetached, fill }: Props
 
     // Необратимое действие подтверждаем до выполнения, а не сообщаем после.
     const warn = needsConfirm(query)
-    if (warn && !confirm(`${warn}\n\nВыполнить?`)) return
+    if (warn && !(await confirmAction(`${warn}\n\nВыполнить?`))) return
 
     setBusy(true)
     setError('')

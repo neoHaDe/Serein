@@ -10,6 +10,7 @@ import {
   type SyncItem,
   type SyncPlan
 } from '../folderSync'
+import { confirmAction } from '../confirmDialog'
 
 interface Props {
   sessionId: string
@@ -79,7 +80,7 @@ export function FolderSyncModal({ sessionId, localDir, remoteDir, onClose }: Pro
 
   const upload = async (): Promise<void> => {
     if (!plan || !steps || steps.files === 0) return
-    if (!confirm(`Залить ${steps.files} файлов в ${plan.remoteRoot}?`)) return
+    if (!(await confirmAction(`Залить ${steps.files} файлов в ${plan.remoteRoot}?`))) return
     setStarting(true)
     setError('')
     try {
