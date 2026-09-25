@@ -55,6 +55,9 @@ figures are public measurements normalised to the same metric; size is the 1.5.2
 ### Server Workspace (v1.1.0)
 - **Server workspace rail** on SSH tabs: Terminal, Docker, Logs, Processes, Services, Tunnels
 - **Processes** - `ps` table with search and sorting, metrics live in the overview; **Docker** - compact rows, properties via right-click
+- **Services** - start, stop, restart. Without the rights Serein tries `sudo`: silently if it lets in
+  without a password, otherwise it asks for the `sudo` password, which goes to standard input and is
+  never saved. systemd errors are explained in words
 - **SFTP** - side panel from TabBar; server list collapses on connect
 - **Detach** a tab or workspace panel; **reattach** to main (SSH session stays alive)
 
@@ -170,7 +173,9 @@ figures are public measurements normalised to the same metric; size is the 1.5.2
   summary by exit code and a report saved to a file
 - **Utilities (v1.3)** moved out of a modal covering the app into a tab of their own with a
   rail: port check, port range, traceroute, HTTP request, DNS, TLS certificate, LDAP query,
-  file comparison. The subnet calculator, hashes and JWT decode need no server at all
+  file comparison. The subnet calculator, hashes and JWT decode need no server at all.
+  The answer comes in words ("port open", "HTTP 200 OK", "valid for 65 more days") with
+  details below; the raw response is under "Подробно"
 - **Checks run from the server as well as from your machine.** Traceroute from the server
   uses `tracepath`, which needs no root
 - Files for comparison are picked over SFTP
@@ -364,9 +369,9 @@ npm run smoke
 ### Tests
 
 ```bash
-npm test                                          # frontend, 235 tests
+npm test                                          # frontend, 247 tests
 npm run lint                                      # eslint: React hooks and regex traps
-cargo test --manifest-path src-tauri/Cargo.toml --lib   # 391 tests
+cargo test --manifest-path src-tauri/Cargo.toml --lib   # 399 tests
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
