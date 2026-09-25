@@ -68,11 +68,10 @@ pub fn open_local(
         })
         .map_err(|e| e.to_string())?;
 
-    let mut cmd = CommandBuilder::new(shell);
-    if let Some(dir) = cwd {
-        cmd.cwd(dir);
-    }
-    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    let child = pair
+        .slave
+        .spawn_command(shell_command(shell, cwd))
+        .map_err(|e| e.to_string())?;
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
@@ -104,6 +103,22 @@ pub fn open_local(
         master: Mutex::new(Some(pair.master)),
         child: Mutex::new(Some(child)),
     })
+}
+
+/// Команда запуска локального shell.
+///
+/// `TERM` задаётся всегда, как и при подключении по SSH: на экране xterm.js, что бы ни
+/// стояло в окружении самого приложения. Запущенное из меню рабочего стола, оно `TERM` не
+/// получает вовсе, и на Linux `clear`, `nano`, `htop` и `less` отвечали «TERM environment
+/// variable not set» или рисовали как на тупом терминале. Унаследованный от консоли
+/// `TERM=linux` был бы не лучше: он описывает другой терминал.
+fn shell_command(shell: String, cwd: Option<String>) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new(shell);
+    cmd.env("TERM", "xterm-256color");
+    if let Some(dir) = cwd {
+        cmd.cwd(dir);
+    }
+    cmd
 }
 
 /// Выбор shell для локального терминала по предпочтению (как в Electron-версии).
@@ -151,5 +166,17 @@ pub fn resolve_shell(pref: &str) -> String {
             "fish" => "/usr/bin/fish".into(),
             _ => std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn локальный_терминал_знает_свой_тип() {
+        // Без этого на Linux, запущенном из меню, `clear` и `htop` не работали.
+        let cmd = shell_command("/bin/sh".into(), None);
+        assert_eq!(cmd.get_env("TERM").and_then(|v| v.to_str()), Some("xterm-256color"));
     }
 }
