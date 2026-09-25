@@ -16,6 +16,9 @@ use serde_json::{json, Value};
 /// Смотрим три разные вещи, потому что «VNC не работает» бывает по трём разным причинам:
 /// программы нет вовсе, программа есть но не запущена, запущена но слушает не там.
 pub const DETECT_CMD: &str = concat!(
+    // Серверные части VNC ставятся и в /usr/sbin (tigervnc в Fedora), а его нет в PATH
+    // обычного пользователя в Debian и Astra - ищем и там, как в `rdpsetup`.
+    "PATH=\"$PATH:/usr/local/sbin:/usr/sbin:/sbin\"; ",
     "for b in x11vnc vncserver Xvnc tigervncserver x0vncserver; do ",
     "  p=$(command -v $b 2>/dev/null) && echo \"BIN:$b|$p\"; ",
     "done; ",
@@ -29,8 +32,9 @@ pub const DETECT_CMD: &str = concat!(
     // стенда как раз такой. Тогда читаем ядро напрямую: `/proc/net/tcp` есть всегда.
     // Адрес и порт там шестнадцатеричные, поэтому отбираем по маске (170C..171F - это
     // 5900..5919, экраны с нулевого по девятнадцатый), а расшифровывает уже разбор.
-    "  awk '$4 == \"0A\" && (toupper($2) ~ /:170[C-F]$/ || toupper($2) ~ /:171[0-9A-F]$/) ",
-    "    {print \"PORTHEX:\" $2}' /proc/net/tcp 2>/dev/null; ",
+    // tcp6 тоже: сервер, слушающий `[::]`, в одном `tcp` не виден.
+    "  cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | awk '$4 == \"0A\" && (toupper($2) ~ /:170[C-F]$/ || toupper($2) ~ /:171[0-9A-F]$/) ",
+    "    {print \"PORTHEX:\" $2}'; ",
     "fi; ",
     // Есть ли вообще графическая среда: без неё показывать будет нечего.
     "if [ -d /usr/share/xsessions ] && [ -n \"$(ls -A /usr/share/xsessions 2>/dev/null)\" ]; then ",
@@ -115,10 +119,16 @@ pub fn parse_detect(stdout: &str) -> Value {
 pub fn decode_proc_addr(raw: &str) -> Option<String> {
     let (a, p) = raw.trim().split_once(':')?;
     let port = u16::from_str_radix(p, 16).ok()?;
-    // IPv6 в этом файле записан тридцатью двумя знаками; для него точный разбор здесь
-    // избыточен - достаточно сказать, что слушает, и на каком порту.
+    // IPv6 в этом файле записан тридцатью двумя знаками; точный разбор здесь избыточен, но
+    // петлю от «всех адресов» отличаем: `[::]` рядом с `127.0.0.1` читается как «открыт
+    // наружу», хотя сервер слушает только `::1`.
     if a.len() != 8 {
-        return Some(format!("[::]:{port}"));
+        let addr = if a == "00000000000000000000000001000000" {
+            "::1"
+        } else {
+            "::"
+        };
+        return Some(format!("[{addr}]:{port}"));
     }
     let n = u32::from_str_radix(a, 16).ok()?;
     // `to_le_bytes` уже разворачивает число в тот порядок, в каком байты лежали в памяти,
@@ -249,10 +259,15 @@ mod tests {
         // единственный источник это `/proc/net/tcp`, где всё шестнадцатеричное.
         assert_eq!(decode_proc_addr("0100007F:170C").unwrap(), "127.0.0.1:5900");
         assert_eq!(decode_proc_addr("00000000:1717").unwrap(), "0.0.0.0:5911");
-        // Шестнадцать байт - это IPv6; точный разбор тут избыточен.
-        assert!(decode_proc_addr("00000000000000000000000001000000:170C")
-            .unwrap()
-            .contains("5900"));
+        // Шестнадцать байт - это IPv6: петля отдельно от «всех адресов», остальное как `::`.
+        assert_eq!(
+            decode_proc_addr("00000000000000000000000001000000:170C").unwrap(),
+            "[::1]:5900"
+        );
+        assert_eq!(
+            decode_proc_addr("00000000000000000000000000000000:0D3D").unwrap(),
+            "[::]:3389"
+        );
         // Мусор не превращаем в адрес: выдуманный хуже отсутствующего.
         assert!(decode_proc_addr("не адрес").is_none());
         assert!(decode_proc_addr("").is_none());

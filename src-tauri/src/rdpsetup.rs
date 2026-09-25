@@ -19,6 +19,9 @@ use serde_json::{json, Value};
 /// разным поводам - программы нет, программа есть но не запущена, запущена но слушает
 /// не там. Ответ человеку в каждом случае свой.
 pub const DETECT_CMD: &str = concat!(
+    // `xrdp` лежит в /usr/sbin, а у обычного пользователя в Debian и Astra этого каталога
+    // в PATH нет: `command -v` его не находил, и панель предлагала поставить уже стоящее.
+    "PATH=\"$PATH:/usr/local/sbin:/usr/sbin:/sbin\"; ",
     "for b in xrdp xrdp-sesman; do ",
     "  p=$(command -v $b 2>/dev/null) && echo \"BIN:$b|$p\"; ",
     "done; ",
@@ -30,7 +33,8 @@ pub const DETECT_CMD: &str = concat!(
     "elif [ -r /proc/net/tcp ]; then ",
     // Ни `ss`, ни `netstat` на урезанных системах может не быть. Тогда читаем ядро:
     // 0D3D - это 3389 шестнадцатеричным, а 0A в четвёртом столбце значит «слушает».
-    "  awk '$4 == \"0A\" && toupper($2) ~ /:0D3D$/ {print \"PORTHEX:\" $2}' /proc/net/tcp 2>/dev/null; ",
+    // Смотрим и tcp6: xrdp слушает `[::]:3389`, и по одному `tcp` он выглядел лежащим.
+    "  cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | awk '$4 == \"0A\" && toupper($2) ~ /:0D3D$/ {print \"PORTHEX:\" $2}'; ",
     "fi; ",
     // Запущена ли служба. Порт мог быть занят и кем-то другим, а служба - лежать.
     "if command -v systemctl >/dev/null 2>&1; then ",
@@ -337,6 +341,23 @@ pub fn parse_enable_windows(stdout: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xrdp_ищется_и_в_sbin() {
+        // Живая проверка на Debian под обычным пользователем: xrdp стоял и слушал 3389, а
+        // панель писала «xrdp на сервере нет» - /usr/sbin не было в PATH.
+        assert!(DETECT_CMD.starts_with("PATH=\"$PATH:/usr/local/sbin:/usr/sbin:/sbin\"; "));
+        assert!(crate::vncsetup::DETECT_CMD.starts_with("PATH=\"$PATH:/usr/local/sbin:/usr/sbin:/sbin\"; "));
+    }
+
+    #[test]
+    fn слушающий_по_ipv6_виден_и_без_ss() {
+        // Там же: `ss` и `netstat` не было, а xrdp слушал только `[::]:3389`.
+        assert!(DETECT_CMD.contains("/proc/net/tcp6"));
+        assert!(crate::vncsetup::DETECT_CMD.contains("/proc/net/tcp6"));
+        let v = parse_detect("BIN:xrdp|/usr/sbin/xrdp\nPORTHEX:00000000000000000000000000000000:0D3D\n");
+        assert_eq!(v["listening"][0], "[::]:3389");
+    }
 
     #[test]
     fn состояние_windows_читается_по_четырём_приметам() {
