@@ -186,11 +186,27 @@ pub(crate) fn read_json(name: &str) -> Result<Option<Value>, String> {
 
 // ---------- Настройки ----------
 
+/// Шрифт терминала по умолчанию. Тот же, что `DEFAULT_SETTINGS` в `src/shared/types.ts`.
+///
+/// Перед системным `monospace` стоят шрифты, которые есть почти в любом Linux. Прежняя
+/// цепочка заканчивалась на `"Courier New"`: на Windows до него дело не доходит (Cascadia или
+/// Consolas есть всегда), а на Linux fontconfig подставлял вместо него Courier-подобный
+/// шрифт, и терминал выходил тонким и чужим.
+const DEFAULT_FONT: &str =
+    "Cascadia Code, Consolas, \"DejaVu Sans Mono\", \"Noto Sans Mono\", \"Liberation Mono\", monospace";
+
+/// Прежнее умолчание. Настройки пишутся целиком, вместе с умолчаниями, поэтому оно лежит в
+/// файле у всех, кто хоть раз что-то менял, - и заменяется при чтении. Выбрать его руками
+/// было нельзя: в списке шрифтов оно стояло как «по умолчанию».
+const OLD_DEFAULT_FONT: &str = "Cascadia Code, Consolas, \"Courier New\", monospace";
+
 fn default_settings() -> Value {
     json!({
-        "theme": "Tokyo Night",
+        // Та же тема, что в интерфейсе: с 2026-08-30 это GitHub Dark, а здесь оставалась
+        // Tokyo Night, и новый профиль получал её вместо заявленной.
+        "theme": "GitHub Dark",
         "fontSize": 14,
-        "fontFamily": "Cascadia Code, Consolas, \"Courier New\", monospace",
+        "fontFamily": DEFAULT_FONT,
         "openLocalOnStart": false,
         "autoReconnect": false,
         "rdpNetworkProfile": "vpn",
@@ -248,6 +264,9 @@ fn settings_from(stored: Result<Option<Value>, String>) -> Value {
         Err(_) => {
             b.insert("offline".into(), json!(true));
         }
+    }
+    if b.get("fontFamily").and_then(Value::as_str) == Some(OLD_DEFAULT_FONT) {
+        b.insert("fontFamily".into(), json!(DEFAULT_FONT));
     }
     base
 }
@@ -734,6 +753,30 @@ mod store_tests {
         let свои = settings_from(Ok(Some(json!({ "offline": true, "fontSize": 18 }))));
         assert_eq!(свои["offline"], true);
         assert_eq!(свои["fontSize"], 18);
+    }
+
+    #[test]
+    fn прежний_шрифт_по_умолчанию_заменяется_при_чтении() {
+        let старый = settings_from(Ok(Some(json!({ "fontFamily": OLD_DEFAULT_FONT }))));
+        assert_eq!(старый["fontFamily"], DEFAULT_FONT);
+        // Выбранный руками шрифт не трогаем, даже если в нём тоже есть Courier.
+        let свой = settings_from(Ok(Some(json!({ "fontFamily": "\"Courier New\", monospace" }))));
+        assert_eq!(свой["fontFamily"], "\"Courier New\", monospace");
+        // Сохранённую тему тоже: Tokyo Night мог быть выбран сознательно.
+        let тема = settings_from(Ok(Some(json!({ "theme": "Tokyo Night" }))));
+        assert_eq!(тема["theme"], "Tokyo Night");
+    }
+
+    #[test]
+    fn умолчания_совпадают_с_интерфейсом() {
+        // Интерфейс и хранилище держат умолчания каждый у себя. Тема уже разошлась так
+        // однажды: интерфейс перешёл на GitHub Dark, а новый профиль получал Tokyo Night.
+        let ts = include_str!("../../src/shared/types.ts");
+        let d = default_settings();
+        for (ключ, значение) in [("theme", &d["theme"]), ("fontFamily", &d["fontFamily"])] {
+            let строка = format!("{ключ}: '{}'", значение.as_str().unwrap());
+            assert!(ts.contains(&строка), "в types.ts нет {строка}");
+        }
     }
 
     #[test]

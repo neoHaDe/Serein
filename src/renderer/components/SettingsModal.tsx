@@ -14,7 +14,7 @@ import { ActionLogModal } from './ActionLogModal'
 import { policySummary } from '../policyText'
 
 const FONTS = [
-  'Cascadia Code, Consolas, "Courier New", monospace',
+  'Cascadia Code, Consolas, "DejaVu Sans Mono", "Noto Sans Mono", "Liberation Mono", monospace',
   'Consolas, monospace',
   'JetBrains Mono, monospace',
   '"Fira Code", monospace',

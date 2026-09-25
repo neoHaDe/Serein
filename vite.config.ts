@@ -10,6 +10,9 @@ export default defineConfig(async () => ({
   // Точка входа — renderer/index.html.
   root: '.',
   clearScreen: false,
+  // Тесты по умолчанию получают вместо CSS пустую строку. Основные стили нужны им как
+  // текст: запасная палитра первого кадра сверяется с темой по умолчанию.
+  test: { css: { include: [/styles\.css/] } },
   server: {
     port: 1420,
     strictPort: true,

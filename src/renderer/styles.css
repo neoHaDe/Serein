@@ -10,26 +10,27 @@
      рисуется со светлыми системными элементами формы, и на Linux это заметно морганием.
      Дальше `applyUiTheme` выставляет схему по выбранной теме, включая светлые. */
   color-scheme: dark;
-  /* Фолбэки до первого вызова applyUiTheme (Tokyo Night). */
-  --bg: #1a1b26;
-  --bg-alt: #16161e;
-  --panel: #1f2335;
-  --panel-2: #24283b;
-  --elevated: #2a2f44;
-  --border: #2a2e42;
-  --hairline: #353b54;
-  --text: #c0caf5;
-  --muted: #565f89;
-  --accent: #7aa2f7;
-  --accent-2: #9db4f9;
-  --danger: #f7768e;
-  --green: #9ece6a;
-  --warn: #e0af68;
-  --accent-rgb: 122, 162, 247;
-  --danger-rgb: 247, 118, 142;
-  --green-rgb: 158, 206, 106;
-  --warn-rgb: 224, 175, 104;
-  --fg-rgb: 192, 202, 245;
+  /* Фолбэки до первого вызова applyUiTheme: то, что он выведет из темы по умолчанию
+     (GitHub Dark), - иначе первый кадр мигал бы чужой палитрой. */
+  --bg: #0d1117;
+  --bg-alt: #090c10;
+  --panel: #1c2027;
+  --panel-2: #272c32;
+  --elevated: #292e34;
+  --border: #33373e;
+  --hairline: #494e55;
+  --text: #c9d1d9;
+  --muted: #767d84;
+  --accent: #79c0ff;
+  --accent-2: #9fd2ff;
+  --danger: #ff7b72;
+  --green: #3fb950;
+  --warn: #d29922;
+  --accent-rgb: 121, 192, 255;
+  --danger-rgb: 255, 123, 114;
+  --green-rgb: 63, 185, 80;
+  --warn-rgb: 210, 153, 34;
+  --fg-rgb: 201, 209, 217;
   --shadow-rgb: 0, 0, 0;
   --on-accent: #15161e;
 

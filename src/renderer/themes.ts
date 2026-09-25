@@ -154,8 +154,13 @@ function rgbTriple(h: string): string {
   return hexToRgb(h).join(', ')
 }
 
-/** Выводит палитру UI из цветовой схемы терминала и применяет к CSS-переменным. */
-export function applyUiTheme(name: string): void {
+/**
+ * Палитра UI, выведенная из цветовой схемы терминала: имя CSS-переменной → значение.
+ *
+ * Отдельно от применения, чтобы её можно было сверить с запасными значениями в
+ * `styles.css` - они рисуют первый кадр, пока тема ещё не применена.
+ */
+export function uiVars(name: string): Record<string, string> {
   const t = getTheme(name)
   const bg = t.background ?? '#1a1b26'
   const fg = t.foreground ?? '#c0caf5'
@@ -195,6 +200,13 @@ export function applyUiTheme(name: string): void {
     // Контрастный цвет текста на акцентных кнопках.
     '--on-accent': luminance(accent) > 0.55 ? '#15161e' : '#ffffff'
   }
+  return vars
+}
+
+/** Выводит палитру UI из цветовой схемы терминала и применяет к CSS-переменным. */
+export function applyUiTheme(name: string): void {
+  const vars = uiVars(name)
+  const dark = luminance(getTheme(name).background ?? '#1a1b26') < 0.5
   const root = document.documentElement
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v)
   // Маркер светлой темы - для редких случаев, где нужно по-разному вести себя на светлом фоне.
