@@ -4,29 +4,51 @@ use crate::store;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-/// Импорт ~/.ssh/config. Возвращает число добавленных хостов.
-pub fn import_ssh_config() -> Result<usize, String> {
+/// Итог импорта ~/.ssh/config.
+pub struct SshConfigImport {
+    /// Сколько серверов добавлено.
+    pub imported: usize,
+    /// Серверы, чей ProxyJump не удалось сопоставить со шлюзом из списка: они добавлены
+    /// без прыжка, и это надо сказать человеку, а не оставить молча прямым подключением.
+    pub unresolved_jumps: Vec<String>,
+}
+
+/// Импорт ~/.ssh/config.
+pub fn import_ssh_config() -> Result<SshConfigImport, String> {
     let path = dirs::home_dir()
         .ok_or("Домашний каталог не найден")?
         .join(".ssh")
         .join("config");
     let txt = std::fs::read_to_string(&path).map_err(|_| "Файл ~/.ssh/config не найден".to_string())?;
+    let plan = plan_ssh_config(&txt, &store::servers_list());
+    let mut imported = 0usize;
+    for srv in plan.servers {
+        store::servers_save(srv)?;
+        imported += 1;
+    }
+    Ok(SshConfigImport {
+        imported,
+        unresolved_jumps: plan.unresolved_jumps,
+    })
+}
 
-    let mut count = 0usize;
-    let mut cur: Option<(String, Value)> = None;
+struct SshConfigPlan {
+    servers: Vec<Value>,
+    unresolved_jumps: Vec<String>,
+}
 
-    let flush = |cur: &mut Option<(String, Value)>, count: &mut usize| {
-        if let Some((alias, mut srv)) = cur.take() {
-            if !alias.contains('*') && !alias.contains('?') {
-                if srv.get("host").is_none() {
-                    srv["host"] = json!(alias);
-                }
-                let _ = store::servers_save(srv);
-                *count += 1;
-            }
-        }
-    };
-
+/// Что добавить из ~/.ssh/config, не трогая диск.
+///
+/// Три вещи, которые раньше терялись. ProxyJump разбирался и выбрасывался: сервер за
+/// бастионом приезжал прямым подключением. Повторный импорт дублировал весь список. И
+/// строки после `Match` дописывались к предыдущему `Host`.
+///
+/// Шлюз ищется среди хостов этого же файла и среди уже известных серверов (по имени, затем
+/// по адресу). Цепочку из нескольких прыжков (`a,b`) одним полем `proxyJump` не выразить -
+/// такой сервер добавляется без прыжка и попадает в `unresolved_jumps`.
+fn plan_ssh_config(txt: &str, existing: &[Value]) -> SshConfigPlan {
+    let mut hosts: Vec<(String, Value, Option<String>)> = Vec::new();
+    let mut cur: Option<(String, Value, Option<String>)> = None;
     for raw in txt.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -36,33 +58,100 @@ pub fn import_ssh_config() -> Result<usize, String> {
             Some((k, v)) => (k.trim().to_lowercase(), v.trim().to_string()),
             None => continue,
         };
-        if key == "host" {
-            flush(&mut cur, &mut count);
-            let alias = val.split_whitespace().next().unwrap_or("").to_string();
-            cur = Some((
-                alias.clone(),
-                json!({ "id": "", "name": alias, "port": 22, "username": "root", "authType": "password", "group": "Импорт SSH" }),
-            ));
-        } else if let Some((_, srv)) = cur.as_mut() {
-            match key.as_str() {
-                "hostname" => srv["host"] = json!(val),
-                "user" => srv["username"] = json!(val),
-                "port" => {
-                    if let Ok(p) = val.parse::<u64>() {
-                        srv["port"] = json!(p);
+        match key.as_str() {
+            "host" => {
+                hosts.extend(cur.take());
+                let alias = val.split_whitespace().next().unwrap_or("").to_string();
+                let srv = json!({ "name": alias, "port": 22, "username": "root", "authType": "password", "group": "Импорт SSH" });
+                cur = Some((alias, srv, None));
+            }
+            // Блок `Match` - условные настройки, а не новый хост. Всё до следующего `Host`
+            // к предыдущему хосту не относится.
+            "match" => hosts.extend(cur.take()),
+            _ => {
+                let Some((_, srv, jump)) = cur.as_mut() else { continue };
+                match key.as_str() {
+                    "hostname" => srv["host"] = json!(val),
+                    "user" => srv["username"] = json!(val),
+                    "port" => {
+                        if let Ok(p) = val.parse::<u64>() {
+                            srv["port"] = json!(p);
+                        }
                     }
+                    "identityfile" => {
+                        srv["privateKeyPath"] = json!(expand_tilde(&val));
+                        srv["authType"] = json!("key");
+                    }
+                    // Как и в OpenSSH, действует первое значение.
+                    "proxyjump" if jump.is_none() => *jump = Some(val),
+                    _ => {}
                 }
-                "identityfile" => {
-                    srv["privateKeyPath"] = json!(expand_tilde(&val));
-                    srv["authType"] = json!("key");
-                }
-                "proxyjump" => srv["_proxyJumpAlias"] = json!(val),
-                _ => {}
             }
         }
     }
-    flush(&mut cur, &mut count);
-    Ok(count)
+    hosts.extend(cur);
+
+    let key_of = |s: &Value| -> (String, u64, String) {
+        (
+            s["host"].as_str().unwrap_or("").to_lowercase(),
+            s["port"].as_u64().unwrap_or(22),
+            s["username"].as_str().unwrap_or("").to_string(),
+        )
+    };
+    let id_of = |s: &Value| s["id"].as_str().unwrap_or("").to_string();
+
+    // Имя хоста в файле -> номер сервера: нового или уже известного с тем же адресом.
+    let mut alias_ids: Vec<(String, String)> = Vec::new();
+    let mut fresh: Vec<(Value, Option<String>)> = Vec::new();
+    for (alias, mut srv, jump) in hosts {
+        if alias.is_empty() || alias.contains('*') || alias.contains('?') {
+            continue;
+        }
+        if srv.get("host").is_none() {
+            srv["host"] = json!(alias);
+        }
+        if let Some(known) = existing.iter().find(|e| key_of(e) == key_of(&srv)) {
+            alias_ids.push((alias, id_of(known)));
+            continue;
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        srv["id"] = json!(id);
+        alias_ids.push((alias, id));
+        fresh.push((srv, jump));
+    }
+
+    let resolve = |hop: &str| -> Option<String> {
+        // `user@host:port` -> `host`: в карточке шлюза свой пользователь и порт.
+        let name = hop.rsplit('@').next().unwrap_or(hop);
+        let name = name.split(':').next().unwrap_or(name);
+        alias_ids
+            .iter()
+            .find(|(a, _)| a == name)
+            .map(|(_, id)| id.clone())
+            .or_else(|| existing.iter().find(|e| e["name"] == name).map(&id_of))
+            .or_else(|| {
+                existing
+                    .iter()
+                    .find(|e| e["host"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(name)))
+                    .map(&id_of)
+            })
+    };
+
+    let mut unresolved_jumps = Vec::new();
+    let mut servers = Vec::new();
+    for (mut srv, jump) in fresh {
+        if let Some(hop) = jump.filter(|j| !j.eq_ignore_ascii_case("none")) {
+            match (!hop.contains(',')).then(|| resolve(hop.trim())).flatten() {
+                Some(id) => srv["proxyJump"] = json!(id),
+                None => unresolved_jumps.push(srv["name"].as_str().unwrap_or("").to_string()),
+            }
+        }
+        servers.push(srv);
+    }
+    SshConfigPlan {
+        servers,
+        unresolved_jumps,
+    }
 }
 
 fn expand_tilde(p: &str) -> String {
@@ -553,5 +642,85 @@ U:root
     fn securecrt_skips_telnet() {
         let txt = "D:Telnet\nH:h\nU:u\n";
         assert!(parse_securecrt_session(txt, "x").is_none());
+    }
+
+    const SSH_CONFIG: &str = "
+Host *
+    ServerAliveInterval 30
+
+Host bastion
+    HostName 10.0.0.1
+    User jump
+
+Host web-02
+    HostName 10.0.1.2
+    User deploy
+    ProxyJump bastion
+    IdentityFile ~/.ssh/id_ed25519
+";
+
+    fn by_name<'a>(servers: &'a [Value], name: &str) -> &'a Value {
+        servers.iter().find(|s| s["name"] == name).expect(name)
+    }
+
+    #[test]
+    fn ssh_config_proxy_jump_points_at_the_bastion() {
+        let plan = plan_ssh_config(SSH_CONFIG, &[]);
+        assert_eq!(plan.servers.len(), 2, "шаблон `Host *` не сервер");
+        let bastion = by_name(&plan.servers, "bastion");
+        let web = by_name(&plan.servers, "web-02");
+        assert_eq!(web["proxyJump"], bastion["id"]);
+        assert!(bastion.get("proxyJump").is_none());
+        assert_eq!(web["authType"], "key");
+        assert!(plan.unresolved_jumps.is_empty());
+        assert!(
+            web.get("_proxyJumpAlias").is_none(),
+            "служебное поле не должно попадать в профиль"
+        );
+    }
+
+    #[test]
+    fn ssh_config_jump_to_an_existing_server() {
+        let existing =
+            [json!({ "id": "known-bastion", "name": "bastion", "host": "10.0.0.1", "port": 22, "username": "jump" })];
+        let plan = plan_ssh_config(SSH_CONFIG, &existing);
+        assert_eq!(plan.servers.len(), 1, "шлюз уже в списке - второй раз не добавляется");
+        assert_eq!(plan.servers[0]["name"], "web-02");
+        assert_eq!(plan.servers[0]["proxyJump"], "known-bastion");
+    }
+
+    #[test]
+    fn ssh_config_second_import_adds_nothing() {
+        let first = plan_ssh_config(SSH_CONFIG, &[]);
+        let again = plan_ssh_config(SSH_CONFIG, &first.servers);
+        assert!(again.servers.is_empty());
+    }
+
+    #[test]
+    fn ssh_config_unresolved_jump_is_reported() {
+        let txt =
+            "Host a\n  HostName 10.0.0.5\n  ProxyJump one,two\nHost b\n  HostName 10.0.0.6\n  ProxyJump nowhere\n";
+        let plan = plan_ssh_config(txt, &[]);
+        assert_eq!(plan.servers.len(), 2);
+        assert!(plan.servers.iter().all(|s| s.get("proxyJump").is_none()));
+        assert_eq!(plan.unresolved_jumps, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn ssh_config_jump_with_user_and_port_finds_the_host() {
+        let txt = "Host gw\n  HostName 10.0.0.1\nHost db\n  HostName 10.0.2.2\n  ProxyJump admin@gw:2222\n";
+        let plan = plan_ssh_config(txt, &[]);
+        assert_eq!(
+            by_name(&plan.servers, "db")["proxyJump"],
+            by_name(&plan.servers, "gw")["id"]
+        );
+    }
+
+    #[test]
+    fn ssh_config_match_block_does_not_leak_into_previous_host() {
+        let txt = "Host web\n  HostName 10.0.0.9\n  User deploy\nMatch host *.corp\n  User root\n";
+        let plan = plan_ssh_config(txt, &[]);
+        assert_eq!(plan.servers.len(), 1);
+        assert_eq!(plan.servers[0]["username"], "deploy");
     }
 }

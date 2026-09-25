@@ -226,7 +226,8 @@ pub async fn keygen_install(
 
 #[tauri::command]
 pub fn servers_import_ssh_config() -> Result<Value, String> {
-    Ok(json!({ "imported": importers::import_ssh_config()? }))
+    let r = importers::import_ssh_config()?;
+    Ok(json!({ "imported": r.imported, "unresolvedJumps": r.unresolved_jumps }))
 }
 
 #[tauri::command]

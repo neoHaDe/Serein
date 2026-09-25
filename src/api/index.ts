@@ -106,7 +106,8 @@ export const api = {
     /** Перестановка после перетаскивания: меняет только группу и позицию. */
     reorder: (items: { id: string; group: string; order: number }[]): Promise<void> =>
       invoke('servers_reorder', { items }),
-    importSshConfig: (): Promise<{ imported: number }> => invoke('servers_import_ssh_config'),
+    importSshConfig: (): Promise<{ imported: number; unresolvedJumps?: string[] }> =>
+      invoke('servers_import_ssh_config'),
     importPutty: (): Promise<{ imported: number }> => invoke('servers_import_putty'),
     importMobaxterm: (): Promise<{ imported: number }> => invoke('servers_import_mobaxterm'),
     importXshell: (): Promise<{ imported: number }> => invoke('servers_import_xshell'),

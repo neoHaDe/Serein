@@ -90,7 +90,7 @@ export function useOperations(
   const importServers = useCallback(
     async (kind: ServerImportKind) => {
       try {
-        const handlers: Record<ServerImportKind, () => Promise<{ imported: number }>> = {
+        const handlers: Record<ServerImportKind, () => Promise<{ imported: number; unresolvedJumps?: string[] }>> = {
           ssh: () => window.api.servers.importSshConfig(),
           putty: () => window.api.servers.importPutty(),
           mobaxterm: () => window.api.servers.importMobaxterm(),
@@ -99,10 +99,16 @@ export function useOperations(
         }
         const r = await handlers[kind]()
         await reloadServers()
+        // Сервер за шлюзом, добавленный прямым подключением, молча не подключится - или
+        // подключится туда, куда не должен. Об этом говорим прямо.
+        const jumps = r.unresolvedJumps ?? []
         alert(
-          r.imported
+          (r.imported
             ? `Импортировано серверов: ${r.imported}`
-            : 'Новых серверов не нашлось - всё уже есть в списке.'
+            : 'Новых серверов не нашлось - всё уже есть в списке.') +
+            (jumps.length
+              ? `\n\nШлюз (ProxyJump) не распознан у серверов: ${jumps.join(', ')}. Они добавлены с прямым подключением - укажите шлюз в карточке сервера.`
+              : '')
         )
       } catch (e) {
         alert(errText(e))
