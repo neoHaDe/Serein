@@ -121,7 +121,12 @@ export function MultiExecModal({ servers, onClose }: Props): JSX.Element {
     setError('')
     setProgress({ done: 0, total: ids.length })
     try {
-      await window.api.multi.exec(ids, cmd, { concurrency, timeoutSec })
+      // События - для хода прогона, итог - по возвращённому списку. Подписка на события
+      // встаёт после отрисовки, а хост с неподтверждённым ключом отвечает мгновенно: его
+      // результат успевал прийти раньше подписки и пропадал из сводки и отчёта.
+      const all = await window.api.multi.exec(ids, cmd, { concurrency, timeoutSec })
+      setResults((prev) => mergeResults(prev, all))
+      setProgress({ done: all.length, total: ids.length })
     } catch (e) {
       setError(errText(e))
     } finally {
