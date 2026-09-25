@@ -46,7 +46,7 @@ the PTY live in a single Rust binary.
 Measured on 1.3.1 with no session open: about 100 MB private across the tree of seven
 processes, and 70 MB on a fresh profile. Adding up Working Set in Task Manager gives about
 480 MB - the same memory counted once per WebView2 process that shares it. The Electron
-figures are public measurements normalised to the same metric; size is the 1.5.1 installer.
+figures are public measurements normalised to the same metric; size is the 1.5.2 installer.
 
 ---
 

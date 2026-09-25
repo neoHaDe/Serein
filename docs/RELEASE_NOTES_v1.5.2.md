@@ -65,4 +65,11 @@ edit files on servers from Serein. The release also brings the first user guide.
 ### Checksums
 
 ```
+40180197c48dbbab01692511d590726eef46687c84781a697689c1395fedfeb5 Serein_1.5.2_x64-setup.exe
+3337ff407427cb305f08eb061202deecefe13cf897f37daf4ebddc33aecdc70c Serein_1.5.2_x64-portable.zip
+92d1812db660f73101e38fdea4b5c5d46e06f290980eef76b0a9e284de543e59 Serein_1.5.2_amd64.deb
+bf5a051aca42a6e9c3c9a3845c8866a786baa8c689e535b4083714daa2e5e86a Serein_1.5.2_amd64.AppImage
+76218825c6574bedca4586715a8663ba08efa67c1d07807fb07dda7af56a4574 Serein-1.5.2-1.x86_64.rpm
+073e95d6a8262713b098f9085a957f8c668490ebdd1804d996de5259e664d7bc serein-1.5.2-sbom.zip
+cac73ae085571f090a6ac11bb7ffcbb964f8d83cad9bb11577c4c3a16c25349f Serein-user-guide-ru.pdf
 ```
