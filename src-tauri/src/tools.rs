@@ -248,6 +248,10 @@ fn cert_summary(der: &[u8]) -> Result<Value, String> {
         "issuer": issuer,
         "notBefore": not_before,
         "notAfter": not_after,
+        // Те же даты числом, в секундах. Текстовый вид («Dec 31 23:59:59 2026 +00:00») разные
+        // движки разбирают по-разному, а из числа окно считает, сколько осталось до конца.
+        "notBeforeTs": cert.validity().not_before.timestamp(),
+        "notAfterTs": cert.validity().not_after.timestamp(),
         "sha256": fp,
         "san": san,
     }))

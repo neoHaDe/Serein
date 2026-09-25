@@ -21,6 +21,7 @@ function isDiff(v: unknown): v is DiffResult {
 import type { IconName } from './Icon'
 import { Icon } from './Icon'
 import { RemoteFilePicker } from './RemoteFilePicker'
+import { describeTool } from '../toolsView'
 
 type Tab =
   | 'port'
@@ -89,6 +90,81 @@ const TABS: { id: Tab; label: string; icon: IconName; hint: string; local?: true
 function JsonOut({ value }: { value: unknown }): JSX.Element {
   return (
     <pre className="tools-out">{typeof value === 'string' ? value : JSON.stringify(value, null, 2)}</pre>
+  )
+}
+
+function Rows({ rows, copyable }: { rows: [string, string][]; copyable?: boolean }): JSX.Element {
+  return (
+    <dl className="tools-kv">
+      {rows.map(([k, v]) => (
+        <div key={k} className="tools-kv-row">
+          <dt>{k}</dt>
+          <dd>
+            <span className="tools-kv-value">{v}</span>
+            {copyable && v && (
+              <button
+                className="mini"
+                title="Скопировать"
+                onClick={() => void window.api.clipboard.write(v).catch(() => {})}
+              >
+                <Icon name="copy" size={12} />
+              </button>
+            )}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+/**
+ * Ответ утилиты словами: короткий вывод, подробности, таблицы. Исходный ответ - под
+ * «Подробно»: его просят приложить к заявке или сравнить с другим инструментом.
+ */
+function ToolResult({ tab, value }: { tab: Tab; value: unknown }): JSX.Element {
+  const view = describeTool(tab, value)
+  if (!view) return <JsonOut value={value} />
+  return (
+    <div className="tools-result">
+      {view.verdict && <div className={`tools-verdict ${view.verdict.tone}`}>{view.verdict.text}</div>}
+      {view.rows && view.rows.length > 0 && <Rows rows={view.rows} copyable={view.copyable} />}
+      {view.sections?.map((s, i) => (
+        <div key={i} className="tools-section">
+          <div className="tools-section-title">{s.title}</div>
+          {s.rows && <Rows rows={s.rows} />}
+          {s.table && (
+            <div className="tools-table-wrap">
+              <table className="ws-table tools-table">
+                <thead>
+                  <tr>
+                    {s.table.head.map((h) => (
+                      <th key={h}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {s.table.rows.map((r, j) => (
+                    <tr key={j}>
+                      {r.map((c, k) => (
+                        <td key={k} className={k === 0 ? 'mono' : undefined}>
+                          {c}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {s.text !== undefined && <pre className="tools-out">{s.text}</pre>}
+        </div>
+      ))}
+      {view.note && <p className="hint tools-note">{view.note}</p>}
+      <details className="tools-raw">
+        <summary>Подробно</summary>
+        <JsonOut value={value} />
+      </details>
+    </div>
   )
 }
 
@@ -604,7 +680,7 @@ export function ToolsModal({ connectedSessions, defaultFrom, onClose }: Props): 
               <DiffView d={out} />
             </Suspense>
           ) : (
-            <JsonOut value={out} />
+            <ToolResult tab={tab} value={out} />
           ))}
 
         {/* Кнопка закрытия - только у модального варианта. У вкладки для этого есть
